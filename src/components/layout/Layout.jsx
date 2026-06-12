@@ -6,14 +6,34 @@ import BottomNav from './BottomNav'
 import MobileDrawer from './MobileDrawer'
 import ChatPanel from '../shared/ChatPanel'
 import ToastContainer from '../shared/ToastContainer'
+import ErrorBoundary from '../shared/ErrorBoundary'
+import SearchDialog from '../shared/SearchDialog'
 import useAppStore from '../../stores/appStore'
+import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts'
 import { configApi } from '../../utils/api'
 
 export default function Layout() {
   const location = useLocation()
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [searchOpen, setSearchOpen] = useState(false)
   const setApiKeyConfigured = useAppStore((s) => s.setApiKeyConfigured)
+
+  // Global keyboard shortcuts
+  useKeyboardShortcuts()
+
+  // Open search with ⌘/ or Ctrl+/
+  useEffect(() => {
+    const handler = (e) => {
+      const mod = e.metaKey || e.ctrlKey
+      if (mod && e.key === '/') {
+        e.preventDefault()
+        setSearchOpen((prev) => !prev)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
 
   useEffect(() => {
     const handleResize = () => {
@@ -46,7 +66,9 @@ export default function Layout() {
       <Sidebar />
       <main className="app-main">
         <div className="app-content">
-          <Outlet />
+          <ErrorBoundary>
+            <Outlet />
+          </ErrorBoundary>
         </div>
       </main>
       {isMobile && <BottomNav />}
@@ -58,6 +80,7 @@ export default function Layout() {
         />
       )}
       <ToastContainer />
+      <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
     </div>
   )
 }

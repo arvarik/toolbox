@@ -16,6 +16,7 @@ const mapDeckFromApi = (d) => ({
   colorIndex: d.color_index !== undefined ? d.color_index : 0,
   cardCount: d.card_count !== undefined ? d.card_count : (d.cards ? d.cards.length : 0),
   dueCount: d.due_count || 0,
+  tags: d.tags || '',
   lastStudied: 'Never studied',
   progress: 0,
   cards: d.cards ? d.cards.map(c => ({
@@ -44,6 +45,7 @@ export default function StudyPage() {
   const [isLoading, setIsLoading] = useState(true)
   const [selectedDeck, setSelectedDeck] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
+  const [activeTag, setActiveTag] = useState('')
   const [deleteModal, setDeleteModal] = useState(null)
 
   useEffect(() => {
@@ -57,9 +59,17 @@ export default function StudyPage() {
     })
   }, [])
 
-  const filteredDecks = decks.filter((d) =>
-    d.name.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  // Collect all unique tags across decks
+  const allTags = [...new Set(
+    decks.flatMap((d) => d.tags ? d.tags.split(',').map((t) => t.trim()).filter(Boolean) : [])
+  )].sort()
+
+  const filteredDecks = decks.filter((d) => {
+    const matchesSearch = d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (d.tags && d.tags.toLowerCase().includes(searchQuery.toLowerCase()))
+    const matchesTag = !activeTag || (d.tags && d.tags.split(',').map((t) => t.trim()).includes(activeTag))
+    return matchesSearch && matchesTag
+  })
 
   const handleDeckClick = async (deck) => {
     setSelectedDeck(deck)
@@ -118,6 +128,7 @@ export default function StudyPage() {
                 ...d,
                 name: data.name,
                 description: data.description,
+                tags: data.tags || '',
                 cards: data.cards || [],
                 cardCount: data.cards?.length || 0,
               }
@@ -129,6 +140,7 @@ export default function StudyPage() {
         id: tempId,
         name: data.name,
         description: data.description,
+        tags: data.tags || '',
         colorIndex: colorIndex,
         cardCount: data.cards?.length || 0,
         lastStudied: 'Never studied',
@@ -145,6 +157,7 @@ export default function StudyPage() {
         await decksApi.update(tempId, {
           name: data.name,
           description: data.description,
+          tags: data.tags || '',
           color_index: colorIndex
         })
 
@@ -171,6 +184,7 @@ export default function StudyPage() {
         const deck = await decksApi.create({
           name: data.name,
           description: data.description,
+          tags: data.tags || '',
           color_index: colorIndex
         })
         const deckId = deck?.id || tempId
@@ -346,6 +360,42 @@ export default function StudyPage() {
                   id="search-decks"
                 />
               </div>
+              {/* Tag filter chips */}
+              {allTags.length > 0 && (
+                <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap', marginTop: 'var(--space-2)' }}>
+                  <button
+                    className={`btn btn-ghost`}
+                    style={{
+                      fontSize: '11px',
+                      padding: '2px 10px',
+                      borderRadius: 'var(--radius-full)',
+                      background: !activeTag ? 'var(--color-accent-subtle)' : 'transparent',
+                      color: !activeTag ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+                      fontWeight: !activeTag ? 600 : 400,
+                    }}
+                    onClick={() => setActiveTag('')}
+                  >
+                    All
+                  </button>
+                  {allTags.map((tag) => (
+                    <button
+                      key={tag}
+                      className={`btn btn-ghost`}
+                      style={{
+                        fontSize: '11px',
+                        padding: '2px 10px',
+                        borderRadius: 'var(--radius-full)',
+                        background: activeTag === tag ? 'var(--color-accent-subtle)' : 'transparent',
+                        color: activeTag === tag ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+                        fontWeight: activeTag === tag ? 600 : 400,
+                      }}
+                      onClick={() => setActiveTag(activeTag === tag ? '' : tag)}
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

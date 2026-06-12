@@ -122,6 +122,7 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
   const isOpen = useAppStore((s) => s.chatOpen[page])
   const toggleChat = useAppStore((s) => s.toggleChat)
   const apiKeyConfigured = useAppStore((s) => s.apiKeyConfigured)
+  const selectedModel = useAppStore((s) => s.model)
   const canvasNodes = useAppStore((s) => s.nodes) || []
   const canvasEdges = useAppStore((s) => s.edges) || []
 
@@ -204,6 +205,7 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
           message: text,
           context: contextString,
           history: messages,
+          model: selectedModel,
         },
         (partialText) => {
           // Update the AI message content incrementally
@@ -344,11 +346,39 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
 
   if (!isOpen) return null
 
-  const starterPrompts = page === 'guide'
-    ? ['Explain CAP Theorem', 'How does a Load Balancer work?', 'Explain CDN caching']
-    : page === 'builder'
-      ? ['Optimize database tier', 'Verify system redundancy', 'Compare SQL vs NoSQL']
-      : ['Suggest study plan', 'Explain Leitner system', 'Generate system design cards']
+  // Contextual AI prompts — adapt based on page state
+  const starterPrompts = (() => {
+    if (page === 'guide') {
+      return [
+        'Explain the CAP Theorem with real examples',
+        'How does consistent hashing work?',
+        'Compare message queues: Kafka vs RabbitMQ vs SQS',
+        'What is the difference between horizontal and vertical scaling?',
+      ]
+    }
+    if (page === 'builder') {
+      if (canvasNodes.length > 0) {
+        return [
+          'Verify my architecture for single points of failure',
+          'Suggest improvements for scalability',
+          `What protocols should connect my ${canvasNodes.length} components?`,
+          'Estimate the throughput of this design',
+        ]
+      }
+      return [
+        'Help me design a URL shortener',
+        'What components do I need for a chat system?',
+        'Design a notification service architecture',
+      ]
+    }
+    // study page
+    return [
+      'Generate 5 flashcards about database sharding',
+      'Quiz me on system design fundamentals',
+      'Explain spaced repetition benefits',
+      'Create cards for microservices patterns',
+    ]
+  })()
 
   const displayTitle = (page === 'builder' && title === 'Verify Architecture') 
     ? 'Ask about your architecture' 

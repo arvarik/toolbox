@@ -40,6 +40,31 @@ export default function DeckCard({ deck, onClick }) {
           {deck.description}
         </p>
       )}
+      {/* Tags */}
+      {deck.tags && deck.tags.trim() && (
+        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: 'var(--space-2)' }}>
+          {deck.tags.split(',').filter(Boolean).slice(0, 3).map((tag, i) => (
+            <span
+              key={i}
+              style={{
+                fontSize: '10px',
+                padding: '1px 6px',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--color-accent-subtle)',
+                color: 'var(--color-accent)',
+                fontWeight: 500,
+              }}
+            >
+              {tag.trim()}
+            </span>
+          ))}
+          {deck.tags.split(',').filter(Boolean).length > 3 && (
+            <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>
+              +{deck.tags.split(',').filter(Boolean).length - 3}
+            </span>
+          )}
+        </div>
+      )}
       <div className="deck-card-meta">
         <span>
           <Hash size={12} />

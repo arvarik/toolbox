@@ -1,10 +1,54 @@
 import { create } from 'zustand'
 
+// Read initial theme from localStorage
+const getInitialTheme = () => {
+  try {
+    const saved = localStorage.getItem('toolbox_theme')
+    if (saved === 'light' || saved === 'dark') return saved
+  } catch { /* ignore */ }
+  return 'dark'
+}
+
+// Apply theme to DOM
+const applyTheme = (theme) => {
+  document.documentElement.setAttribute('data-theme', theme)
+  try { localStorage.setItem('toolbox_theme', theme) } catch { /* ignore */ }
+}
+
+// Read initial model from localStorage
+const getInitialModel = () => {
+  try {
+    const saved = localStorage.getItem('toolbox_model')
+    if (saved) return saved
+  } catch { /* ignore */ }
+  return 'gemini-3.5-flash'
+}
+
+// Initialize theme on load
+const initialTheme = getInitialTheme()
+applyTheme(initialTheme)
+
 /**
  * Global application store using Zustand.
- * Manages sidebar state, active views, and shared UI state.
+ * Manages sidebar state, active views, theme, and shared UI state.
  */
 const useAppStore = create((set) => ({
+  // Theme
+  theme: initialTheme,
+  toggleTheme: () =>
+    set((s) => {
+      const next = s.theme === 'dark' ? 'light' : 'dark'
+      applyTheme(next)
+      return { theme: next }
+    }),
+
+  // AI Model Selection
+  model: getInitialModel(),
+  setModel: (model) => {
+    try { localStorage.setItem('toolbox_model', model) } catch { /* ignore */ }
+    set({ model })
+  },
+
   // Sidebar
   sidebarCollapsed: false,
   toggleSidebar: () => set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),

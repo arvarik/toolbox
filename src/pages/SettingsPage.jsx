@@ -1,11 +1,18 @@
 import { useState, useEffect } from 'react'
-import { Eye, EyeOff, Download, Upload, Trash2 } from 'lucide-react'
+import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { configApi } from '../utils/api'
 import Modal from '../components/shared/Modal'
 
+const AVAILABLE_MODELS = [
+  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Fast and efficient — best for most tasks' },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Previous generation, still capable' },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Most capable, slower responses' },
+  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Legacy model' },
+]
+
 export default function SettingsPage() {
-  const { apiKeyConfigured, setApiKeyConfigured, addToast } = useAppStore()
+  const { apiKeyConfigured, setApiKeyConfigured, addToast, theme, toggleTheme, model, setModel } = useAppStore()
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
@@ -140,6 +147,74 @@ export default function SettingsPage() {
 
         <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
 
+        {/* Model Selection */}
+        <div className="settings-section">
+          <h2 className="settings-section-title">AI Model</h2>
+          <p className="settings-section-desc">
+            Choose which Gemini model to use for AI chat and content generation.
+          </p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+            {AVAILABLE_MODELS.map((m) => (
+              <label
+                key={m.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--space-3)',
+                  padding: 'var(--space-3)',
+                  borderRadius: 'var(--radius-md)',
+                  border: `1px solid ${model === m.id ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                  background: model === m.id ? 'var(--color-accent-subtle)' : 'var(--color-surface)',
+                  cursor: 'pointer',
+                  transition: 'all var(--duration-fast)',
+                }}
+              >
+                <input
+                  type="radio"
+                  name="model"
+                  value={m.id}
+                  checked={model === m.id}
+                  onChange={() => {
+                    setModel(m.id)
+                    addToast({ type: 'info', message: `Model switched to ${m.name}` })
+                  }}
+                  style={{ accentColor: 'var(--color-accent)' }}
+                />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }}>{m.name}</div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>{m.description}</div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+
+        {/* Appearance */}
+        <div className="settings-section">
+          <h2 className="settings-section-title">Appearance</h2>
+          <p className="settings-section-desc">
+            Toggle between dark and light themes.
+          </p>
+
+          <button
+            className="btn btn-secondary"
+            onClick={toggleTheme}
+            id="settings-theme-toggle"
+            style={{ marginTop: 'var(--space-3)' }}
+          >
+            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
+            {theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          </button>
+          <p className="settings-help" style={{ marginTop: 'var(--space-2)' }}>
+            You can also toggle with <kbd style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', background: 'var(--color-bg-hover)', padding: '1px 4px', borderRadius: '3px', border: '1px solid var(--color-border)' }}>⌘D</kbd>
+          </p>
+        </div>
+
+        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+
         {/* Data Management */}
         <div className="settings-section">
           <h2 className="settings-section-title">Data Management</h2>
@@ -164,6 +239,54 @@ export default function SettingsPage() {
 
         <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
 
+        {/* Keyboard Shortcuts */}
+        <div className="settings-section">
+          <h2 className="settings-section-title">Keyboard Shortcuts</h2>
+          <p className="settings-section-desc">
+            Boost your workflow with these shortcuts.
+          </p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', marginTop: 'var(--space-3)' }}>
+            {[
+              ['⌘1', 'Navigate to Guide'],
+              ['⌘2', 'Navigate to Builder'],
+              ['⌘3', 'Navigate to Flashcards'],
+              ['⌘,', 'Navigate to Settings'],
+              ['⌘K', 'Toggle AI Chat'],
+              ['⌘B', 'Toggle Sidebar'],
+              ['⌘D', 'Toggle Dark/Light Mode'],
+              ['⌘S', 'Save Board (in Builder)'],
+              ['⌘/', 'Search Topics'],
+            ].map(([key, desc]) => (
+              <div
+                key={key}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  padding: 'var(--space-2) 0',
+                  borderBottom: '1px solid var(--color-border)',
+                }}
+              >
+                <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{desc}</span>
+                <kbd style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  background: 'var(--color-bg-hover)',
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--color-border)',
+                  color: 'var(--color-text-tertiary)',
+                }}>
+                  {key}
+                </kbd>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+
         {/* About */}
         <div className="settings-section">
           <h2 className="settings-section-title">About</h2>
@@ -172,36 +295,23 @@ export default function SettingsPage() {
           </p>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              fontSize: 'var(--text-sm)',
-              color: 'var(--color-text-secondary)',
-              padding: 'var(--space-2) 0',
-            }}>
-              <span>Version</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-tertiary)' }}>0.1.0</span>
-            </div>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              fontSize: 'var(--text-sm)',
-              color: 'var(--color-text-secondary)',
-              padding: 'var(--space-2) 0',
-            }}>
-              <span>Storage</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-tertiary)' }}>SQLite (local)</span>
-            </div>
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              fontSize: 'var(--text-sm)',
-              color: 'var(--color-text-secondary)',
-              padding: 'var(--space-2) 0',
-            }}>
-              <span>AI Backend</span>
-              <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-tertiary)' }}>Google Gemini</span>
-            </div>
+            {[
+              ['Version', '0.2.0'],
+              ['Storage', 'SQLite (local)'],
+              ['AI Backend', 'Google Gemini'],
+              ['Active Model', model],
+            ].map(([label, value]) => (
+              <div key={label} style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                fontSize: 'var(--text-sm)',
+                color: 'var(--color-text-secondary)',
+                padding: 'var(--space-2) 0',
+              }}>
+                <span>{label}</span>
+                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-tertiary)' }}>{value}</span>
+              </div>
+            ))}
           </div>
         </div>
       </div>

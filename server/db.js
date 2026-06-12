@@ -77,6 +77,13 @@ function migrate() {
       // Column already exists — ignore
     }
   }
+
+  // Tags column for decks (additive — safe to re-run)
+  try {
+    db.exec(`ALTER TABLE decks ADD COLUMN tags TEXT DEFAULT ''`)
+  } catch {
+    // Column already exists — ignore
+  }
 }
 
 migrate()

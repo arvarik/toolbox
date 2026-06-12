@@ -7,6 +7,9 @@ import {
   Settings,
   PanelLeftClose,
   Layers,
+  Sun,
+  Moon,
+  Keyboard,
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 
@@ -14,20 +17,22 @@ const navItems = [
   {
     section: 'Study',
     items: [
-      { to: '/guide', icon: BookOpen, label: 'Guide' },
-      { to: '/builder', icon: PenTool, label: 'Builder' },
-      { to: '/study', icon: GraduationCap, label: 'Flashcards' },
+      { to: '/guide', icon: BookOpen, label: 'Guide', shortcut: '⌘1' },
+      { to: '/builder', icon: PenTool, label: 'Builder', shortcut: '⌘2' },
+      { to: '/study', icon: GraduationCap, label: 'Flashcards', shortcut: '⌘3' },
     ],
   },
 ]
 
 const bottomItems = [
-  { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/settings', icon: Settings, label: 'Settings', shortcut: '⌘,' },
 ]
 
 export default function Sidebar() {
   const collapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
+  const theme = useAppStore((s) => s.theme)
+  const toggleTheme = useAppStore((s) => s.toggleTheme)
   const location = useLocation()
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
@@ -69,6 +74,9 @@ export default function Sidebar() {
                 >
                   <Icon className="sidebar-link-icon" />
                   <span className="sidebar-link-label">{item.label}</span>
+                  {!collapsed && item.shortcut && (
+                    <span className="sidebar-shortcut">{item.shortcut}</span>
+                  )}
                 </NavLink>
               )
             })}
@@ -77,6 +85,24 @@ export default function Sidebar() {
 
         {/* Spacer */}
         <div style={{ flex: 1 }} />
+
+        {/* Theme toggle */}
+        <button
+          className="sidebar-link"
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          id="theme-toggle"
+          style={{ border: 'none', background: 'none', width: '100%', textAlign: 'left' }}
+        >
+          {theme === 'dark' ? (
+            <Sun className="sidebar-link-icon" />
+          ) : (
+            <Moon className="sidebar-link-icon" />
+          )}
+          <span className="sidebar-link-label">
+            {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
+          </span>
+        </button>
 
         {/* Bottom nav items */}
         {bottomItems.map((item) => {
@@ -91,6 +117,9 @@ export default function Sidebar() {
             >
               <Icon className="sidebar-link-icon" />
               <span className="sidebar-link-label">{item.label}</span>
+              {!collapsed && item.shortcut && (
+                <span className="sidebar-shortcut">{item.shortcut}</span>
+              )}
             </NavLink>
           )
         })}

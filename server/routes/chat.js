@@ -9,7 +9,7 @@ const router = Router()
  * Body: { message, context, history }
  */
 router.post('/', async (req, res) => {
-  const { message, context, history = [] } = req.body
+  const { message, context, history = [], model: requestedModel } = req.body
 
   if (!message) {
     return res.status(400).json({ message: 'Message is required' })
@@ -26,7 +26,7 @@ router.post('/', async (req, res) => {
   try {
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     const genAI = new GoogleGenerativeAI(config.value)
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' })
+    const model = genAI.getGenerativeModel({ model: requestedModel || 'gemini-3.5-flash' })
 
     // Build system context based on the page
     const systemContext = context
@@ -63,7 +63,7 @@ router.post('/', async (req, res) => {
  * Body: { message, context, history }
  */
 router.post('/stream', async (req, res) => {
-  const { message, context, history = [] } = req.body
+  const { message, context, history = [], model: requestedModel } = req.body
 
   if (!message) {
     return res.status(400).json({ message: 'Message is required' })
@@ -86,7 +86,7 @@ router.post('/stream', async (req, res) => {
   try {
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     const genAI = new GoogleGenerativeAI(config.value)
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' })
+    const model = genAI.getGenerativeModel({ model: requestedModel || 'gemini-3.5-flash' })
 
     const systemContext = context
       ? `You are an expert system design interview tutor. Context: ${context}\n\n`

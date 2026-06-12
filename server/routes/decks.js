@@ -89,13 +89,13 @@ router.get('/:id', (req, res) => {
  * Create a new deck.
  */
 router.post('/', (req, res) => {
-  const { name, description, color_index } = req.body
+  const { name, description, color_index, tags } = req.body
   if (!name) return res.status(400).json({ message: 'Name is required' })
 
   const id = uuid()
   db.prepare(
-    'INSERT INTO decks (id, name, description, color_index) VALUES (?, ?, ?, ?)'
-  ).run(id, name, description || '', color_index || 0)
+    'INSERT INTO decks (id, name, description, color_index, tags) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, name, description || '', color_index || 0, tags || '')
 
   const deck = db.prepare('SELECT * FROM decks WHERE id = ?').get(id)
   res.status(201).json(deck)
@@ -106,7 +106,7 @@ router.post('/', (req, res) => {
  * Update a deck.
  */
 router.put('/:id', (req, res) => {
-  const { name, description, color_index } = req.body
+  const { name, description, color_index, tags } = req.body
   const existing = db.prepare('SELECT * FROM decks WHERE id = ?').get(req.params.id)
   if (!existing) return res.status(404).json({ message: 'Deck not found' })
 
@@ -115,9 +115,10 @@ router.put('/:id', (req, res) => {
       name = COALESCE(?, name),
       description = COALESCE(?, description),
       color_index = COALESCE(?, color_index),
+      tags = COALESCE(?, tags),
       updated_at = datetime('now')
     WHERE id = ?
-  `).run(name, description, color_index, req.params.id)
+  `).run(name, description, color_index, tags, req.params.id)
 
   const deck = db.prepare('SELECT * FROM decks WHERE id = ?').get(req.params.id)
   res.json(deck)

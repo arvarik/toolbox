@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock } from 'lucide-react'
 import { flashcardsApi } from '../../utils/api'
+import StudySessionSummary from './StudySessionSummary'
 
 const QUALITY_BUTTONS = [
   { quality: 0, label: 'Again', color: '#ef4444', desc: 'Reset' },
@@ -34,6 +35,9 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
   const [flipped, setFlipped] = useState(false)
   const [isReviewing, setIsReviewing] = useState(false)
   const [reviewedCount, setReviewedCount] = useState(0)
+  const startTimeRef = useRef(Date.now())
+  const ratingsRef = useRef({})
+  const correctCountRef = useRef(0)
 
   const currentCard = cards[currentIndex]
   const isDone = reviewMode && currentIndex >= cards.length
@@ -70,6 +74,8 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
     try {
       await flashcardsApi.review(deckId, currentCard.id, quality)
       setReviewedCount((c) => c + 1)
+      ratingsRef.current[quality] = (ratingsRef.current[quality] || 0) + 1
+      if (quality >= 3) correctCountRef.current += 1
       if (onCardReviewed) onCardReviewed(currentCard.id, quality)
 
       // Move to next card
@@ -100,35 +106,27 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
     )
   }
 
-  // Review complete state
+  // Review complete state — show session summary
   if (isDone) {
+    const sessionStats = {
+      totalCards: reviewedCount,
+      correctCards: correctCountRef.current,
+      totalTimeMs: Date.now() - startTimeRef.current,
+      ratings: ratingsRef.current,
+    }
     return (
       <div className="flashcard-viewer" id="flashcard-viewer">
-        <div style={{
-          textAlign: 'center',
-          padding: 'var(--space-8)',
-          maxWidth: 400,
-        }}>
-          <div style={{
-            fontSize: 48,
-            marginBottom: 'var(--space-4)',
-          }}>🎉</div>
-          <h2 style={{
-            fontSize: 'var(--text-xl)',
-            fontWeight: 700,
-            marginBottom: 'var(--space-2)',
-          }}>Review Complete!</h2>
-          <p style={{
-            color: 'var(--color-text-secondary)',
-            fontSize: 'var(--text-sm)',
-            marginBottom: 'var(--space-6)',
-          }}>
-            You reviewed {reviewedCount} card{reviewedCount !== 1 ? 's' : ''} in this session.
-          </p>
-          <button className="btn btn-primary" onClick={onBack}>
-            Back to Decks
-          </button>
-        </div>
+        <StudySessionSummary
+          stats={sessionStats}
+          onBack={onBack}
+          onStudyAgain={() => {
+            setCurrentIndex(0)
+            setReviewedCount(0)
+            startTimeRef.current = Date.now()
+            ratingsRef.current = {}
+            correctCountRef.current = 0
+          }}
+        />
       </div>
     )
   }

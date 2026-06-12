@@ -11,6 +11,7 @@ import { Plus, Trash2, Save, X, GripVertical } from 'lucide-react'
 export default function DeckEditor({ deck, cards: initialCards = [], onSave, onCancel }) {
   const [name, setName] = useState(deck?.name || '')
   const [description, setDescription] = useState(deck?.description || '')
+  const [tags, setTags] = useState(deck?.tags || '')
   const [cards, setCards] = useState(() =>
     initialCards.length > 0
       ? initialCards
@@ -40,6 +41,7 @@ export default function DeckEditor({ deck, cards: initialCards = [], onSave, onC
     onSave({
       name: name.trim(),
       description: description.trim(),
+      tags: tags.trim(),
       cards: cards.filter((c) => c.front.trim() || c.back.trim()),
     })
   }
@@ -90,6 +92,35 @@ export default function DeckEditor({ deck, cards: initialCards = [], onSave, onC
             rows={2}
             id="deck-desc-input"
           />
+        </div>
+        <div className="settings-field">
+          <label className="settings-label">Tags (comma-separated)</label>
+          <input
+            className="input"
+            placeholder="e.g., databases, caching, fundamentals"
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            id="deck-tags-input"
+          />
+          {tags && (
+            <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap', marginTop: 'var(--space-2)' }}>
+              {tags.split(',').filter(Boolean).map((tag, i) => (
+                <span
+                  key={i}
+                  style={{
+                    fontSize: '10px',
+                    padding: '2px 8px',
+                    borderRadius: 'var(--radius-full)',
+                    background: 'var(--color-accent-subtle)',
+                    color: 'var(--color-accent)',
+                    fontWeight: 600,
+                  }}
+                >
+                  {tag.trim()}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
