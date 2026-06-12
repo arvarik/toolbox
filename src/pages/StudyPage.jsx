@@ -3,11 +3,12 @@ import { Plus, Search, MessageSquare, GraduationCap, Trash2, Edit, Play, Clock }
 import DeckCard from '../components/study/DeckCard'
 import FlashcardView from '../components/study/FlashcardView'
 import DeckEditor from '../components/study/DeckEditor'
+import StudyHeatmap from '../components/study/StudyHeatmap'
 import ChatPanel from '../components/shared/ChatPanel'
 import EmptyState from '../components/shared/EmptyState'
 import Modal from '../components/shared/Modal'
 import useAppStore from '../stores/appStore'
-import { decksApi, flashcardsApi } from '../utils/api'
+import { decksApi, flashcardsApi, studySessionsApi } from '../utils/api'
 
 const mapDeckFromApi = (d) => ({
   id: d.id,
@@ -17,8 +18,8 @@ const mapDeckFromApi = (d) => ({
   cardCount: d.card_count !== undefined ? d.card_count : (d.cards ? d.cards.length : 0),
   dueCount: d.due_count || 0,
   tags: d.tags || '',
-  lastStudied: 'Never studied',
-  progress: 0,
+  lastStudied: d.last_studied || d.lastStudied || 'Never studied',
+  progress: d.progress !== undefined ? d.progress : 0,
   cards: d.cards ? d.cards.map(c => ({
     id: c.id, front: c.front, back: c.back,
     ease_factor: c.ease_factor, interval: c.interval,
@@ -47,12 +48,19 @@ export default function StudyPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTag, setActiveTag] = useState('')
   const [deleteModal, setDeleteModal] = useState(null)
+  const [studySessions, setStudySessions] = useState([])
 
   useEffect(() => {
-    setIsLoading(true)
-    decksApi.list().then((list) => {
+    const fetchStudySessions = studySessionsApi ? studySessionsApi.list() : Promise.resolve([])
+    Promise.all([
+      decksApi.list(),
+      fetchStudySessions
+    ]).then(([list, sessions]) => {
       if (list && list.length > 0) {
         setDecks(list.map(mapDeckFromApi))
+      }
+      if (sessions) {
+        setStudySessions(sessions)
       }
     }).catch(() => {}).finally(() => {
       setIsLoading(false)
@@ -286,7 +294,15 @@ export default function StudyPage() {
   return (
     <div className="study-layout" id="study-page">
       <div className="study-main">
-        {/* Page header */}
+        {/* Page Header */}
+        <div style={{ marginBottom: 'var(--space-8)' }}>
+          <h1 className="page-title">Study Hub</h1>
+          <p className="page-subtitle">Master your architecture knowledge with spaced repetition.</p>
+        </div>
+
+        <StudyHeatmap sessions={studySessions} />
+
+        {/* Main Content Area */}
         <div className="page-header">
           <div className="page-header-top">
             <div>

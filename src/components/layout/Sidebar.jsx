@@ -9,7 +9,6 @@ import {
   Layers,
   Sun,
   Moon,
-  Keyboard,
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 

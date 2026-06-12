@@ -27,6 +27,11 @@ Object.defineProperty(window, 'localStorage', {
 vi.mock('../utils/api', () => ({
   chatApi: {
     send: vi.fn(() => Promise.resolve({ response: 'Mock AI Response' })),
+    stream: vi.fn(async (data, onChunk) => {
+      const text = 'Mock AI Response'
+      if (onChunk) onChunk(text)
+      return text
+    }),
   },
 }))
 

@@ -217,7 +217,7 @@ describe('Sidebar Navigation & Mobile Responsiveness Test Suite', () => {
         </MemoryRouter>
       );
 
-      const toggleButton = screen.getByRole('button');
+      const toggleButton = screen.getByRole('button', { name: /collapse/i });
       expect(toggleButton.getAttribute('aria-label')).toBe('Collapse sidebar');
 
       // Collapse the sidebar

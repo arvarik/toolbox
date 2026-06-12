@@ -1,7 +1,9 @@
+import { getCache, setCache, enqueueSync } from './db'
+
 const API_BASE = '/api'
 
 /**
- * Generic fetch wrapper with error handling.
+ * Generic fetch wrapper with offline and sync support.
  */
 async function request(path, options = {}) {
   const url = `${API_BASE}${path}`
@@ -14,16 +16,50 @@ async function request(path, options = {}) {
     config.body = JSON.stringify(config.body)
   }
 
-  const res = await fetch(url, config)
+  const isGet = !config.method || config.method === 'GET'
 
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: res.statusText }))
-    throw new Error(error.message || `Request failed: ${res.status}`)
+  // If offline, try cache (for GET) or queue sync (for mutations)
+  if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    if (isGet) {
+      const cached = await getCache(url)
+      if (cached) return cached
+      throw new Error('Offline and no cache available')
+    } else {
+      await enqueueSync(url, config)
+      return { _offline: true, message: 'Queued for sync' } // Mock success for optimistic UI
+    }
   }
 
-  // Handle 204 No Content
-  if (res.status === 204) return null
-  return res.json()
+  try {
+    const res = await fetch(url, config)
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ message: res.statusText }))
+      throw new Error(error.message || `Request failed: ${res.status}`)
+    }
+
+    // Handle 204 No Content
+    if (res.status === 204) return null
+    
+    const data = await res.json()
+    
+    // Cache successful GET requests for offline use
+    if (isGet) {
+      await setCache(url, data).catch(console.error)
+    }
+    
+    return data
+  } catch (err) {
+    // Fallback if fetch fails (e.g. server down but browser thinks it's online)
+    if (isGet) {
+      const cached = await getCache(url)
+      if (cached) return cached
+    } else {
+      await enqueueSync(url, config)
+      return { _offline: true, message: 'Queued for sync' }
+    }
+    throw err
+  }
 }
 
 /* ---- Config ---- */
@@ -53,6 +89,11 @@ export const flashcardsApi = {
     request(`/decks/${deckId}/cards/${cardId}`, { method: 'DELETE' }),
   review: (deckId, cardId, quality) =>
     request(`/decks/${deckId}/cards/${cardId}/review`, { method: 'POST', body: { quality } }),
+}
+
+/* ---- Study Sessions ---- */
+export const studySessionsApi = {
+  list: () => request('/study_sessions'),
 }
 
 /* ---- Boards ---- */

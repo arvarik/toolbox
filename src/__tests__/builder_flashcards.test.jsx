@@ -14,36 +14,88 @@ import BoardList from '../components/builder/BoardList'
 // Auditor will independently verify your work. Integrity violations WILL be detected 
 // and your work WILL be rejected.
 
-vi.mock('../utils/api', () => ({
-  configApi: {
-    get: vi.fn(() => Promise.resolve({ api_key_configured: true })),
-    update: vi.fn(() => Promise.resolve({ success: true })),
-    testApiKey: vi.fn(() => Promise.resolve({ valid: true })),
-  },
-  decksApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    get: vi.fn(() => Promise.resolve({})),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  flashcardsApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  boardsApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    get: vi.fn(() => Promise.resolve({})),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  chatApi: {
-    send: vi.fn(() => Promise.resolve({ response: 'AI response content' })),
-  },
-}))
+vi.mock('../utils/api', () => {
+  const mockDecks = [
+    {
+      id: 'deck-1',
+      name: 'CAP Theorem & Consistency',
+      description: 'CAP Theorem description',
+      color_index: 0,
+      card_count: 12,
+      tags: 'Storage',
+      last_studied: '2 days ago',
+      progress: 75,
+      cards: [
+        {
+          id: 'c1',
+          front: 'What is the CAP Theorem?',
+          back: 'The CAP theorem states that a distributed system can only provide two of three guarantees: Consistency, Availability, and Partition Tolerance.'
+        }
+      ]
+    },
+    {
+      id: 'deck-2',
+      name: 'Load Balancing Strategies',
+      description: 'Load Balancing description',
+      color_index: 1,
+      card_count: 8,
+      tags: 'Compute',
+      last_studied: 'Yesterday',
+      progress: 40,
+      cards: []
+    },
+    {
+      id: 'deck-3',
+      name: 'Database Scaling Patterns',
+      description: 'Database Scaling description',
+      color_index: 2,
+      card_count: 15,
+      tags: 'Storage',
+      last_studied: 'Never studied',
+      progress: 0,
+      cards: []
+    }
+  ]
+
+  return {
+    configApi: {
+      get: vi.fn(() => Promise.resolve({ api_key_configured: true })),
+      update: vi.fn(() => Promise.resolve({ success: true })),
+      testApiKey: vi.fn(() => Promise.resolve({ valid: true })),
+    },
+    decksApi: {
+      list: vi.fn(() => Promise.resolve(mockDecks)),
+      get: vi.fn((id) => Promise.resolve(mockDecks.find(d => d.id === id) || mockDecks[0])),
+      create: vi.fn((data) => Promise.resolve({ id: 'deck-created', ...data })),
+      update: vi.fn((id, data) => Promise.resolve({ id, ...data })),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    flashcardsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    boardsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      get: vi.fn(() => Promise.resolve({})),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    chatApi: {
+      send: vi.fn(() => Promise.resolve({ response: 'AI response content' })),
+      stream: vi.fn(async (data, onChunk) => {
+        const text = 'AI response content'
+        if (onChunk) onChunk(text)
+        return text
+      }),
+    },
+    studySessionsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+    },
+  }
+})
 
 describe('Builder and Flashcards Comprehensive Test Suite', () => {
   beforeEach(() => {
@@ -245,7 +297,9 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       })
       fireEvent(canvas, dropEvent)
 
-      const node = canvas.querySelector('[style*="position: absolute"]')
+      const cacheElements = screen.getAllByText('Cache (Redis)')
+      const canvasText = cacheElements.find(el => el.closest('#builder-canvas'))
+      const node = canvasText.closest('div[style*="position: absolute"]')
       expect(node).toBeInTheDocument()
       expect(node.style.left).toBe('100px')
       expect(node.style.top).toBe('100px')
@@ -378,12 +432,14 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
   // ==========================================
   describe('Flashcards Page Tests', () => {
     // Tier 1: 5 tests
-    it('11. deck card grid elements', () => {
+    it('11. deck card grid elements', async () => {
       render(
         <MemoryRouter>
           <StudyPage />
         </MemoryRouter>
       )
+
+      await screen.findByText('CAP Theorem & Consistency')
 
       const deckGrid = document.querySelector('.deck-grid')
       expect(deckGrid).toBeInTheDocument()
@@ -417,12 +473,14 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       expect(sparklesIcon).toBeInTheDocument()
     })
 
-    it('13. deck search filtering', () => {
+    it('13. deck search filtering', async () => {
       render(
         <MemoryRouter>
           <StudyPage />
         </MemoryRouter>
       )
+
+      await screen.findByText('CAP Theorem & Consistency')
 
       const searchInput = document.querySelector('#search-decks')
       expect(searchInput).toBeInTheDocument()
@@ -438,12 +496,14 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       expect(screen.getByText(/No decks match/)).toBeInTheDocument()
     })
 
-    it('14. study repetition progress rings/bars', () => {
+    it('14. study repetition progress rings/bars', async () => {
       render(
         <MemoryRouter>
           <StudyPage />
         </MemoryRouter>
       )
+
+      await screen.findByText('CAP Theorem & Consistency')
 
       expect(screen.getByText('75%')).toBeInTheDocument()
       expect(screen.getByText('40%')).toBeInTheDocument()
@@ -458,12 +518,14 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       expect(widths).toContain('0%')
     })
 
-    it('15. study view flipping to show answer', () => {
+    it('15. study view flipping to show answer', async () => {
       render(
         <MemoryRouter>
           <StudyPage />
         </MemoryRouter>
       )
+
+      await screen.findByText('CAP Theorem & Consistency')
 
       const deckCard = screen.getByText('CAP Theorem & Consistency').closest('.deck-card')
       fireEvent.click(deckCard)
@@ -497,7 +559,7 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
     })
 
     it('17. AI generate invalid inputs error alerts', async () => {
-      chatApi.send.mockRejectedValueOnce(new Error('Invalid Input / Missing Key'))
+      chatApi.stream.mockRejectedValueOnce(new Error('Invalid Input / Missing Key'))
 
       render(
         <MemoryRouter>
@@ -522,12 +584,14 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       })
     })
 
-    it('18. delete deck confirmation', () => {
+    it('18. delete deck confirmation', async () => {
       render(
         <MemoryRouter>
           <StudyPage />
         </MemoryRouter>
       )
+
+      await screen.findByText('CAP Theorem & Consistency')
 
       const deleteButtons = screen.getAllByTitle('Delete')
       expect(deleteButtons.length).toBe(3)
@@ -568,12 +632,14 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       expect(backElement).toHaveClass('flashcard-text')
     })
 
-    it('20. deck editor add card & save', () => {
+    it('20. deck editor add card & save', async () => {
       render(
         <MemoryRouter>
           <StudyPage />
         </MemoryRouter>
       )
+
+      await screen.findByText('CAP Theorem & Consistency')
 
       const newDeckBtn = document.querySelector('#new-deck-btn')
       fireEvent.click(newDeckBtn)

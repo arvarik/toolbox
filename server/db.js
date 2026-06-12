@@ -58,6 +58,12 @@ function migrate() {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- Study sessions (for heatmap)
+    CREATE TABLE IF NOT EXISTS study_sessions (
+      date TEXT PRIMARY KEY,
+      count INTEGER DEFAULT 0
+    );
   `)
 
   console.log('[db] Migrations complete')

@@ -49,19 +49,52 @@ function sm2(card, quality) {
 }
 
 /**
+ * Format ISO timestamp to relative time string.
+ */
+function formatRelativeTime(dateStr) {
+  if (!dateStr) return 'Never studied'
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMs = now - date
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
+  if (diffDays <= 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  return `${diffDays} days ago`
+}
+
+/**
  * GET /api/decks
  * List all decks with card counts and due counts.
  */
 router.get('/', (req, res) => {
-  const decks = db.prepare(`
+  const results = db.prepare(`
     SELECT d.*,
       COUNT(f.id) as card_count,
-      SUM(CASE WHEN f.next_review IS NULL OR f.next_review <= datetime('now') THEN 1 ELSE 0 END) as due_count
+      SUM(CASE WHEN f.next_review IS NULL OR f.next_review <= datetime('now') THEN 1 ELSE 0 END) as due_count,
+      MAX(f.last_reviewed) as last_reviewed_raw,
+      SUM(CASE WHEN f.repetitions > 0 THEN 1 ELSE 0 END) as reviewed_count
     FROM decks d
     LEFT JOIN flashcards f ON f.deck_id = d.id
     GROUP BY d.id
     ORDER BY d.updated_at DESC
   `).all()
+
+  const decks = results.map(row => {
+    const cardCount = row.card_count || 0
+    const reviewedCount = row.reviewed_count || 0
+    const progress = cardCount > 0 ? Math.round((reviewedCount / cardCount) * 100) : 0
+
+    const deck = { ...row }
+    delete deck.last_reviewed_raw
+    delete deck.reviewed_count
+
+    return {
+      ...deck,
+      progress,
+      last_studied: formatRelativeTime(row.last_reviewed_raw)
+    }
+  })
+
   res.json(decks)
 })
 
@@ -81,7 +114,20 @@ router.get('/:id', (req, res) => {
     !c.next_review || new Date(c.next_review) <= new Date()
   ).length
 
-  res.json({ ...deck, cards, due_count: dueCount })
+  const reviewedCount = cards.filter(c => c.repetitions > 0).length
+  const progress = cards.length > 0 ? Math.round((reviewedCount / cards.length) * 100) : 0
+  const maxLastReviewed = cards.reduce((max, c) => {
+    if (!c.last_reviewed) return max
+    return !max || new Date(c.last_reviewed) > new Date(max) ? c.last_reviewed : max
+  }, null)
+
+  res.json({
+    ...deck,
+    cards,
+    due_count: dueCount,
+    progress,
+    last_studied: formatRelativeTime(maxLastReviewed)
+  })
 })
 
 /**
@@ -242,6 +288,13 @@ router.post('/:deckId/cards/:cardId/review', (req, res) => {
     updated.last_reviewed,
     req.params.cardId
   )
+
+  // Increment study sessions for today's heatmap
+  db.prepare(`
+    INSERT INTO study_sessions (date, count)
+    VALUES (date('now', 'localtime'), 1)
+    ON CONFLICT(date) DO UPDATE SET count = count + 1
+  `).run()
 
   const result = db.prepare('SELECT * FROM flashcards WHERE id = ?').get(req.params.cardId)
   res.json(result)

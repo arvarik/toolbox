@@ -7,6 +7,11 @@ import { chatApi } from '../utils/api'
 vi.mock('../utils/api', () => ({
   chatApi: {
     send: vi.fn(() => Promise.resolve({ response: 'Mock AI Response' })),
+    stream: vi.fn(async (data, onChunk) => {
+      const text = 'Mock AI Response'
+      if (onChunk) onChunk(text)
+      return text
+    }),
   },
 }))
 
@@ -55,8 +60,8 @@ describe('Challenger Stress and Edge Case Tests', () => {
       nodes: [{ id: '1', type: 'loadBalancer', position: { x: 0, y: 0 } }],
     })
 
-    // Spy on chatApi.send
-    chatApi.send.mockResolvedValue({ response: 'Verification response' })
+    // Spy on chatApi.stream
+    chatApi.stream.mockResolvedValue('Verification response')
 
     const { rerender } = render(<ChatPanel page="builder" />)
 
@@ -81,7 +86,7 @@ describe('Challenger Stress and Edge Case Tests', () => {
     })
 
     // Verify the race condition: it is called 1 time instead of 3!
-    console.log('chatApi.send call count:', chatApi.send.mock.calls.length)
-    expect(chatApi.send).toHaveBeenCalledTimes(1)
+    console.log('chatApi.stream call count:', chatApi.stream.mock.calls.length)
+    expect(chatApi.stream).toHaveBeenCalledTimes(1)
   })
 })

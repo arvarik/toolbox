@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Search, X, BookOpen, ArrowRight } from 'lucide-react'
+import { Search, X, ArrowRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { PILLARS } from '../../utils/constants'
 
@@ -34,16 +34,14 @@ export default function SearchDialog({ open, onClose }) {
       )
     : allTopics
 
-  // Reset selection when query changes
-  useEffect(() => {
-    setSelectedIndex(0)
-  }, [query])
-
   // Focus input on open
   useEffect(() => {
     if (open) {
-      setQuery('')
-      setTimeout(() => inputRef.current?.focus(), 50)
+      setTimeout(() => {
+        setQuery('')
+        setSelectedIndex(0)
+        inputRef.current?.focus()
+      }, 50)
     }
   }, [open])
 
@@ -80,7 +78,10 @@ export default function SearchDialog({ open, onClose }) {
             type="text"
             placeholder="Search topics, pillars..."
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setSelectedIndex(0)
+            }}
           />
           <button
             className="btn btn-ghost btn-icon"

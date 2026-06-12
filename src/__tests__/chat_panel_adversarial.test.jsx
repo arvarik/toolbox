@@ -8,6 +8,11 @@ import { chatApi } from '../utils/api'
 vi.mock('../utils/api', () => ({
   chatApi: {
     send: vi.fn(() => Promise.resolve({ response: 'Mock AI Response' })),
+    stream: vi.fn(async (data, onChunk) => {
+      const text = 'Mock AI Response'
+      if (onChunk) onChunk(text)
+      return text
+    }),
   },
 }))
 
@@ -86,7 +91,7 @@ describe('Adversarial & Edge Case Tests for ChatPanel', () => {
     fireEvent.change(chatInput, { target: { value: 'Test message when storage blocked' } })
 
     const sendBtn = screen.getByRole('button', { name: 'Send message' })
-    chatApi.send.mockResolvedValueOnce({ response: 'Success response' })
+    chatApi.stream.mockResolvedValueOnce('Success response')
 
     await act(async () => {
       fireEvent.click(sendBtn)
@@ -126,8 +131,12 @@ describe('Adversarial & Edge Case Tests for ChatPanel', () => {
 
   it('prevents double sending when multiple clicks are made rapidly while loading', async () => {
     let resolvePromise
-    chatApi.send.mockImplementationOnce(() => new Promise((resolve) => {
-      resolvePromise = resolve
+    chatApi.stream.mockImplementationOnce((data, onChunk) => new Promise((resolve) => {
+      resolvePromise = (val) => {
+        const text = typeof val === 'string' ? val : val.response
+        if (onChunk) onChunk(text)
+        resolve(text)
+      }
     }))
 
     render(<ChatPanel page="guide" />)
@@ -146,7 +155,7 @@ describe('Adversarial & Edge Case Tests for ChatPanel', () => {
       fireEvent.click(sendBtn)
     })
 
-    expect(chatApi.send).toHaveBeenCalledTimes(1)
+    expect(chatApi.stream).toHaveBeenCalledTimes(1)
 
     // Resolve the promise
     await act(async () => {

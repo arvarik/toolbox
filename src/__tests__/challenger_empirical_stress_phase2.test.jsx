@@ -9,36 +9,82 @@ import useAppStore from '../stores/appStore'
 import { configApi, boardsApi, decksApi } from '../utils/api'
 
 // Mock the API endpoints
-vi.mock('../utils/api', () => ({
-  configApi: {
-    get: vi.fn(),
-    update: vi.fn(),
-    testApiKey: vi.fn(),
-  },
-  decksApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    get: vi.fn(() => Promise.resolve({})),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  flashcardsApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  boardsApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    get: vi.fn(() => Promise.resolve({})),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  chatApi: {
-    send: vi.fn(() => Promise.resolve({ response: 'AI response' })),
-  },
-}))
+vi.mock('../utils/api', () => {
+  const mockDecks = [
+    {
+      id: 'deck-1',
+      name: 'CAP Theorem & Consistency',
+      description: 'CAP Theorem description',
+      color_index: 0,
+      card_count: 12,
+      tags: 'Storage',
+      last_studied: '2 days ago',
+      progress: 75,
+      cards: []
+    },
+    {
+      id: 'deck-2',
+      name: 'Load Balancing Strategies',
+      description: 'Load Balancing description',
+      color_index: 1,
+      card_count: 8,
+      tags: 'Compute',
+      last_studied: 'Yesterday',
+      progress: 40,
+      cards: []
+    },
+    {
+      id: 'deck-3',
+      name: 'Database Scaling Patterns',
+      description: 'Database Scaling description',
+      color_index: 2,
+      card_count: 15,
+      tags: 'Storage',
+      last_studied: 'Never studied',
+      progress: 0,
+      cards: []
+    }
+  ]
+
+  return {
+    configApi: {
+      get: vi.fn(),
+      update: vi.fn(),
+      testApiKey: vi.fn(),
+    },
+    decksApi: {
+      list: vi.fn(() => Promise.resolve(mockDecks)),
+      get: vi.fn((id) => Promise.resolve(mockDecks.find(d => d.id === id) || mockDecks[0])),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    flashcardsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    boardsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      get: vi.fn(() => Promise.resolve({})),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    chatApi: {
+      send: vi.fn(() => Promise.resolve({ response: 'AI response' })),
+      stream: vi.fn(async (data, onChunk) => {
+        const text = 'AI response'
+        if (onChunk) onChunk(text)
+        return text
+      }),
+    },
+    studySessionsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+    },
+  }
+})
 
 describe('Challenger Phase 2 Adversarial Stress Tests', () => {
   let originalLocalStorage
@@ -189,7 +235,8 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
       expect(decksApi.create).toHaveBeenCalledWith({
         name: 'Adversarial Test Deck',
         description: '',
-        color_index: 3
+        color_index: 0,
+        tags: ''
       })
     })
   })

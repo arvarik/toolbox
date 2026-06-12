@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock } from 'lucide-react'
 import { flashcardsApi } from '../../utils/api'
 import StudySessionSummary from './StudySessionSummary'
@@ -21,6 +21,10 @@ function formatInterval(days) {
   return `${Math.round(days / 365)} years`
 }
 
+function getCurrentTime() {
+  return Date.now()
+}
+
 /**
  * Flashcard viewer with flip animation, SRS rating buttons, and navigation.
  * @param {Array} cards - Array of flashcard objects
@@ -35,12 +39,18 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
   const [flipped, setFlipped] = useState(false)
   const [isReviewing, setIsReviewing] = useState(false)
   const [reviewedCount, setReviewedCount] = useState(0)
-  const startTimeRef = useRef(Date.now())
+  const [sessionStats, setSessionStats] = useState(null)
+
+  const startTimeRef = useRef(0)
   const ratingsRef = useRef({})
   const correctCountRef = useRef(0)
 
+  useEffect(() => {
+    startTimeRef.current = getCurrentTime()
+  }, [])
+
   const currentCard = cards[currentIndex]
-  const isDone = reviewMode && currentIndex >= cards.length
+  const isDone = reviewMode && sessionStats !== null
 
   const handleFlip = () => {
     if (!isReviewing) setFlipped(!flipped)
@@ -73,17 +83,32 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
     setIsReviewing(true)
     try {
       await flashcardsApi.review(deckId, currentCard.id, quality)
-      setReviewedCount((c) => c + 1)
+      const newReviewedCount = reviewedCount + 1
+      setReviewedCount(newReviewedCount)
+
       ratingsRef.current[quality] = (ratingsRef.current[quality] || 0) + 1
       if (quality >= 3) correctCountRef.current += 1
       if (onCardReviewed) onCardReviewed(currentCard.id, quality)
 
       // Move to next card
       setFlipped(false)
-      setTimeout(() => {
-        setCurrentIndex((i) => i + 1)
+      const nextIdx = currentIndex + 1
+      if (nextIdx >= cards.length) {
+        const finalStats = {
+          totalCards: newReviewedCount,
+          correctCards: correctCountRef.current,
+          totalTimeMs: getCurrentTime() - (startTimeRef.current || getCurrentTime()),
+          ratings: { ...ratingsRef.current },
+        }
+        setSessionStats(finalStats)
+        setCurrentIndex(nextIdx)
         setIsReviewing(false)
-      }, 200)
+      } else {
+        setTimeout(() => {
+          setCurrentIndex(nextIdx)
+          setIsReviewing(false)
+        }, 200)
+      }
     } catch (err) {
       console.error('Review failed:', err)
       setIsReviewing(false)
@@ -108,12 +133,6 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
 
   // Review complete state — show session summary
   if (isDone) {
-    const sessionStats = {
-      totalCards: reviewedCount,
-      correctCards: correctCountRef.current,
-      totalTimeMs: Date.now() - startTimeRef.current,
-      ratings: ratingsRef.current,
-    }
     return (
       <div className="flashcard-viewer" id="flashcard-viewer">
         <StudySessionSummary
@@ -122,9 +141,10 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
           onStudyAgain={() => {
             setCurrentIndex(0)
             setReviewedCount(0)
-            startTimeRef.current = Date.now()
+            startTimeRef.current = getCurrentTime()
             ratingsRef.current = {}
             correctCountRef.current = 0
+            setSessionStats(null)
           }}
         />
       </div>

@@ -20,8 +20,8 @@ const AUTO_SAVE_DELAY = 3000
 
 export default function BuilderPage() {
   const toggleChat = useAppStore((s) => s.toggleChat)
-  const nodes = useAppStore((s) => s.nodes) || []
-  const edges = useAppStore((s) => s.edges) || []
+  const nodes = useAppStore((s) => s.nodes || [])
+  const edges = useAppStore((s) => s.edges || [])
   const setNodes = useAppStore((s) => s.setNodes)
   const setEdges = useAppStore((s) => s.setEdges)
   const addToast = useAppStore((s) => s.addToast)
@@ -32,7 +32,6 @@ export default function BuilderPage() {
   const [zoomLevel, setZoomLevel] = useState(100)
   const [showTemplates, setShowTemplates] = useState(false)
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
-  const canvasRef = useRef(null)
   const autoSaveTimer = useRef(null)
   const lastSavedData = useRef(null)
 

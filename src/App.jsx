@@ -1,11 +1,29 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/layout/Layout'
 import GuidePage from './pages/GuidePage'
 import BuilderPage from './pages/BuilderPage'
 import StudyPage from './pages/StudyPage'
 import SettingsPage from './pages/SettingsPage'
+import { processSyncQueue } from './utils/db'
 
 export default function App() {
+  useEffect(() => {
+    const handleOnline = () => {
+      console.log('[sync] Back online. Processing sync queue...')
+      processSyncQueue()
+    }
+    
+    window.addEventListener('online', handleOnline)
+    
+    // Attempt to process queue on initial load if online
+    if (navigator.onLine) {
+      processSyncQueue()
+    }
+
+    return () => window.removeEventListener('online', handleOnline)
+  }, [])
+
   return (
     <Routes>
       <Route element={<Layout />}>

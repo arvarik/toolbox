@@ -13,37 +13,89 @@ import { chatApi, configApi } from '../utils/api'
 // Auditor will independently verify your work. Integrity violations WILL be detected 
 // and your work WILL be rejected.
 
-// Mock the API responses
-vi.mock('../utils/api', () => ({
-  configApi: {
-    get: vi.fn(),
-    update: vi.fn(),
-    testApiKey: vi.fn(),
-  },
-  decksApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    get: vi.fn(() => Promise.resolve({})),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  flashcardsApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  boardsApi: {
-    list: vi.fn(() => Promise.resolve([])),
-    get: vi.fn(() => Promise.resolve({})),
-    create: vi.fn(() => Promise.resolve({})),
-    update: vi.fn(() => Promise.resolve({})),
-    delete: vi.fn(() => Promise.resolve({})),
-  },
-  chatApi: {
-    send: vi.fn(() => Promise.resolve({ response: 'AI response content' })),
-  },
-}))
+vi.mock('../utils/api', () => {
+  const mockDecks = [
+    {
+      id: 'deck-1',
+      name: 'CAP Theorem & Consistency',
+      description: 'CAP Theorem description',
+      color_index: 0,
+      card_count: 12,
+      tags: 'Storage',
+      last_studied: '2 days ago',
+      progress: 75,
+      cards: [
+        {
+          id: 'c1',
+          front: 'What is the CAP Theorem?',
+          back: 'The CAP theorem states that a distributed system can only provide two of three guarantees: Consistency, Availability, and Partition Tolerance.'
+        }
+      ]
+    },
+    {
+      id: 'deck-2',
+      name: 'Load Balancing Strategies',
+      description: 'Load Balancing description',
+      color_index: 1,
+      card_count: 8,
+      tags: 'Compute',
+      last_studied: 'Yesterday',
+      progress: 40,
+      cards: []
+    },
+    {
+      id: 'deck-3',
+      name: 'Database Scaling Patterns',
+      description: 'Database Scaling description',
+      color_index: 2,
+      card_count: 15,
+      tags: 'Storage',
+      last_studied: 'Never studied',
+      progress: 0,
+      cards: []
+    }
+  ]
+
+  return {
+    configApi: {
+      get: vi.fn(() => Promise.resolve({ api_key_configured: true })),
+      update: vi.fn(() => Promise.resolve({ success: true })),
+      testApiKey: vi.fn(() => Promise.resolve({ valid: true })),
+    },
+    decksApi: {
+      list: vi.fn(() => Promise.resolve(mockDecks)),
+      get: vi.fn((id) => Promise.resolve(mockDecks.find(d => d.id === id) || mockDecks[0])),
+      create: vi.fn((data) => Promise.resolve({ id: 'deck-created', ...data })),
+      update: vi.fn((id, data) => Promise.resolve({ id, ...data })),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    flashcardsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      due: vi.fn(() => Promise.resolve([])),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    boardsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      get: vi.fn(() => Promise.resolve({})),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({})),
+    },
+    chatApi: {
+      send: vi.fn(() => Promise.resolve({ response: 'AI response content' })),
+      stream: vi.fn(async (data, onChunk) => {
+        const text = 'AI response content'
+        if (onChunk) onChunk(text)
+        return text
+      }),
+    },
+    studySessionsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+    },
+  }
+})
 
 
 
@@ -140,13 +192,13 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       useAppStore.setState({ chatOpen: { guide: true, builder: true, study: true } })
 
       const { rerender } = render(<ChatPanel page="guide" />)
-      expect(screen.getByText('Explain CAP Theorem')).toBeInTheDocument()
+      expect(screen.getByText('Explain the CAP Theorem with real examples')).toBeInTheDocument()
 
       rerender(<ChatPanel page="builder" />)
-      expect(screen.getByText('Optimize database tier')).toBeInTheDocument()
+      expect(screen.getByText('Help me design a URL shortener')).toBeInTheDocument()
 
       rerender(<ChatPanel page="study" />)
-      expect(screen.getByText('Suggest study plan')).toBeInTheDocument()
+      expect(screen.getByText('Generate 5 flashcards about database sharding')).toBeInTheDocument()
     })
 
     it('3. adjusts panel width dynamically via drag handle', () => {
@@ -228,8 +280,12 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       useAppStore.setState({ chatOpen: { guide: true, builder: false, study: false } })
       
       let resolvePromise
-      chatApi.send.mockImplementationOnce(() => new Promise((resolve) => {
-        resolvePromise = resolve
+      chatApi.stream.mockImplementationOnce((data, onChunk) => new Promise((resolve) => {
+        resolvePromise = (val) => {
+          const text = typeof val === 'string' ? val : val.response
+          if (onChunk) onChunk(text)
+          resolve(text)
+        }
       }))
 
       render(<ChatPanel page="guide" />)
@@ -250,7 +306,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
 
     it('9. handles fetch failure errors and displays error alert', async () => {
       useAppStore.setState({ chatOpen: { guide: true, builder: false, study: false } })
-      chatApi.send.mockRejectedValueOnce(new Error('Rate limit exceeded'))
+      chatApi.stream.mockRejectedValueOnce(new Error('Rate limit exceeded'))
 
       render(<ChatPanel page="guide" />)
 
@@ -299,13 +355,13 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
         </MemoryRouter>
       )
 
-      expect(screen.getByText('Explain CAP Theorem')).toBeInTheDocument()
+      expect(screen.getByText('Explain the CAP Theorem with real examples')).toBeInTheDocument()
 
       // Navigate to builder page
       const builderNav = document.querySelector('#nav-builder')
       fireEvent.click(builderNav)
 
-      expect(screen.getByText('Optimize database tier')).toBeInTheDocument()
+      expect(screen.getByText('Help me design a URL shortener')).toBeInTheDocument()
     })
 
     it('12. persists message history across route changes and navigations', () => {
@@ -439,6 +495,8 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
         </MemoryRouter>
       )
 
+      await screen.findByText('CAP Theorem & Consistency')
+
       // Search decks
       const search = document.querySelector('#search-decks')
       fireEvent.change(search, { target: { value: 'CAP' } })
@@ -569,11 +627,11 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       fireEvent.click(askAiBtn)
 
       // Select starter prompt
-      const promptBtn = screen.getByText('Explain CAP Theorem')
+      const promptBtn = screen.getByText('Explain the CAP Theorem with real examples')
       fireEvent.click(promptBtn)
 
       // Verify sent message and AI response
-      expect(screen.getByText('Explain CAP Theorem')).toBeInTheDocument()
+      expect(screen.getByText('Explain the CAP Theorem with real examples')).toBeInTheDocument()
       await waitFor(() => {
         expect(screen.getByText('AI response content')).toBeInTheDocument()
       })

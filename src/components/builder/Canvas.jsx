@@ -68,8 +68,8 @@ function buildEdgePath(from, to) {
  * Supports pan, zoom, node dragging, and edge drawing.
  */
 export default function Canvas({ onTransformChange }) {
-  const nodes = useAppStore((s) => s.nodes) || []
-  const edges = useAppStore((s) => s.edges) || []
+  const nodes = useAppStore((s) => s.nodes || [])
+  const edges = useAppStore((s) => s.edges || [])
   const addEdge = useAppStore((s) => s.addEdge)
   const removeEdge = useAppStore((s) => s.removeEdge)
   const setNodes = (newNodesVal) => {
@@ -196,7 +196,7 @@ export default function Canvas({ onTransformChange }) {
   }, [spaceDown, transform])
 
   // Handle node dragging on canvas
-  const handleNodeMouseDown = (e, node) => {
+  const handleNodeMouseDown = useCallback((e, node) => {
     if (spaceDown) return // Don't drag nodes while panning
     e.stopPropagation()
     const pos = screenToCanvas(e.clientX, e.clientY)
@@ -205,16 +205,16 @@ export default function Canvas({ onTransformChange }) {
       x: pos.x - node.x,
       y: pos.y - node.y,
     })
-  }
+  }, [spaceDown, screenToCanvas])
 
   // Handle anchor click to start edge drawing
-  const handleAnchorMouseDown = (e, nodeId, anchor) => {
+  const handleAnchorMouseDown = useCallback((e, nodeId, anchor) => {
     e.stopPropagation()
     e.preventDefault()
     setConnecting({ nodeId, anchor })
     const pos = screenToCanvas(e.clientX, e.clientY)
     setMousePos(pos)
-  }
+  }, [screenToCanvas])
 
   const handleMouseMove = useCallback(
     (e) => {
@@ -248,7 +248,7 @@ export default function Canvas({ onTransformChange }) {
   )
 
   // Handle anchor mouseup to complete edge
-  const handleAnchorMouseUp = (e, nodeId, anchor) => {
+  const handleAnchorMouseUp = useCallback((e, nodeId, anchor) => {
     e.stopPropagation()
     if (connecting && connecting.nodeId !== nodeId) {
       // Prevent duplicate edges
@@ -267,7 +267,7 @@ export default function Canvas({ onTransformChange }) {
       }
     }
     setConnecting(null)
-  }
+  }, [connecting, edges, addEdge])
 
   const handleMouseUp = useCallback(() => {
     setDragging(null)

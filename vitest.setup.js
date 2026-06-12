@@ -71,3 +71,12 @@ afterEach(() => {
   vi.clearAllMocks()
   localStorageMock.clear()
 })
+
+// 6. Mock IndexedDB wrapper for tests
+vi.mock('./src/utils/db.js', () => ({
+  initDB: vi.fn().mockResolvedValue(null),
+  setCache: vi.fn().mockResolvedValue(undefined),
+  getCache: vi.fn().mockResolvedValue(null),
+  enqueueSync: vi.fn().mockResolvedValue(undefined),
+  processSyncQueue: vi.fn().mockResolvedValue(0),
+}))
