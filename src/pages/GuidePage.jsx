@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { MessageSquare } from 'lucide-react'
 import PillarNav from '../components/guide/PillarNav'
 import BlueprintShell from '../components/guide/BlueprintShell'
@@ -7,6 +8,15 @@ import useAppStore from '../stores/appStore'
 export default function GuidePage() {
   const chatOpen = useAppStore((s) => s.chatOpen.guide)
   const toggleChat = useAppStore((s) => s.toggleChat)
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   return (
     <div className="guide-layout" id="guide-page">
@@ -16,21 +26,10 @@ export default function GuidePage() {
       {/* Center: Blueprint content */}
       <div className="guide-content">
         {/* Floating Ask AI button */}
-        {!chatOpen && (
+        {!isMobile && !chatOpen && (
           <button
-            className="btn btn-primary"
+            className="btn btn-primary floating-chat-btn"
             onClick={() => toggleChat('guide')}
-            id="guide-ask-ai-btn"
-            style={{
-              position: 'absolute',
-              bottom: 'var(--space-6)',
-              right: 'var(--space-6)',
-              zIndex: 'var(--z-dropdown)',
-              boxShadow: 'var(--shadow-lg), var(--shadow-glow)',
-              borderRadius: 'var(--radius-full)',
-              padding: 'var(--space-3) var(--space-5)',
-              gap: 'var(--space-2)',
-            }}
           >
             <MessageSquare size={16} />
             Ask AI
@@ -41,11 +40,13 @@ export default function GuidePage() {
       </div>
 
       {/* Right: AI Chat panel */}
-      <ChatPanel
-        page="guide"
-        title="Ask about System Design"
-        placeholder="Ask about this component..."
-      />
+      {!isMobile && (
+        <ChatPanel
+          page="guide"
+          title="Ask about System Design"
+          placeholder="Ask about this component..."
+        />
+      )}
     </div>
   )
 }

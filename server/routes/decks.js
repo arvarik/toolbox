@@ -5,12 +5,58 @@ import db from '../db.js'
 const router = Router()
 
 /**
+ * SM-2 Spaced Repetition Algorithm
+ * @param {Object} card - Current card state (ease_factor, interval, repetitions)
+ * @param {number} quality - User rating: 0=Again, 3=Hard, 4=Good, 5=Easy
+ * @returns {Object} Updated SRS fields
+ */
+function sm2(card, quality) {
+  let { ease_factor = 2.5, interval = 0, repetitions = 0 } = card
+
+  if (quality < 3) {
+    // Failed — reset
+    repetitions = 0
+    interval = 0
+  } else {
+    // Passed
+    if (repetitions === 0) {
+      interval = 1
+    } else if (repetitions === 1) {
+      interval = 6
+    } else {
+      interval = Math.round(interval * ease_factor)
+    }
+    repetitions += 1
+  }
+
+  // Update ease factor (never below 1.3)
+  ease_factor = Math.max(
+    1.3,
+    ease_factor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+  )
+
+  // Calculate next review date
+  const now = new Date()
+  const nextReview = new Date(now.getTime() + interval * 24 * 60 * 60 * 1000)
+
+  return {
+    ease_factor: Math.round(ease_factor * 100) / 100,
+    interval,
+    repetitions,
+    next_review: nextReview.toISOString(),
+    last_reviewed: now.toISOString(),
+  }
+}
+
+/**
  * GET /api/decks
- * List all decks with card counts.
+ * List all decks with card counts and due counts.
  */
 router.get('/', (req, res) => {
   const decks = db.prepare(`
-    SELECT d.*, COUNT(f.id) as card_count
+    SELECT d.*,
+      COUNT(f.id) as card_count,
+      SUM(CASE WHEN f.next_review IS NULL OR f.next_review <= datetime('now') THEN 1 ELSE 0 END) as due_count
     FROM decks d
     LEFT JOIN flashcards f ON f.deck_id = d.id
     GROUP BY d.id
@@ -31,7 +77,11 @@ router.get('/:id', (req, res) => {
     'SELECT * FROM flashcards WHERE deck_id = ? ORDER BY position'
   ).all(req.params.id)
 
-  res.json({ ...deck, cards })
+  const dueCount = cards.filter((c) =>
+    !c.next_review || new Date(c.next_review) <= new Date()
+  ).length
+
+  res.json({ ...deck, cards, due_count: dueCount })
 })
 
 /**
@@ -98,6 +148,22 @@ router.get('/:deckId/cards', (req, res) => {
 })
 
 /**
+ * GET /api/decks/:deckId/cards/due
+ * Get cards due for review (next_review <= now or never reviewed).
+ */
+router.get('/:deckId/cards/due', (req, res) => {
+  const cards = db.prepare(`
+    SELECT * FROM flashcards
+    WHERE deck_id = ?
+      AND (next_review IS NULL OR next_review <= datetime('now'))
+    ORDER BY
+      CASE WHEN next_review IS NULL THEN 0 ELSE 1 END,
+      next_review ASC
+  `).all(req.params.deckId)
+  res.json(cards)
+})
+
+/**
  * POST /api/decks/:deckId/cards
  */
 router.post('/:deckId/cards', (req, res) => {
@@ -113,7 +179,6 @@ router.post('/:deckId/cards', (req, res) => {
     'INSERT INTO flashcards (id, deck_id, front, back, position) VALUES (?, ?, ?, ?, ?)'
   ).run(id, req.params.deckId, front, back, (maxPos?.max || 0) + 1)
 
-  // Update deck timestamp
   db.prepare("UPDATE decks SET updated_at = datetime('now') WHERE id = ?").run(req.params.deckId)
 
   const card = db.prepare('SELECT * FROM flashcards WHERE id = ?').get(id)
@@ -138,6 +203,47 @@ router.put('/:deckId/cards/:cardId', (req, res) => {
   const card = db.prepare('SELECT * FROM flashcards WHERE id = ?').get(req.params.cardId)
   if (!card) return res.status(404).json({ message: 'Card not found' })
   res.json(card)
+})
+
+/**
+ * POST /api/decks/:deckId/cards/:cardId/review
+ * Submit a review rating for a card (SRS).
+ * Body: { quality } — 0=Again, 3=Hard, 4=Good, 5=Easy
+ */
+router.post('/:deckId/cards/:cardId/review', (req, res) => {
+  const { quality } = req.body
+  if (quality === undefined || quality < 0 || quality > 5) {
+    return res.status(400).json({ message: 'Quality must be 0-5' })
+  }
+
+  const card = db.prepare(
+    'SELECT * FROM flashcards WHERE id = ? AND deck_id = ?'
+  ).get(req.params.cardId, req.params.deckId)
+
+  if (!card) return res.status(404).json({ message: 'Card not found' })
+
+  const updated = sm2(card, quality)
+
+  db.prepare(`
+    UPDATE flashcards SET
+      ease_factor = ?,
+      interval = ?,
+      repetitions = ?,
+      next_review = ?,
+      last_reviewed = ?,
+      updated_at = datetime('now')
+    WHERE id = ?
+  `).run(
+    updated.ease_factor,
+    updated.interval,
+    updated.repetitions,
+    updated.next_review,
+    updated.last_reviewed,
+    req.params.cardId
+  )
+
+  const result = db.prepare('SELECT * FROM flashcards WHERE id = ?').get(req.params.cardId)
+  res.json(result)
 })
 
 /**

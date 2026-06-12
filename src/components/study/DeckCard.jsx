@@ -50,6 +50,27 @@ export default function DeckCard({ deck, onClick }) {
           {deck.lastStudied || 'Never studied'}
         </span>
       </div>
+
+      {/* Mastery Progress Bar */}
+      <div style={{ marginTop: 'var(--space-3)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Mastery</span>
+          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+            {deck.progress !== undefined ? deck.progress : 0}%
+          </span>
+        </div>
+        <div style={{ height: '6px', background: 'var(--color-bg-hover, #f3f4f6)', borderRadius: '3px', overflow: 'hidden' }}>
+          <div
+            style={{
+              height: '100%',
+              width: `${deck.progress !== undefined ? deck.progress : 0}%`,
+              background: color,
+              borderRadius: '3px',
+              transition: 'width var(--duration-normal)',
+            }}
+          />
+        </div>
+      </div>
     </div>
   )
 }

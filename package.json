@@ -10,6 +10,7 @@
     "build": "vite build",
     "start": "NODE_ENV=production node server/index.js",
     "lint": "eslint .",
+    "test:run": "vitest run",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -21,7 +22,9 @@
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
+    "react-markdown": "^9.0.1",
     "react-router-dom": "^7.17.0",
+    "remark-gfm": "^4.0.0",
     "uuid": "^14.0.0",
     "zustand": "^5.0.14"
   },

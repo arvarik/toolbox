@@ -61,6 +61,22 @@ function migrate() {
   `)
 
   console.log('[db] Migrations complete')
+
+  // SRS columns migration (additive — safe to re-run)
+  const srsColumns = [
+    ['ease_factor', 'REAL DEFAULT 2.5'],
+    ['interval', 'INTEGER DEFAULT 0'],
+    ['repetitions', 'INTEGER DEFAULT 0'],
+    ['next_review', 'TEXT DEFAULT NULL'],
+    ['last_reviewed', 'TEXT DEFAULT NULL'],
+  ]
+  for (const [col, type] of srsColumns) {
+    try {
+      db.exec(`ALTER TABLE flashcards ADD COLUMN ${col} ${type}`)
+    } catch {
+      // Column already exists — ignore
+    }
+  }
 }
 
 migrate()

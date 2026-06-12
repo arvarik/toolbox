@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Plus, Search, MessageSquare, GraduationCap, Trash2, Edit, Play } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Plus, Search, MessageSquare, GraduationCap, Trash2, Edit, Play, Clock } from 'lucide-react'
 import DeckCard from '../components/study/DeckCard'
 import FlashcardView from '../components/study/FlashcardView'
 import DeckEditor from '../components/study/DeckEditor'
@@ -7,71 +7,87 @@ import ChatPanel from '../components/shared/ChatPanel'
 import EmptyState from '../components/shared/EmptyState'
 import Modal from '../components/shared/Modal'
 import useAppStore from '../stores/appStore'
+import { decksApi, flashcardsApi } from '../utils/api'
 
-// Sample decks for UI scaffolding
-const sampleDecks = [
-  {
-    id: 'deck-1',
-    name: 'CAP Theorem & Consistency',
-    description: 'Understand the tradeoffs between Consistency, Availability, and Partition tolerance.',
-    cardCount: 12,
-    lastStudied: '2 days ago',
-    colorIndex: 0,
-  },
-  {
-    id: 'deck-2',
-    name: 'Load Balancing Strategies',
-    description: 'Round robin, least connections, consistent hashing, and more.',
-    cardCount: 8,
-    lastStudied: 'Yesterday',
-    colorIndex: 1,
-  },
-  {
-    id: 'deck-3',
-    name: 'Database Scaling Patterns',
-    description: 'Sharding, replication, partitioning, and read replicas.',
-    cardCount: 15,
-    lastStudied: 'Never studied',
-    colorIndex: 2,
-  },
-]
-
-const sampleCards = [
-  {
-    id: 'c1',
-    front: 'What is the CAP Theorem?',
-    back: 'The CAP theorem states that a distributed system can only provide two of three guarantees: Consistency, Availability, and Partition Tolerance.',
-  },
-  {
-    id: 'c2',
-    front: 'What is eventual consistency?',
-    back: 'A consistency model where, given enough time without new updates, all replicas will converge to the same value. Used by systems like DynamoDB and Cassandra.',
-  },
-  {
-    id: 'c3',
-    front: 'When should you choose CP over AP?',
-    back: 'Choose CP (Consistency + Partition Tolerance) for financial transactions, inventory systems, or any workload where stale reads are unacceptable.',
-  },
-]
+const mapDeckFromApi = (d) => ({
+  id: d.id,
+  name: d.name,
+  description: d.description || '',
+  colorIndex: d.color_index !== undefined ? d.color_index : 0,
+  cardCount: d.card_count !== undefined ? d.card_count : (d.cards ? d.cards.length : 0),
+  dueCount: d.due_count || 0,
+  lastStudied: 'Never studied',
+  progress: 0,
+  cards: d.cards ? d.cards.map(c => ({
+    id: c.id, front: c.front, back: c.back,
+    ease_factor: c.ease_factor, interval: c.interval,
+    repetitions: c.repetitions, next_review: c.next_review,
+  })) : []
+})
 
 export default function StudyPage() {
-  const chatOpen = useAppStore((s) => s.chatOpen.study)
   const toggleChat = useAppStore((s) => s.toggleChat)
   const addToast = useAppStore((s) => s.addToast)
 
-  const [view, setView] = useState('list') // 'list' | 'study' | 'edit' | 'new'
-  const [decks, setDecks] = useState(sampleDecks)
+  const [view, setView] = useState('list') // 'list' | 'study' | 'review' | 'edit' | 'new'
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  const [decks, setDecks] = useState([])
+  const [isLoading, setIsLoading] = useState(true)
   const [selectedDeck, setSelectedDeck] = useState(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [deleteModal, setDeleteModal] = useState(null)
+
+  useEffect(() => {
+    setIsLoading(true)
+    decksApi.list().then((list) => {
+      if (list && list.length > 0) {
+        setDecks(list.map(mapDeckFromApi))
+      }
+    }).catch(() => {}).finally(() => {
+      setIsLoading(false)
+    })
+  }, [])
 
   const filteredDecks = decks.filter((d) =>
     d.name.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const handleDeckClick = (deck) => {
+  const handleDeckClick = async (deck) => {
     setSelectedDeck(deck)
     setView('study')
+    try {
+      const fullDeck = await decksApi.get(deck.id)
+      setSelectedDeck(mapDeckFromApi(fullDeck))
+    } catch {
+      // Ignore
+    }
+  }
+
+  const handleReviewDeck = async (deck) => {
+    setSelectedDeck(deck)
+    setView('review')
+    try {
+      const dueCards = await flashcardsApi.due(deck.id)
+      setSelectedDeck({
+        ...deck,
+        cards: dueCards.map(c => ({
+          id: c.id, front: c.front, back: c.back,
+          ease_factor: c.ease_factor, interval: c.interval,
+          repetitions: c.repetitions, next_review: c.next_review,
+        })),
+      })
+    } catch {
+      // Ignore
+    }
   }
 
   const handleNewDeck = () => {
@@ -79,57 +95,149 @@ export default function StudyPage() {
     setView('new')
   }
 
-  const handleEditDeck = (deck) => {
+  const handleEditDeck = async (deck) => {
     setSelectedDeck(deck)
     setView('edit')
+    try {
+      const fullDeck = await decksApi.get(deck.id)
+      setSelectedDeck(mapDeckFromApi(fullDeck))
+    } catch {
+      // Ignore
+    }
   }
 
-  const handleSaveDeck = (data) => {
+  const handleSaveDeck = async (data) => {
+    const colorIndex = selectedDeck ? selectedDeck.colorIndex : (decks.length % 8)
+    const tempId = selectedDeck ? selectedDeck.id : `deck-${Date.now()}`
+
     if (selectedDeck) {
       setDecks((prev) =>
-        prev.map((d) => (d.id === selectedDeck.id ? { ...d, ...data } : d))
+        prev.map((d) =>
+          d.id === selectedDeck.id
+            ? {
+                ...d,
+                name: data.name,
+                description: data.description,
+                cards: data.cards || [],
+                cardCount: data.cards?.length || 0,
+              }
+            : d
+        )
       )
-      addToast({ type: 'success', message: 'Deck updated successfully' })
     } else {
       const newDeck = {
-        id: `deck-${Date.now()}`,
-        ...data,
+        id: tempId,
+        name: data.name,
+        description: data.description,
+        colorIndex: colorIndex,
         cardCount: data.cards?.length || 0,
         lastStudied: 'Never studied',
-        colorIndex: decks.length % 8,
+        progress: 0,
+        cards: data.cards || []
       }
       setDecks((prev) => [...prev, newDeck])
-      addToast({ type: 'success', message: 'Deck created successfully' })
     }
     setView('list')
     setSelectedDeck(null)
+
+    try {
+      if (selectedDeck) {
+        await decksApi.update(tempId, {
+          name: data.name,
+          description: data.description,
+          color_index: colorIndex
+        })
+
+        const existingCards = selectedDeck.cards || []
+        const currentCards = data.cards || []
+
+        const deletedCards = existingCards.filter(
+          (ec) => !currentCards.some((cc) => cc.id === ec.id)
+        )
+        for (const card of deletedCards) {
+          await flashcardsApi.delete(tempId, card.id)
+        }
+
+        for (const card of currentCards) {
+          const isNew = String(card.id).startsWith('card-')
+          if (isNew) {
+            await flashcardsApi.create(tempId, { front: card.front, back: card.back })
+          } else {
+            await flashcardsApi.update(tempId, card.id, { front: card.front, back: card.back })
+          }
+        }
+        addToast({ type: 'success', message: 'Deck updated successfully' })
+      } else {
+        const deck = await decksApi.create({
+          name: data.name,
+          description: data.description,
+          color_index: colorIndex
+        })
+        const deckId = deck?.id || tempId
+        if (deckId !== tempId) {
+          setDecks((prev) =>
+            prev.map((d) => (d.id === tempId ? { ...d, id: deckId } : d))
+          )
+        }
+        const currentCards = data.cards || []
+        for (const card of currentCards) {
+          await flashcardsApi.create(deckId, { front: card.front, back: card.back })
+        }
+        addToast({ type: 'success', message: 'Deck created successfully' })
+      }
+
+      const list = await decksApi.list()
+      if (list && list.length > 0) {
+        setDecks(list.map(mapDeckFromApi))
+      }
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to save deck' })
+    }
   }
 
-  const handleDeleteDeck = (deck) => {
+  const handleDeleteDeck = async (deck) => {
     setDecks((prev) => prev.filter((d) => d.id !== deck.id))
     setDeleteModal(null)
-    addToast({ type: 'info', message: `"${deck.name}" deleted` })
+    try {
+      await decksApi.delete(deck.id)
+      addToast({ type: 'info', message: `"${deck.name}" deleted` })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to delete deck' })
+    }
+  }
+
+  // Refresh decks list
+  const refreshDecks = async () => {
+    try {
+      const list = await decksApi.list()
+      if (list && list.length > 0) setDecks(list.map(mapDeckFromApi))
+    } catch { /* ignore */ }
   }
 
   // Study view
-  if (view === 'study' && selectedDeck) {
+  if ((view === 'study' || view === 'review') && selectedDeck) {
     return (
       <div className="study-layout" id="study-page">
         <div className="study-main">
           <FlashcardView
-            cards={sampleCards}
+            cards={selectedDeck.cards || []}
             deckName={selectedDeck.name}
+            deckId={selectedDeck.id}
+            reviewMode={view === 'review'}
             onBack={() => {
               setView('list')
               setSelectedDeck(null)
+              refreshDecks()
             }}
           />
         </div>
-        <ChatPanel
-          page="study"
-          title="Study Assistant"
-          placeholder="Ask about this topic or generate more cards..."
-        />
+        {!isMobile && (
+          <ChatPanel
+            page="study"
+            title="Study Assistant"
+            placeholder="Ask about this topic or generate more cards..."
+          />
+        )}
       </div>
     )
   }
@@ -141,7 +249,7 @@ export default function StudyPage() {
         <div className="study-main">
           <DeckEditor
             deck={selectedDeck}
-            cards={selectedDeck ? sampleCards : []}
+            cards={selectedDeck ? (selectedDeck.cards || []) : []}
             onSave={handleSaveDeck}
             onCancel={() => {
               setView('list')
@@ -149,11 +257,13 @@ export default function StudyPage() {
             }}
           />
         </div>
-        <ChatPanel
-          page="study"
-          title="AI Card Generator"
-          placeholder="Describe a topic to auto-generate flashcards..."
-        />
+        {!isMobile && (
+          <ChatPanel
+            page="study"
+            title="AI Card Generator"
+            placeholder="Describe a topic to auto-generate flashcards..."
+          />
+        )}
       </div>
     )
   }
@@ -173,7 +283,7 @@ export default function StudyPage() {
             </div>
             <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
               <button
-                className="btn btn-secondary"
+                className="btn btn-secondary btn-ai-generate"
                 onClick={() => toggleChat('study')}
                 id="study-chat-btn"
               >
@@ -194,6 +304,36 @@ export default function StudyPage() {
 
         {/* Content */}
         <div className="study-content">
+          {/* Loading state */}
+          {isLoading ? (
+            <div className="deck-grid">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="card" style={{
+                  padding: 'var(--space-5)',
+                  animation: 'pulse 1.5s ease-in-out infinite',
+                }}>
+                  <div style={{
+                    width: 36, height: 36,
+                    borderRadius: 'var(--radius-md)',
+                    background: 'var(--color-bg-hover)',
+                    marginBottom: 'var(--space-3)',
+                  }} />
+                  <div style={{
+                    width: '70%', height: 16,
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--color-bg-hover)',
+                    marginBottom: 'var(--space-2)',
+                  }} />
+                  <div style={{
+                    width: '40%', height: 12,
+                    borderRadius: 'var(--radius-sm)',
+                    background: 'var(--color-bg-hover)',
+                  }} />
+                </div>
+              ))}
+            </div>
+          ) : (
+          <>
           {/* Search */}
           {decks.length > 0 && (
             <div style={{ marginBottom: 'var(--space-5)' }}>
@@ -212,9 +352,32 @@ export default function StudyPage() {
           {/* Deck grid or empty state */}
           {filteredDecks.length > 0 ? (
             <div className="deck-grid">
-              {filteredDecks.map((deck) => (
+                {filteredDecks.map((deck) => (
                 <div key={deck.id} style={{ position: 'relative' }}>
                   <DeckCard deck={deck} onClick={handleDeckClick} />
+                  {/* Due count badge */}
+                  {deck.dueCount > 0 && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        top: 'var(--space-2)',
+                        left: 'var(--space-2)',
+                        background: 'var(--color-accent)',
+                        color: '#fff',
+                        fontSize: '11px',
+                        fontWeight: 700,
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-full)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        zIndex: 3,
+                      }}
+                    >
+                      <Clock size={10} />
+                      {deck.dueCount} due
+                    </div>
+                  )}
                   {/* Quick actions overlay */}
                   <div
                     style={{
@@ -228,6 +391,19 @@ export default function StudyPage() {
                     }}
                     className="deck-actions"
                   >
+                    {deck.dueCount > 0 && (
+                      <button
+                        className="btn btn-ghost btn-icon btn-sm"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleReviewDeck(deck)
+                        }}
+                        title="Review Due Cards"
+                        style={{ width: 28, height: 28, color: 'var(--color-accent)' }}
+                      >
+                        <Clock size={12} />
+                      </button>
+                    )}
                     <button
                       className="btn btn-ghost btn-icon btn-sm"
                       onClick={(e) => {
@@ -284,15 +460,19 @@ export default function StudyPage() {
               description={`No decks match "${searchQuery}"`}
             />
           )}
+          </>
+          )}
         </div>
       </div>
 
       {/* AI Chat panel */}
-      <ChatPanel
-        page="study"
-        title="AI Card Generator"
-        placeholder="Describe a topic to auto-generate flashcards..."
-      />
+      {!isMobile && (
+        <ChatPanel
+          page="study"
+          title="AI Card Generator"
+          placeholder="Describe a topic to auto-generate flashcards..."
+        />
+      )}
 
       {/* Delete confirmation modal */}
       <Modal

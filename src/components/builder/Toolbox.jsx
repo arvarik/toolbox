@@ -1,5 +1,5 @@
 import {
-  Server, Database, Zap, Globe, Monitor, Smartphone, Shield,
+  Database, Zap, Globe, Monitor, Smartphone, Shield,
   AlertTriangle, FileText, BarChart, Radio, Activity, HardDrive,
   Archive, Search, Brain, Cpu, ExternalLink, Mail, Box, Cog,
   Split, DoorOpen,

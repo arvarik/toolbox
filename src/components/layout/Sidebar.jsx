@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   BookOpen,
@@ -29,8 +30,18 @@ export default function Sidebar() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const location = useLocation()
 
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
   return (
-    <aside className={`sidebar${collapsed ? ' collapsed' : ''}`} id="app-sidebar">
+    <aside className={`sidebar${collapsed ? ' collapsed' : ''}${isMobile ? ' hidden-mobile' : ''}`} id="app-sidebar">
       {/* Header */}
       <div className="sidebar-header">
         <div className="sidebar-logo">

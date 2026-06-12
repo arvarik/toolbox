@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChevronRight, ChevronDown } from 'lucide-react'
 import { PILLARS } from '../../utils/constants'
@@ -12,6 +12,15 @@ export default function PillarNav() {
   const [expanded, setExpanded] = useState(
     pillarId ? { [pillarId]: true } : { compute: true }
   )
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   const toggleExpand = (id) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
@@ -24,6 +33,52 @@ export default function PillarNav() {
 
   const handleTopicClick = (pillar, topic) => {
     navigate(`/guide/${pillar.id}/${topic.id}`)
+  }
+
+  if (isMobile) {
+    const activePillar = PILLARS.find((p) => p.id === (pillarId || 'compute')) || PILLARS[0]
+
+    return (
+      <div className="mobile-pillar-nav" id="guide-pillar-nav">
+        <div className="mobile-pillars-scroll">
+          {PILLARS.map((pillar) => {
+            const isActive = pillarId === pillar.id || (!pillarId && pillar.id === 'compute')
+            return (
+              <button
+                key={pillar.id}
+                className={`mobile-pillar-pill${isActive ? ' active' : ''}`}
+                onClick={() => handlePillarClick(pillar)}
+                style={{
+                  borderLeft: `3px solid ${pillar.color}`,
+                }}
+              >
+                <span className="pillar-number" style={{ background: `${pillar.color}20`, color: pillar.color }}>
+                  {pillar.number}
+                </span>
+                <span>{pillar.shortName}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        {activePillar && (
+          <div className="mobile-topics-scroll">
+            {activePillar.topics.map((topic) => {
+              const isActive = topicId === topic.id
+              return (
+                <button
+                  key={topic.id}
+                  className={`mobile-topic-pill${isActive ? ' active' : ''}`}
+                  onClick={() => handleTopicClick(activePillar, topic)}
+                >
+                  {topic.name}
+                </button>
+              )
+            })}
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (

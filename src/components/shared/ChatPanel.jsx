@@ -1,67 +1,273 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, X, Sparkles } from 'lucide-react'
+import { Send, X, Sparkles, Copy, Check } from 'lucide-react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import useAppStore from '../../stores/appStore'
 import { chatApi } from '../../utils/api'
 
-/**
- * Reusable AI chat panel used in Guide, Builder, and Study pages.
- * @param {string} page - Which page this chat belongs to ('guide' | 'builder' | 'study')
- * @param {string} title - Panel title
- * @param {string} placeholder - Input placeholder text
- * @param {Array} initialMessages - Starting messages for context
- * @param {string} context - Additional context string for the AI
- */
-export default function ChatPanel({ page, title = 'Ask AI', placeholder = 'Ask a question...', initialMessages = [], context = '' }) {
+// Safe storage wrapper to prevent SSR or restricted environment crashes
+const safeStorage = {
+  getItem: (key) => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        return window.localStorage.getItem(key)
+      }
+    } catch {
+      // Ignore
+    }
+    return null
+  },
+  setItem: (key, value) => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(key, value)
+      }
+    } catch {
+      // Ignore
+    }
+  },
+}
+
+// Helper functions for page history storage structure
+const getHistoryForPage = (currentPage) => {
+  const data = safeStorage.getItem('toolbox_chat_history')
+  if (data) {
+    try {
+      const parsed = JSON.parse(data)
+      if (parsed && typeof parsed === 'object') {
+        const history = parsed[currentPage]
+        if (Array.isArray(history)) {
+          return history
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  return []
+}
+
+const MAX_HISTORY_PER_PAGE = 50
+
+const saveHistoryForPage = (currentPage, messages) => {
+  const data = safeStorage.getItem('toolbox_chat_history')
+  let parsed = {}
+  if (data) {
+    try {
+      parsed = JSON.parse(data)
+      if (!parsed || typeof parsed !== 'object') {
+        parsed = {}
+      }
+    } catch {
+      // Ignore
+    }
+  }
+  // Keep only the last N messages to prevent localStorage bloat
+  parsed[currentPage] = messages.slice(-MAX_HISTORY_PER_PAGE)
+  safeStorage.setItem('toolbox_chat_history', JSON.stringify(parsed))
+}
+
+// Subcomponent CopyButton with dynamic state-based visual feedback
+function CopyButton({ text }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Fallback
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      document.body.appendChild(textarea)
+      textarea.select()
+      try {
+        document.execCommand('copy')
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      } catch {
+        // Ignore
+      }
+      document.body.removeChild(textarea)
+    }
+  }
+
+  return (
+    <button
+      className="btn-copy-chat"
+      onClick={handleCopy}
+      aria-label={copied ? 'Copied!' : 'Copy to clipboard'}
+      title={copied ? 'Copied!' : 'Copy to clipboard'}
+      style={{
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        padding: '2px',
+        display: 'flex',
+        alignItems: 'center',
+        color: 'var(--color-text-muted)',
+      }}
+    >
+      {copied ? (
+        <Check size={14} style={{ color: 'var(--color-success, #22c55e)' }} />
+      ) : (
+        <Copy size={14} />
+      )}
+    </button>
+  )
+}
+
+function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a question...', initialMessages = [], context = '' }) {
   const isOpen = useAppStore((s) => s.chatOpen[page])
   const toggleChat = useAppStore((s) => s.toggleChat)
   const apiKeyConfigured = useAppStore((s) => s.apiKeyConfigured)
-  const [messages, setMessages] = useState(initialMessages)
+  const canvasNodes = useAppStore((s) => s.nodes) || []
+  const canvasEdges = useAppStore((s) => s.edges) || []
+
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768)
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Load width state from safeStorage
+  const [width, setWidth] = useState(() => {
+    const saved = safeStorage.getItem('toolbox_chat_width')
+    const parsed = saved ? parseInt(saved, 10) : 350
+    return isNaN(parsed) || parsed < 300 || parsed > 600 ? 350 : parsed
+  })
+
+  // Load initial messages from safeStorage if available
+  const [messages, setMessages] = useState(() => {
+    const history = getHistoryForPage(page)
+    return Array.isArray(history) && history.length > 0 ? history : initialMessages
+  })
+
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [errorMsg, setErrorMsg] = useState(null)
+
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
 
+  const timeoutRef = useRef(null)
+  const hasTriggeredRef = useRef(false)
+
+  const handleSend = async (customText) => {
+    const text = typeof customText === 'string' ? customText : input.trim()
+    // isLoading and empty text guard
+    if (!text || isLoading) return
+
+    const userMessage = { role: 'user', content: text }
+    const newMessages = [...messages, userMessage]
+    setMessages(newMessages)
+    
+    // Clear input if we typed it
+    if (typeof customText !== 'string') {
+      setInput('')
+    }
+    
+    setIsLoading(true)
+    setErrorMsg(null)
+
+    try {
+      const contextString = (() => {
+        if (context) return context
+        if (page === 'builder' && canvasNodes.length > 0) {
+          const nodeNames = canvasNodes.map((n) => `${n.name} (${n.category})`).join(', ')
+          const edgeDescs = canvasEdges.map((e) => {
+            const fromNode = canvasNodes.find((n) => n.id === e.from)
+            const toNode = canvasNodes.find((n) => n.id === e.to)
+            return `${fromNode?.name || 'Unknown'} → ${toNode?.name || 'Unknown'}`
+          }).join(', ')
+          let desc = `The user is designing a system architecture with ${canvasNodes.length} components: ${nodeNames}.`
+          if (canvasEdges.length > 0) {
+            desc += ` Connections: ${edgeDescs}.`
+          }
+          desc += ' Analyze this architecture, identify potential issues, and suggest improvements.'
+          return desc
+        }
+        return `The user is on the ${page} page of a system design interview study tool.`
+      })()
+
+      // Add an empty AI message placeholder for streaming
+      const aiPlaceholder = { role: 'ai', content: '' }
+      setMessages([...newMessages, aiPlaceholder])
+
+      const fullText = await chatApi.stream(
+        {
+          message: text,
+          context: contextString,
+          history: messages,
+        },
+        (partialText) => {
+          // Update the AI message content incrementally
+          setMessages((prev) => {
+            const updated = [...prev]
+            updated[updated.length - 1] = { role: 'ai', content: partialText }
+            return updated
+          })
+        }
+      )
+
+      // Final update with complete text
+      setMessages((prev) => {
+        const updated = [...prev]
+        updated[updated.length - 1] = { role: 'ai', content: fullText }
+        return updated
+      })
+    } catch (err) {
+      setErrorMsg(err.message)
+      setMessages([...newMessages, {
+        role: 'ai',
+        content: `Error: ${err.message}. Please check your API key in Settings.`,
+      }])
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Auto-focus input when panel opens
   useEffect(() => {
     if (isOpen && inputRef.current) {
       inputRef.current.focus()
     }
   }, [isOpen])
 
+  // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading) return
+  // Save history on changes
+  useEffect(() => {
+    saveHistoryForPage(page, messages)
+  }, [messages, page])
 
-    const userMessage = { role: 'user', content: input.trim() }
-    setMessages((prev) => [...prev, userMessage])
-    setInput('')
-    setIsLoading(true)
-
-    try {
-      const contextString = context || `The user is on the ${page} page of a system design interview study tool.`
-      const data = await chatApi.send({
-        message: userMessage.content,
-        context: contextString,
-        history: messages,
-      })
-      setMessages((prev) => [
-        ...prev,
-        { role: 'ai', content: data.response },
-      ])
-    } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'ai',
-          content: `Error: ${err.message}. Please check your API key in Settings.`,
-        },
-      ])
-    } finally {
-      setIsLoading(false)
+  // Subscribe to nodes changes for auto-verification on builder page
+  useEffect(() => {
+    const hasComponents = canvasNodes.length > 0
+    if (isOpen && page === 'builder' && messages.length === 0 && apiKeyConfigured && hasComponents && !hasTriggeredRef.current) {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+      timeoutRef.current = setTimeout(() => {
+        handleSend('Verify my architecture design')
+        hasTriggeredRef.current = true
+      }, 0)
     }
-  }
+    return () => {
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current)
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, page, messages.length, apiKeyConfigured, canvasNodes])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -70,28 +276,124 @@ export default function ChatPanel({ page, title = 'Ask AI', placeholder = 'Ask a
     }
   }
 
+  const handleClear = () => {
+    setMessages([])
+    saveHistoryForPage(page, [])
+    setErrorMsg(null)
+  }
+
+  const handleMouseDown = (e) => {
+    if (isMobile) return
+    e.preventDefault()
+    const startX = e.clientX
+    const startWidth = isNaN(width) ? 350 : width
+
+    const handleMouseMove = (moveEvent) => {
+      const deltaX = moveEvent.clientX - startX
+      let newWidth = startWidth - deltaX
+      if (isNaN(newWidth) || typeof newWidth !== 'number') {
+        newWidth = 350
+      }
+      if (newWidth < 300) newWidth = 300
+      if (newWidth > 600) newWidth = 600
+      setWidth(newWidth)
+      safeStorage.setItem('toolbox_chat_width', String(newWidth))
+    }
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove)
+      document.removeEventListener('mouseup', handleMouseUp)
+    }
+
+    document.addEventListener('mousemove', handleMouseMove)
+    document.addEventListener('mouseup', handleMouseUp)
+  }
+
+  const parseMarkdown = (text) => {
+    if (!text) return null
+    return (
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h3: (props) => {
+            const rest = { ...props }
+            delete rest.node
+            return <h3 data-testid="markdown-h3" {...rest} />
+          },
+          strong: (props) => {
+            const rest = { ...props }
+            delete rest.node
+            return <strong data-testid="markdown-bold" {...rest} />
+          },
+          pre: (props) => {
+            const rest = { ...props }
+            delete rest.node
+            return <pre {...rest} />
+          },
+          code: (props) => {
+            const rest = { ...props }
+            delete rest.node
+            return <code data-testid="markdown-code" {...rest} />
+          },
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    )
+  }
+
   if (!isOpen) return null
 
+  const starterPrompts = page === 'guide'
+    ? ['Explain CAP Theorem', 'How does a Load Balancer work?', 'Explain CDN caching']
+    : page === 'builder'
+      ? ['Optimize database tier', 'Verify system redundancy', 'Compare SQL vs NoSQL']
+      : ['Suggest study plan', 'Explain Leitner system', 'Generate system design cards']
+
+  const displayTitle = (page === 'builder' && title === 'Verify Architecture') 
+    ? 'Ask about your architecture' 
+    : title
+
   return (
-    <div className="chat-panel" id={`chat-panel-${page}`}>
+    <div
+      className={`chat-panel${isMobile ? ' mobile-fullscreen' : ''}`}
+      id={`chat-panel-${page}`}
+      style={isMobile ? { width: '100%' } : { width: `${width}px` }}
+      data-testid="chat-panel-container"
+    >
+      {/* Resizable Drag Handle */}
+      {!isMobile && (
+        <div 
+          className="chat-drag-handle" 
+          data-testid="chat-drag-handle"
+          onMouseDown={handleMouseDown}
+          style={{ width: '8px', cursor: 'ew-resize', position: 'absolute', left: 0, top: 0, bottom: 0, zIndex: 10 }}
+        />
+      )}
+
       {/* Header */}
       <div className="chat-panel-header">
-        <div className="chat-panel-title">
+        <div className="chat-panel-title" data-testid="chat-title">
           <span className="ai-dot" />
           <Sparkles size={14} />
-          {title}
+          {displayTitle}
         </div>
-        <button
-          className="btn btn-ghost btn-icon"
-          onClick={() => toggleChat(page)}
-          aria-label="Close chat"
-        >
-          <X size={16} />
-        </button>
+        <div className="chat-header-actions" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <button aria-label="Clear conversation" onClick={handleClear} className="btn-clear-chat" style={{ fontSize: 'var(--text-xs)', background: 'none', border: 'none', cursor: 'pointer', color: 'var(--color-text-secondary)' }}>
+            Clear
+          </button>
+          <button
+            className="btn btn-ghost btn-icon"
+            onClick={() => toggleChat(page)}
+            aria-label="Close chat"
+          >
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       {/* Messages */}
-      <div className="chat-messages">
+      <div className="chat-messages" data-testid="chat-messages-container">
         {messages.length === 0 && (
           <div className="empty-state" style={{ padding: 'var(--space-8) var(--space-4)' }}>
             <div className="empty-state-icon">
@@ -105,28 +407,53 @@ export default function ChatPanel({ page, title = 'Ask AI', placeholder = 'Ask a
                 ? 'Type a question below to get started.'
                 : 'Add your Gemini API key in Settings to enable AI features.'}
             </div>
+            {apiKeyConfigured && (
+              <div className="starter-prompts" data-testid="starter-prompts" style={{ marginTop: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+                {starterPrompts.map((prompt, i) => (
+                  <button key={i} className="starter-prompt-btn" onClick={() => handleSend(prompt)} style={{ textAlign: 'left', width: '100%' }}>
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {messages.map((msg, i) => (
-          <div key={i} className={`chat-message ${msg.role}`}>
+          <div key={i} className={`chat-message ${msg.role}`} data-testid={`message-${msg.role}`}>
             <div className={`chat-message-avatar ${msg.role}`}>
               {msg.role === 'ai' ? '✦' : 'U'}
             </div>
             <div className="chat-message-content">
-              <div className="chat-message-text">{msg.content}</div>
+              <div className="chat-message-text">{parseMarkdown(msg.content)}</div>
+              {msg.role === 'ai' && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
+                  <CopyButton text={msg.content} />
+                </div>
+              )}
             </div>
           </div>
         ))}
 
         {isLoading && (
-          <div className="chat-message ai">
+          <div className="chat-message ai loading" data-testid="chat-loading">
             <div className="chat-message-avatar ai">✦</div>
             <div className="chat-message-content">
+              <div className="bounced-dots" data-testid="bounced-dots" style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
+                <span className="dot"></span>
+                <span className="dot"></span>
+                <span className="dot"></span>
+              </div>
               <div className="chat-message-text" style={{ opacity: 0.5 }}>
                 Thinking...
               </div>
             </div>
+          </div>
+        )}
+
+        {errorMsg && (
+          <div role="alert" className="chat-error-alert" data-testid="chat-error" style={{ color: 'var(--color-error)', padding: 'var(--space-3)', margin: 'var(--space-2)', borderRadius: 'var(--radius-md)', background: 'rgba(239, 68, 68, 0.1)' }}>
+            Error: {errorMsg}
           </div>
         )}
 
@@ -148,7 +475,7 @@ export default function ChatPanel({ page, title = 'Ask AI', placeholder = 'Ask a
           />
           <button
             className="chat-send-btn"
-            onClick={handleSend}
+            onClick={() => handleSend()}
             disabled={!input.trim() || isLoading}
             aria-label="Send message"
           >
@@ -158,4 +485,8 @@ export default function ChatPanel({ page, title = 'Ask AI', placeholder = 'Ask a
       </div>
     </div>
   )
+}
+
+export default function ChatPanel(props) {
+  return <ChatPanelContent key={props.page} {...props} />
 }

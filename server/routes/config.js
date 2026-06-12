@@ -76,7 +76,7 @@ router.post('/test-key', async (req, res) => {
     `).run(key)
 
     res.json({ valid: true })
-  } catch (err) {
+  } catch {
     res.status(400).json({ valid: false, message: 'Invalid API key' })
   }
 })

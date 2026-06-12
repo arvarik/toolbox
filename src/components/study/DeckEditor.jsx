@@ -11,7 +11,7 @@ import { Plus, Trash2, Save, X, GripVertical } from 'lucide-react'
 export default function DeckEditor({ deck, cards: initialCards = [], onSave, onCancel }) {
   const [name, setName] = useState(deck?.name || '')
   const [description, setDescription] = useState(deck?.description || '')
-  const [cards, setCards] = useState(
+  const [cards, setCards] = useState(() =>
     initialCards.length > 0
       ? initialCards
       : [{ id: `card-${Date.now()}`, front: '', back: '' }]

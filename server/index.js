@@ -45,6 +45,7 @@ if (isProduction) {
 }
 
 // Error handler
+// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error('[server] Error:', err.message)
   res.status(500).json({ message: 'Internal server error' })

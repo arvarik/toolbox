@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Eye, EyeOff, Save, Download, Upload, Trash2, CheckCircle } from 'lucide-react'
+import { Eye, EyeOff, Download, Upload, Trash2 } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { configApi } from '../utils/api'
+import Modal from '../components/shared/Modal'
 
 export default function SettingsPage() {
   const { apiKeyConfigured, setApiKeyConfigured, addToast } = useAppStore()
@@ -9,6 +10,7 @@ export default function SettingsPage() {
   const [showKey, setShowKey] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [keyStatus, setKeyStatus] = useState(apiKeyConfigured ? 'connected' : 'disconnected')
+  const [showConfirmModal, setShowConfirmModal] = useState(false)
 
   // Check initial API key status on mount
   useEffect(() => {
@@ -43,11 +45,16 @@ export default function SettingsPage() {
     }
   }
 
-  const handleClearKey = () => {
-    setApiKey('')
-    setApiKeyConfigured(false)
-    setKeyStatus('disconnected')
-    addToast({ type: 'info', message: 'API key removed' })
+  const handleClearKey = async () => {
+    try {
+      await configApi.update({ gemini_api_key: '' })
+      setApiKey('')
+      setApiKeyConfigured(false)
+      setKeyStatus('disconnected')
+      addToast({ type: 'info', message: 'API key removed' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to remove API key' })
+    }
   }
 
   return (
@@ -59,7 +66,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <div style={{ padding: 'var(--space-6) var(--space-8)' }}>
+      <div className="settings-content" style={{ padding: 'var(--space-6) var(--space-8)' }}>
         {/* API Key Section */}
         <div className="settings-section">
           <h2 className="settings-section-title">Gemini API Key</h2>
@@ -114,10 +121,20 @@ export default function SettingsPage() {
           </div>
 
           {apiKeyConfigured && (
-            <button className="btn btn-ghost" onClick={handleClearKey} style={{ color: 'var(--color-error)' }}>
-              <Trash2 size={14} />
-              Remove API Key
-            </button>
+            <div style={{ marginTop: 'var(--space-6)', borderTop: '1px solid var(--color-border)', paddingTop: 'var(--space-4)' }}>
+              <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-error)', marginBottom: 'var(--space-1)' }}>Danger Zone</h3>
+              <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-3)' }}>
+                Permanently remove your saved credentials.
+              </p>
+              <button
+                className="btn btn-ghost"
+                onClick={() => setShowConfirmModal(true)}
+                style={{ color: 'var(--color-error)' }}
+              >
+                <Trash2 size={14} />
+                Remove API Key
+              </button>
+            </div>
           )}
         </div>
 
@@ -188,6 +205,33 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      <Modal
+        open={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        title="Remove API Key"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setShowConfirmModal(false)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              style={{ background: 'var(--color-error)' }}
+              onClick={() => {
+                handleClearKey()
+                setShowConfirmModal(false)
+              }}
+            >
+              Remove
+            </button>
+          </>
+        }
+      >
+        <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
+          Are you sure you want to remove your saved Gemini API Key?
+        </p>
+      </Modal>
     </div>
   )
 }
