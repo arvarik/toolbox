@@ -412,6 +412,7 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
           justifyContent: 'center',
           gap: 'var(--space-3)',
           marginBottom: 'var(--space-4)',
+          marginTop: 'var(--space-4)',
           width: '100%',
           maxWidth: 560,
         }}>

@@ -522,8 +522,8 @@ export default function StudyPage() {
                     <div
                       style={{
                         position: 'absolute',
-                        top: 'var(--space-2)',
-                        left: 'var(--space-2)',
+                        top: '-10px',
+                        right: '-10px',
                         background: 'var(--color-accent)',
                         color: '#fff',
                         fontSize: '11px',
@@ -534,6 +534,7 @@ export default function StudyPage() {
                         alignItems: 'center',
                         gap: 3,
                         zIndex: 3,
+                        boxShadow: 'var(--shadow-sm)',
                       }}
                     >
                       <Clock size={10} />

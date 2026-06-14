@@ -1,12 +1,13 @@
 import { Router } from 'express'
 import crypto from 'crypto'
 import db from '../db.js'
+import { PILLARS, BLUEPRINT_SECTIONS } from '../../src/utils/constants.js'
 
 const router = Router()
 
 /**
  * GET /api/chat/starters
- * Generate dynamic chat starters based on a specific topic's guide content.
+ * Generate dynamic chat starters based on a specific topic's guide content, blueprint, and user profile.
  * Query: ?pillarId=X&topicId=Y&topicName=Z&model=gemini-3.5-flash
  */
 router.get('/starters', async (req, res) => {
@@ -17,14 +18,46 @@ router.get('/starters', async (req, res) => {
   }
 
   try {
-    // 1. Fetch current guide content for this topic
-    const rows = db.prepare('SELECT content FROM guide_content WHERE pillar_id = ? AND topic_id = ?').all(pillarId, topicId)
-    const combinedContent = rows.map(r => r.content).join('\n')
+    // 1. Fetch blueprint context
+    const pillar = PILLARS.find(p => p.id === pillarId) || { name: pillarId, topics: [] }
+    const topic = pillar.topics.find(t => t.id === topicId) || { name: topicName || topicId }
+    const blueprint = BLUEPRINT_SECTIONS[pillarId] || []
     
-    // 2. Compute a simple hash
-    const contentHash = crypto.createHash('md5').update(combinedContent).digest('hex')
+    // 2. Fetch current guide content for this topic
+    const rows = db.prepare('SELECT section_id, content FROM guide_content WHERE pillar_id = ? AND topic_id = ?').all(pillarId, topicId)
+    
+    // 3. Separate completed vs missing sections
+    const completedSections = []
+    const missingSections = []
+    
+    blueprint.forEach(sec => {
+      const row = rows.find(r => r.section_id === sec.id)
+      if (row && row.content && row.content.trim().length > 0) {
+        completedSections.push({ name: sec.name, content: row.content })
+      } else {
+        missingSections.push({ name: sec.name })
+      }
+    })
+    
+    // If no blueprint is defined, just use raw content
+    if (blueprint.length === 0) {
+      rows.forEach(r => completedSections.push({ name: r.section_id, content: r.content }))
+    }
 
-    // 3. Check cache
+    // 4. Fetch User Profile / Shadow Memory
+    const profileRow = db.prepare("SELECT profile_text FROM user_profile WHERE id = 1").get()
+    const userProfile = profileRow?.profile_text || ""
+
+    // 5. Compute a rich hash for cache invalidation
+    const hashData = JSON.stringify({
+      completed: completedSections,
+      missing: missingSections,
+      profile: userProfile,
+      blueprintCount: blueprint.length
+    })
+    const contentHash = crypto.createHash('md5').update(hashData).digest('hex')
+
+    // 6. Check cache
     const cached = db.prepare('SELECT suggestions, content_hash FROM chat_starters WHERE pillar_id = ? AND topic_id = ?').get(pillarId, topicId)
     
     if (cached && cached.content_hash === contentHash && cached.suggestions !== '[]') {
@@ -38,7 +71,7 @@ router.get('/starters', async (req, res) => {
       }
     }
 
-    // 4. Cache missing or stale — generate new ones
+    // 7. Cache missing or stale — generate new ones
     const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
     if (!config?.value) {
       return res.status(400).json({ message: 'API key not configured.' })
@@ -60,15 +93,27 @@ router.get('/starters', async (req, res) => {
       }
     })
 
-    const prompt = combinedContent.trim() ? 
-      `The user has been taking notes on the topic "${topicName || topicId}". 
-Based ONLY on these notes, generate 3 to 4 specific, challenging questions the user could ask you (the AI tutor) to dive deeper, test their knowledge, or clarify something complex.
-Format as short questions (e.g. "Can you quiz me on [X]?", "Why did we choose [Y] over [Z]?").
-User Notes:
-${combinedContent}`
-      :
-      `The user is about to start studying the topic "${topicName || topicId}".
-Generate 3 to 4 engaging starter questions they could ask you to begin the study session (e.g. "What is [X] and why is it used?", "Explain [X] to me like I'm 5.").`
+    const prompt = `You are an expert system design tutor creating contextual chat starters.
+The user is studying the topic: "${topic.name}" (Part of the "${pillar.name}" pillar).
+
+Here is the required study blueprint for this topic:
+${blueprint.map(b => `- ${b.name}`).join('\n')}
+
+The user has already taken notes on these sections:
+${completedSections.length > 0 ? completedSections.map(s => `- ${s.name}:\n  ${s.content.substring(0, 500)}...`).join('\n') : "None."}
+
+The user has NOT yet covered these sections:
+${missingSections.length > 0 ? missingSections.map(s => `- ${s.name}`).join('\n') : "None."}
+
+User Profile / Shadow Memory (tailor your suggestions if this is relevant):
+${userProfile || "No profile available yet."}
+
+Based on this state, generate 3 to 4 highly targeted starter questions the user could click to continue their study session.
+- If they have covered some sections, suggest questions that bridge the gap to the missing sections, or challenge their understanding of what they've written.
+- If they are starting fresh, suggest questions to tackle the most important introductory sections.
+- Tailor the questions to their user profile if relevant (e.g. focusing on their weak points or upcoming interviews).
+- Format as short, actionable questions they would ask YOU (e.g. "Can you quiz me on [X]?", "How does [X] handle [Y] failure mode?").
+`
 
     const result = await model.generateContent(prompt)
     let suggestionsText = result.response.text()
