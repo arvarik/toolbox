@@ -36,7 +36,7 @@ describe('Adversarial & Edge Case Tests for ChatPanel', () => {
 
     // Reset Zustand store state
     useAppStore.setState({
-      chatOpen: { guide: true, builder: true, study: true },
+      chatOpen: { chat: false, guide: true, builder: true, study: true },
       apiKeyConfigured: true,
     })
     

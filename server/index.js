@@ -9,6 +9,7 @@ import deckRoutes from './routes/decks.js'
 import boardRoutes from './routes/boards.js'
 import chatRoutes from './routes/chat.js'
 import studySessionRoutes from './routes/study_sessions.js'
+import guideContentRoutes from './routes/guide_content.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -27,6 +28,7 @@ app.use('/api/decks', deckRoutes)
 app.use('/api/boards', boardRoutes)
 app.use('/api/chat', chatRoutes)
 app.use('/api/study_sessions', studySessionRoutes)
+app.use('/api/guide-content', guideContentRoutes)
 
 // Health check
 app.get('/api/health', (req, res) => {

@@ -7,9 +7,10 @@ import useAppStore from '../stores/appStore'
  * Mounts once at the Layout level and handles all app-wide shortcuts.
  *
  * Navigation:
- *   ⌘1 / Ctrl+1 → Guide
- *   ⌘2 / Ctrl+2 → Builder
- *   ⌘3 / Ctrl+3 → Flashcards
+ *   ⌘1 / Ctrl+1 → Chat
+ *   ⌘2 / Ctrl+2 → Guide
+ *   ⌘3 / Ctrl+3 → Builder
+ *   ⌘4 / Ctrl+4 → Flashcards
  *   ⌘, / Ctrl+, → Settings
  *
  * Actions:
@@ -38,13 +39,17 @@ export default function useKeyboardShortcuts() {
       switch (e.key) {
         case '1':
           e.preventDefault()
-          navigate('/guide')
+          navigate('/chat')
           break
         case '2':
           e.preventDefault()
-          navigate('/builder')
+          navigate('/guide')
           break
         case '3':
+          e.preventDefault()
+          navigate('/builder')
+          break
+        case '4':
           e.preventDefault()
           navigate('/study')
           break
@@ -55,6 +60,7 @@ export default function useKeyboardShortcuts() {
         case 'k':
         case 'K':
           e.preventDefault()
+          // Chat page has its own full-page chat, no toggle needed
           if (location.pathname.startsWith('/guide')) toggleChat('guide')
           else if (location.pathname.startsWith('/builder')) toggleChat('builder')
           else if (location.pathname.startsWith('/study')) toggleChat('study')

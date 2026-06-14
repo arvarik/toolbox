@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Plus, Search, MessageSquare, GraduationCap, Trash2, Edit, Play, Clock } from 'lucide-react'
+import { Plus, Search, MessageSquare, GraduationCap, Trash2, Edit, Play, Clock, Settings, BarChart2 } from 'lucide-react'
 import DeckCard from '../components/study/DeckCard'
 import FlashcardView from '../components/study/FlashcardView'
 import DeckEditor from '../components/study/DeckEditor'
@@ -9,6 +9,9 @@ import EmptyState from '../components/shared/EmptyState'
 import Modal from '../components/shared/Modal'
 import useAppStore from '../stores/appStore'
 import { decksApi, flashcardsApi, studySessionsApi } from '../utils/api'
+import DeckOptionsModal from '../components/study/DeckOptionsModal'
+import CardBrowser from '../components/study/CardBrowser'
+import StatsDashboard from '../components/study/StatsDashboard'
 
 const mapDeckFromApi = (d) => ({
   id: d.id,
@@ -16,14 +19,19 @@ const mapDeckFromApi = (d) => ({
   description: d.description || '',
   colorIndex: d.color_index !== undefined ? d.color_index : 0,
   cardCount: d.card_count !== undefined ? d.card_count : (d.cards ? d.cards.length : 0),
+  newCount: d.new_count || 0,
+  learnCount: d.learn_count || 0,
   dueCount: d.due_count || 0,
   tags: d.tags || '',
   lastStudied: d.last_studied || d.lastStudied || 'Never studied',
   progress: d.progress !== undefined ? d.progress : 0,
+  settings: d.settings || { new_limit: 20, review_limit: 200, steps: '1m 10m', lapse_steps: '10m', easy_bonus: 1.3 },
   cards: d.cards ? d.cards.map(c => ({
     id: c.id, front: c.front, back: c.back,
     ease_factor: c.ease_factor, interval: c.interval,
     repetitions: c.repetitions, next_review: c.next_review,
+    state: c.state || 0, learning_step: c.learning_step || 0,
+    srs_previews: c.srs_previews
   })) : []
 })
 
@@ -48,6 +56,7 @@ export default function StudyPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [activeTag, setActiveTag] = useState('')
   const [deleteModal, setDeleteModal] = useState(null)
+  const [optionsModalDeck, setOptionsModalDeck] = useState(null)
   const [studySessions, setStudySessions] = useState([])
 
   useEffect(() => {
@@ -228,6 +237,54 @@ export default function StudyPage() {
     }
   }
 
+  const handleSaveDeckSettings = async (deckId, settingsData) => {
+    try {
+      const updated = await decksApi.updateSettings(deckId, settingsData)
+      setDecks(prev => prev.map(d => d.id === deckId ? { ...d, settings: updated.settings } : d))
+      if (selectedDeck && selectedDeck.id === deckId) {
+        setSelectedDeck(prev => ({ ...prev, settings: updated.settings }))
+      }
+      setOptionsModalDeck(null)
+      addToast({ type: 'success', message: 'Deck settings saved successfully' })
+      refreshDecks()
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to save deck settings' })
+    }
+  }
+
+  const handleSaveBrowserCard = async (cardId, cardData) => {
+    try {
+      await flashcardsApi.update(selectedDeck.id, cardId, cardData)
+      const fullDeck = await decksApi.get(selectedDeck.id)
+      setSelectedDeck(mapDeckFromApi(fullDeck))
+      addToast({ type: 'success', message: 'Card updated' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to update card' })
+    }
+  }
+
+  const handleDeleteBrowserCard = async (cardId) => {
+    try {
+      await flashcardsApi.delete(selectedDeck.id, cardId)
+      const fullDeck = await decksApi.get(selectedDeck.id)
+      setSelectedDeck(mapDeckFromApi(fullDeck))
+      addToast({ type: 'info', message: 'Card deleted' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to delete card' })
+    }
+  }
+
+  const handleAddBrowserCard = async () => {
+    try {
+      await flashcardsApi.create(selectedDeck.id, { front: 'New Front', back: 'New Back' })
+      const fullDeck = await decksApi.get(selectedDeck.id)
+      setSelectedDeck(mapDeckFromApi(fullDeck))
+      addToast({ type: 'success', message: 'Blank card added' })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to add card' })
+    }
+  }
+
   // Refresh decks list
   const refreshDecks = async () => {
     try {
@@ -260,6 +317,45 @@ export default function StudyPage() {
             placeholder="Ask about this topic or generate more cards..."
           />
         )}
+      </div>
+    )
+  }
+
+  // Card Browser view
+  if (view === 'browser' && selectedDeck) {
+    return (
+      <div className="study-layout" id="study-page">
+        <div className="study-main">
+          <CardBrowser
+            deck={selectedDeck}
+            onBack={() => {
+              setView('list')
+              setSelectedDeck(null)
+              refreshDecks()
+            }}
+            onSaveCard={handleSaveBrowserCard}
+            onDeleteCard={handleDeleteBrowserCard}
+            onAddCard={handleAddBrowserCard}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // Stats Dashboard view
+  if (view === 'stats' && selectedDeck) {
+    return (
+      <div className="study-layout" id="study-page">
+        <div className="study-main">
+          <StatsDashboard
+            deck={selectedDeck}
+            onBack={() => {
+              setView('list')
+              setSelectedDeck(null)
+              refreshDecks()
+            }}
+          />
+        </div>
       </div>
     )
   }
@@ -485,9 +581,50 @@ export default function StudyPage() {
                       className="btn btn-ghost btn-icon btn-sm"
                       onClick={(e) => {
                         e.stopPropagation()
+                        setSelectedDeck(deck)
+                        decksApi.get(deck.id).then(fullDeck => {
+                          setSelectedDeck(mapDeckFromApi(fullDeck))
+                          setView('browser')
+                        }).catch(() => {})
+                      }}
+                      title="Browse Cards"
+                      style={{ width: 28, height: 28 }}
+                    >
+                      <Search size={12} />
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-icon btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setSelectedDeck(deck)
+                        decksApi.get(deck.id).then(fullDeck => {
+                          setSelectedDeck(mapDeckFromApi(fullDeck))
+                          setView('stats')
+                        }).catch(() => {})
+                      }}
+                      title="Deck Stats"
+                      style={{ width: 28, height: 28 }}
+                    >
+                      <BarChart2 size={12} />
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-icon btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setOptionsModalDeck(deck)
+                      }}
+                      title="Deck Options"
+                      style={{ width: 28, height: 28 }}
+                    >
+                      <Settings size={12} />
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-icon btn-sm"
+                      onClick={(e) => {
+                        e.stopPropagation()
                         handleEditDeck(deck)
                       }}
-                      title="Edit"
+                      title="Edit Metadata"
                       style={{ width: 28, height: 28 }}
                     >
                       <Edit size={12} />
@@ -565,6 +702,14 @@ export default function StudyPage() {
           be undone and all cards in this deck will be permanently removed.
         </p>
       </Modal>
+
+      {/* Deck settings options modal */}
+      <DeckOptionsModal
+        open={!!optionsModalDeck}
+        onClose={() => setOptionsModalDeck(null)}
+        deck={optionsModalDeck}
+        onSave={(settingsData) => handleSaveDeckSettings(optionsModalDeck.id, settingsData)}
+      />
     </div>
   )
 }

@@ -76,19 +76,21 @@ export const decksApi = {
   create: (data) => request('/decks', { method: 'POST', body: data }),
   update: (id, data) => request(`/decks/${id}`, { method: 'PUT', body: data }),
   delete: (id) => request(`/decks/${id}`, { method: 'DELETE' }),
+  updateSettings: (id, settings) => request(`/decks/${id}/settings`, { method: 'PUT', body: settings }),
 }
 
 /* ---- Flashcards ---- */
 export const flashcardsApi = {
   list: (deckId) => request(`/decks/${deckId}/cards`),
   due: (deckId) => request(`/decks/${deckId}/cards/due`),
+  dueAll: () => request('/decks/all/cards/due'),
   create: (deckId, data) => request(`/decks/${deckId}/cards`, { method: 'POST', body: data }),
   update: (deckId, cardId, data) =>
     request(`/decks/${deckId}/cards/${cardId}`, { method: 'PUT', body: data }),
   delete: (deckId, cardId) =>
     request(`/decks/${deckId}/cards/${cardId}`, { method: 'DELETE' }),
-  review: (deckId, cardId, quality) =>
-    request(`/decks/${deckId}/cards/${cardId}/review`, { method: 'POST', body: { quality } }),
+  review: (deckId, cardId, quality, confidence) =>
+    request(`/decks/${deckId}/cards/${cardId}/review`, { method: 'POST', body: { quality, confidence } }),
 }
 
 /* ---- Study Sessions ---- */
@@ -169,4 +171,42 @@ export const chatApi = {
 
     return fullText
   },
+
+  /**
+   * Summarize selected chat excerpts into clean guide section notes.
+   * @param {Object} data - { excerpts, sectionId, sectionName, topicName, model }
+   * @returns {Promise<{ content: string }>}
+   */
+  summarize: (data) => request('/chat/summarize', { method: 'POST', body: data }),
+
+  /**
+   * Evaluate the "Why?" interceptor explanation.
+   * @param {Object} data - { explanation, front, back, model }
+   * @returns {Promise<{ pass: boolean, feedback: string }>}
+   */
+  evaluateInterceptor: (data) => request('/chat/evaluate-interceptor', { method: 'POST', body: data }),
+}
+
+/* ---- Guide Content ---- */
+export const guideContentApi = {
+  /** Get all filled sections for a topic. Returns { sectionId: { content, committedAt } } */
+  getForTopic: (pillarId, topicId) => request(`/guide-content/${pillarId}/${topicId}`),
+
+  /** Get content for a single section. */
+  getSection: (pillarId, topicId, sectionId) =>
+    request(`/guide-content/${pillarId}/${topicId}/${sectionId}`),
+
+  /** Upsert content for a section. */
+  upsert: (pillarId, topicId, sectionId, content) =>
+    request(`/guide-content/${pillarId}/${topicId}/${sectionId}`, {
+      method: 'PUT',
+      body: { content },
+    }),
+
+  /** Delete (clear) a section's content. */
+  clear: (pillarId, topicId, sectionId) =>
+    request(`/guide-content/${pillarId}/${topicId}/${sectionId}`, { method: 'DELETE' }),
+
+  /** Get a map of all filled section keys. Returns { 'pillarId__topicId__sectionId': true } */
+  progress: () => request('/guide-content/progress'),
 }

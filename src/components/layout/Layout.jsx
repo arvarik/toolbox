@@ -52,6 +52,7 @@ export default function Layout() {
   }, [setApiKeyConfigured])
 
   const getPageKey = () => {
+    if (location.pathname.startsWith('/chat')) return 'chat'
     if (location.pathname.startsWith('/guide')) return 'guide'
     if (location.pathname.startsWith('/builder')) return 'builder'
     if (location.pathname.startsWith('/study')) return 'study'
@@ -59,6 +60,9 @@ export default function Layout() {
   }
 
   const pageKey = getPageKey()
+
+  // Chat page handles its own full-page chat — no need for the slide-out ChatPanel
+  const showMobileChatPanel = isMobile && pageKey && pageKey !== 'chat'
 
   return (
     <div className="app-layout" id="app-layout">
@@ -73,7 +77,7 @@ export default function Layout() {
       </main>
       {isMobile && <BottomNav />}
       {isMobile && <MobileDrawer open={menuOpen} onClose={() => setMenuOpen(false)} />}
-      {isMobile && pageKey && (
+      {showMobileChatPanel && (
         <ChatPanel
           page={pageKey}
           title={pageKey === 'guide' ? 'Ask about System Design' : pageKey === 'builder' ? 'Verify Architecture' : 'AI Card Generator'}

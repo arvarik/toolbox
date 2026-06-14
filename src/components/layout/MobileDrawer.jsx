@@ -1,10 +1,13 @@
-import { X, Layers, BookOpen, PenTool, GraduationCap, Settings } from 'lucide-react'
+import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, Timer } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 
 const navItems = [
   { to: '/guide', icon: BookOpen, label: 'Guide' },
   { to: '/builder', icon: PenTool, label: 'Builder' },
   { to: '/study', icon: GraduationCap, label: 'Flashcards' },
+  { to: '/feynman', icon: BrainCircuit, label: 'Feynman' },
+  { to: '/interleaved', icon: Shuffle, label: 'Interleaved' },
+  { to: '/flow', icon: Timer, label: 'Flow' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 

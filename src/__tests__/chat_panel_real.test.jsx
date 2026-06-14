@@ -39,7 +39,7 @@ describe('Real ChatPanel Component Tests', () => {
   beforeEach(() => {
     window.localStorage.clear()
     useAppStore.setState({
-      chatOpen: { guide: true, builder: true, study: true },
+      chatOpen: { chat: false, guide: true, builder: true, study: true },
       apiKeyConfigured: true,
     })
   })

@@ -65,6 +65,40 @@ export default function DeckCard({ deck, onClick }) {
           )}
         </div>
       )}
+      {/* Anki Counters */}
+      <div style={{ display: 'flex', gap: 6, margin: 'var(--space-2) 0 var(--space-3) 0', flexWrap: 'wrap' }}>
+        <span style={{
+          fontSize: '10px',
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 'var(--radius-md)',
+          background: 'rgba(96, 165, 250, 0.12)',
+          color: 'var(--color-info)',
+        }} title="New cards">
+          {deck.newCount || 0} new
+        </span>
+        <span style={{
+          fontSize: '10px',
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 'var(--radius-md)',
+          background: 'rgba(251, 191, 36, 0.12)',
+          color: 'var(--color-warning)',
+        }} title="Learning cards">
+          {deck.learnCount || 0} learn
+        </span>
+        <span style={{
+          fontSize: '10px',
+          fontWeight: 700,
+          padding: '2px 8px',
+          borderRadius: 'var(--radius-md)',
+          background: 'rgba(52, 211, 153, 0.12)',
+          color: 'var(--color-success)',
+        }} title="Due reviews">
+          {deck.dueCount || 0} due
+        </span>
+      </div>
+
       <div className="deck-card-meta">
         <span>
           <Hash size={12} />

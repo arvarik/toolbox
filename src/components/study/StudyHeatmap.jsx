@@ -43,13 +43,11 @@ export default function StudyHeatmap({ sessions = [] }) {
     
     let cStreak = 0
     let mStreak = 0
-    let tempStreak = 0
     
     const todayStr = formatDate(new Date())
     const yesterday = new Date()
     yesterday.setDate(yesterday.getDate() - 1)
-    const yesterdayStr = formatDate(yesterday)
-
+    
     // Calculate current streak
     let checkDate = new Date()
     if (!sessionMap[todayStr]) {

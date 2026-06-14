@@ -210,6 +210,32 @@ export default function DeckEditor({ deck, cards: initialCards = [], onSave, onC
                   />
                 </div>
               </div>
+              <div style={{ marginTop: 'var(--space-3)' }}>
+                <label
+                  className="settings-label"
+                  style={{ fontSize: 'var(--text-xs)', marginBottom: 'var(--space-1)' }}
+                >
+                  Prerequisite Card (optional)
+                </label>
+                <select
+                  className="input"
+                  value={card.prerequisite_id || ''}
+                  onChange={(e) => updateCard(card.id, 'prerequisite_id', e.target.value)}
+                  style={{ height: '32px', padding: '0 var(--space-2)' }}
+                >
+                  <option value="">None</option>
+                  {cards
+                    .filter((c) => c.id !== card.id && (c.front.trim() || c.id.startsWith('card-')))
+                    .map((c, i) => (
+                      <option key={c.id} value={c.id}>
+                        {c.front ? c.front.slice(0, 40) + (c.front.length > 40 ? '...' : '') : `Card ${i + 1}`}
+                      </option>
+                    ))}
+                </select>
+                <p style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', marginTop: '4px' }}>
+                  This card will not appear in due queues until the prerequisite card is well-learned (Ease Factor ≥ 2.5).
+                </p>
+              </div>
             </div>
           ))}
         </div>

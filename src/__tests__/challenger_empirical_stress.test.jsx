@@ -18,7 +18,7 @@ vi.mock('../utils/api', () => ({
 describe('Challenger Stress and Edge Case Tests', () => {
   beforeEach(() => {
     useAppStore.setState({
-      chatOpen: { guide: true, builder: true, study: true },
+      chatOpen: { chat: false, guide: true, builder: true, study: true },
       apiKeyConfigured: true,
       nodes: [],
     })
@@ -55,7 +55,7 @@ describe('Challenger Stress and Edge Case Tests', () => {
   it('empirically demonstrates a race condition where rapid node updates trigger duplicate architecture verification requests', async () => {
     // Setup initial state: builder page, chat open, key configured, and 1 node initially
     useAppStore.setState({
-      chatOpen: { builder: true },
+      chatOpen: { chat: false, builder: true },
       apiKeyConfigured: true,
       nodes: [{ id: '1', type: 'loadBalancer', position: { x: 0, y: 0 } }],
     })

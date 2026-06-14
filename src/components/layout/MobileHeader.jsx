@@ -9,6 +9,7 @@ export default function MobileHeader({ onToggleMenu }) {
 
   // Determine which page we are on and if it has a chat panel
   const getPageKey = () => {
+    if (location.pathname.startsWith('/chat')) return 'chat'
     if (location.pathname.startsWith('/guide')) return 'guide'
     if (location.pathname.startsWith('/builder')) return 'builder'
     if (location.pathname.startsWith('/study')) return 'study'
@@ -16,11 +17,13 @@ export default function MobileHeader({ onToggleMenu }) {
   }
 
   const pageKey = getPageKey()
-  const hasChat = !!pageKey
+  // Chat page has its own full-page chat — no toggle needed
+  const hasChat = !!pageKey && pageKey !== 'chat'
   const isChatOpen = pageKey ? chatOpen[pageKey] : false
 
   // Determine page title
   const getTitle = () => {
+    if (location.pathname.startsWith('/chat')) return 'Chat'
     if (location.pathname.startsWith('/guide')) return 'Guide'
     if (location.pathname.startsWith('/builder')) return 'Builder'
     if (location.pathname.startsWith('/study')) return 'Flashcards'

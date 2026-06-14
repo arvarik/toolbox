@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChevronRight, ChevronDown } from 'lucide-react'
-import { PILLARS } from '../../utils/constants'
+import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
+import { guideContentApi } from '../../utils/api'
 
 /**
- * Left sidebar navigation listing the 5 pillars with collapsible topic lists.
+ * Left sidebar navigation listing the 7 pillars with collapsible topic lists.
+ * Shows per-topic progress badges (filled section count / total sections).
  */
 export default function PillarNav() {
   const { pillarId, topicId } = useParams()
@@ -13,6 +15,15 @@ export default function PillarNav() {
     pillarId ? { [pillarId]: true } : { compute: true }
   )
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+
+  // Progress data from the backend
+  const [progress, setProgress] = useState({})
+
+  useEffect(() => {
+    guideContentApi.progress()
+      .then((data) => setProgress(data || {}))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     const handleResize = () => {
@@ -33,6 +44,13 @@ export default function PillarNav() {
 
   const handleTopicClick = (pillar, topic) => {
     navigate(`/guide/${pillar.id}/${topic.id}`)
+  }
+
+  // Returns { filled, total } for a topic
+  const getTopicProgress = (pillarId, topicId) => {
+    const sections = BLUEPRINT_SECTIONS[pillarId] || []
+    const filled = sections.filter((s) => progress[`${pillarId}__${topicId}__${s.id}`]).length
+    return { filled, total: sections.length }
   }
 
   if (isMobile) {
@@ -65,13 +83,24 @@ export default function PillarNav() {
           <div className="mobile-topics-scroll">
             {activePillar.topics.map((topic) => {
               const isActive = topicId === topic.id
+              const { filled, total } = getTopicProgress(activePillar.id, topic.id)
+              const complete = filled === total && total > 0
               return (
                 <button
                   key={topic.id}
                   className={`mobile-topic-pill${isActive ? ' active' : ''}`}
                   onClick={() => handleTopicClick(activePillar, topic)}
                 >
-                  {topic.name}
+                  <span style={{ flex: 1, textAlign: 'left' }}>{topic.name}</span>
+                  {filled > 0 && (
+                    <span style={{
+                      fontSize: '10px', fontWeight: 700,
+                      color: complete ? '#22c55e' : 'var(--color-accent)',
+                      marginLeft: 4,
+                    }}>
+                      {filled}/{total}
+                    </span>
+                  )}
                 </button>
               )
             })}
@@ -118,16 +147,37 @@ export default function PillarNav() {
 
             {isExpanded && (
               <div className="pillar-group-items">
-                {pillar.topics.map((topic) => (
-                  <button
-                    key={topic.id}
-                    className={`pillar-item${topicId === topic.id ? ' active' : ''}`}
-                    onClick={() => handleTopicClick(pillar, topic)}
-                    id={`topic-${topic.id}`}
-                  >
-                    {topic.name}
-                  </button>
-                ))}
+                {pillar.topics.map((topic) => {
+                  const isTopicActive = topicId === topic.id
+                  const { filled, total } = getTopicProgress(pillar.id, topic.id)
+                  const complete = filled === total && total > 0
+
+                  return (
+                    <button
+                      key={topic.id}
+                      className={`pillar-item${isTopicActive ? ' active' : ''}`}
+                      onClick={() => handleTopicClick(pillar, topic)}
+                      id={`topic-${topic.id}`}
+                      style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
+                    >
+                      <span style={{ flex: 1, textAlign: 'left' }}>{topic.name}</span>
+                      {/* Progress badge */}
+                      {filled > 0 && (
+                        <span style={{
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          color: complete ? '#22c55e' : 'var(--color-accent)',
+                          background: complete ? 'rgba(34,197,94,0.12)' : 'var(--color-accent-subtle)',
+                          padding: '1px 6px',
+                          borderRadius: 'var(--radius-full)',
+                          flexShrink: 0,
+                        }}>
+                          {filled}/{total}
+                        </span>
+                      )}
+                    </button>
+                  )
+                })}
               </div>
             )}
           </div>

@@ -105,7 +105,7 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
     // Reset Zustand store state before each test
     useAppStore.setState({
       sidebarCollapsed: false,
-      chatOpen: { guide: false, builder: false, study: false },
+      chatOpen: { chat: false, guide: false, builder: false, study: false },
       apiKeyConfigured: true,
       toasts: [],
       // Mock properties as requested by guidelines

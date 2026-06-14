@@ -127,4 +127,138 @@ router.post('/stream', async (req, res) => {
   }
 })
 
+/**
+ * POST /api/chat/summarize
+ * Summarize selected chat excerpts into clean guide notes for a specific blueprint section.
+ * Body: { excerpts, pillarId, topicId, sectionId, sectionName, topicName, model }
+ */
+router.post('/summarize', async (req, res) => {
+  const {
+    excerpts = [],
+    sectionId,
+    sectionName,
+    topicName,
+    model: requestedModel,
+  } = req.body
+
+  if (!excerpts.length || !sectionId) {
+    return res.status(400).json({ message: 'excerpts and sectionId are required' })
+  }
+
+  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
+  if (!config?.value) {
+    return res.status(400).json({
+      message: 'Gemini API key not configured. Please add your key in Settings.',
+    })
+  }
+
+  try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(config.value)
+    const model = genAI.getGenerativeModel({ model: requestedModel || 'gemini-3.5-flash' })
+
+    const excerptText = excerpts.join('\n\n---\n\n')
+    const prompt = `You are a technical writing assistant helping compile a system design study guide.
+
+The user has been studying "${topicName || 'this topic'}" — specifically the section "${sectionName || sectionId}".
+
+Below are excerpts from their AI-assisted study conversation. Extract and synthesize ONLY the key insights, definitions, patterns, tradeoffs, and concrete examples that are directly relevant to this section. Discard conversational filler, repeated preamble, and meta-commentary.
+
+Format the result as clean, dense markdown suitable for a technical reference guide:
+- Use ## for subsection headers when needed
+- Use bullet points for lists of properties, tradeoffs, or examples
+- Use backtick inline code for technical terms, thresholds, and config values
+- Use **bold** for key terms on first use
+- Include a brief "Interview Angles" callout at the end if relevant gotchas were discussed
+
+IMPORTANT: Be concise. This is a study reference, not an essay.
+
+--- CONVERSATION EXCERPTS ---
+${excerptText}
+--- END EXCERPTS ---
+
+Now write the guide section content:`
+
+    const result = await model.generateContent(prompt)
+    const content = result.response.text()
+
+    res.json({ content })
+  } catch (err) {
+    console.error('[chat/summarize] Error:', err.message)
+    res.status(500).json({ message: 'Failed to summarize. Please check your API key.' })
+  }
+})
+
+/**
+ * POST /api/chat/evaluate-interceptor
+ * Evaluates the user's explanation for the "Why?" interceptor.
+ * Returns a structured JSON response { pass: boolean, feedback: string }.
+ * Body: { explanation, front, back, model }
+ */
+router.post('/evaluate-interceptor', async (req, res) => {
+  const { explanation, front, back, model: requestedModel } = req.body
+
+  if (!explanation || !front || !back) {
+    return res.status(400).json({ message: 'explanation, front, and back are required' })
+  }
+
+  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
+  if (!config?.value) {
+    return res.status(400).json({
+      message: 'Gemini API key not configured. Please add your key in Settings.',
+    })
+  }
+
+  try {
+    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(config.value)
+    const model = genAI.getGenerativeModel({ 
+      model: requestedModel || 'gemini-3.5-flash',
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: SchemaType.OBJECT,
+          properties: {
+            pass: {
+              type: SchemaType.BOOLEAN,
+              description: "True if the user's explanation demonstrates an understanding of the underlying principle. False if they fail to explain the 'why', are too vague, or are incorrect."
+            },
+            feedback: {
+              type: SchemaType.STRING,
+              description: "1-2 sentences of feedback explaining why they passed or failed, and reinforcing the correct concept."
+            }
+          },
+          required: ["pass", "feedback"],
+        }
+      }
+    })
+
+    const prompt = `You are a strict learning evaluator. The user was asked a flashcard question and must explain WHY the answer is true to prove they aren't just pattern-matching.
+
+Question: ${front}
+Answer: ${back}
+
+User's Explanation: "${explanation}"
+
+Evaluate their explanation.`
+
+    const result = await model.generateContent(prompt)
+    const text = result.response.text()
+    
+    let evaluation;
+    try {
+      evaluation = JSON.parse(text)
+    } catch (e) {
+      console.error('[chat/evaluate-interceptor] Failed to parse JSON:', text)
+      // Fallback
+      evaluation = { pass: false, feedback: "Error evaluating response format." }
+    }
+
+    res.json(evaluation)
+  } catch (err) {
+    console.error('[chat/evaluate-interceptor] Error:', err.message)
+    res.status(500).json({ message: 'Failed to evaluate. Please check your API key.' })
+  }
+})
+
 export default router

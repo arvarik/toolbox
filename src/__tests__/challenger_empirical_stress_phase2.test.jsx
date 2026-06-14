@@ -93,7 +93,7 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
     originalLocalStorage = window.localStorage
     useAppStore.setState({
       sidebarCollapsed: false,
-      chatOpen: { guide: false, builder: false, study: false },
+      chatOpen: { chat: false, guide: false, builder: false, study: false },
       apiKeyConfigured: false,
       toasts: [],
       nodes: [],
@@ -248,7 +248,7 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
     }))
 
     useAppStore.setState({
-      chatOpen: { guide: true },
+      chatOpen: { chat: false, guide: true },
       apiKeyConfigured: true,
     })
 

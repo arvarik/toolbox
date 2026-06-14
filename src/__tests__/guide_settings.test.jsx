@@ -41,6 +41,16 @@ vi.mock('../utils/api', () => ({
   chatApi: {
     send: vi.fn(() => Promise.resolve({ response: 'AI response' })),
   },
+  guideContentApi: {
+    progress: vi.fn(() => Promise.resolve({})),
+    getForTopic: vi.fn(() => Promise.resolve({})),
+    getSection: vi.fn(() => Promise.resolve({})),
+    upsert: vi.fn(() => Promise.resolve({})),
+    clear: vi.fn(() => Promise.resolve({})),
+  },
+  studySessionsApi: {
+    list: vi.fn(() => Promise.resolve([])),
+  },
 }))
 
 describe('Guide & Settings Comprehensive Test Suite', () => {
@@ -76,7 +86,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
     // Reset Zustand store state
     useAppStore.setState({
       sidebarCollapsed: false,
-      chatOpen: { guide: false, builder: false, study: false },
+      chatOpen: { chat: false, guide: false, builder: false, study: false },
       apiKeyConfigured: false,
       toasts: [],
     })
@@ -119,7 +129,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       expect(screen.getByText('System Design Guide')).toBeInTheDocument()
       expect(
         screen.getByText(
-          /Explore the five core pillars of system design/i
+          /Your authoritative library of system design knowledge/i
         )
       ).toBeInTheDocument()
 
@@ -138,24 +148,20 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
 
     it('2. typing in inputs on the Guide page works correctly', () => {
       render(
-        <MemoryRouter initialEntries={['/guide']}>
-          <GuidePage />
+        <MemoryRouter initialEntries={['/guide/compute/traffic-gateways']}>
+          <Routes>
+            <Route path="/guide/:pillarId/:topicId" element={<GuidePage />} />
+          </Routes>
         </MemoryRouter>
       )
 
-      const searchInput = screen.queryByPlaceholderText(/search/i)
-      if (searchInput) {
-        fireEvent.change(searchInput, { target: { value: 'compute' } })
-        expect(searchInput.value).toBe('compute')
-      } else {
-        // Fallback: Test chat input on the Guide page
-        const askAiBtn = screen.getByRole('button', { name: /ask ai/i })
-        fireEvent.click(askAiBtn)
+      // Click Ask AI button to open the chat panel
+      const askAiBtn = screen.getByRole('button', { name: /ask ai/i })
+      fireEvent.click(askAiBtn)
 
-        const chatInput = screen.getByPlaceholderText(/Ask about this component/i)
-        fireEvent.change(chatInput, { target: { value: 'explain load balancers' } })
-        expect(chatInput.value).toBe('explain load balancers')
-      }
+      const chatInput = screen.getByPlaceholderText(/Ask about this component/i)
+      fireEvent.change(chatInput, { target: { value: 'explain load balancers' } })
+      expect(chatInput.value).toBe('explain load balancers')
     })
 
     it('3. renders correct topic accordion headers when active topic route loads', () => {
@@ -178,7 +184,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       expect(screen.getByText('Deployment & APIs')).toBeInTheDocument()
     })
 
-    it('4. clicking accordion headers expands and collapses sections', () => {
+    it('4. clicking accordion headers expands and collapses sections', async () => {
       render(
         <MemoryRouter initialEntries={['/guide/compute/traffic-gateways']}>
           <Routes>
@@ -187,25 +193,27 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      const defaultText = 'Content for this section will be added here. Use the "Ask AI" chat to explore this topic.'
+      const defaultTextRegex = /No notes yet/
 
-      // First accordion section should be open by default
-      const contentElements = screen.getAllByText(defaultText)
-      expect(contentElements.length).toBe(1)
+      // Wait for the async content to resolve and show the empty state
+      await waitFor(() => {
+        const contentElements = screen.getAllByText(defaultTextRegex)
+        expect(contentElements.length).toBe(1)
+      })
 
       // Click second section header to expand it
       const secondHeader = screen.getByText('Use Cases & Tradeoffs')
       fireEvent.click(secondHeader)
 
       // Both should now be expanded
-      expect(screen.getAllByText(defaultText).length).toBe(2)
+      expect(screen.getAllByText(defaultTextRegex).length).toBe(2)
 
       // Collapse the first section
       const firstHeader = screen.getByText('Description & Internal Workings')
       fireEvent.click(firstHeader)
 
       // Only second section should be expanded now
-      expect(screen.getAllByText(defaultText).length).toBe(1)
+      expect(screen.getAllByText(defaultTextRegex).length).toBe(1)
     })
 
     it('5. topic detail parameters load and update view details accordingly', () => {
@@ -226,25 +234,23 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
 
     it('6. handles empty welcome search query cleanly', () => {
       render(
-        <MemoryRouter initialEntries={['/guide']}>
-          <GuidePage />
+        <MemoryRouter initialEntries={['/guide/compute/traffic-gateways']}>
+          <Routes>
+            <Route path="/guide/:pillarId/:topicId" element={<GuidePage />} />
+          </Routes>
         </MemoryRouter>
       )
 
-      const searchInput = screen.queryByPlaceholderText(/search/i)
-      if (searchInput) {
-        expect(searchInput.value).toBe('')
-      } else {
-        // Fallback: Verify default empty chat input
-        const askAiBtn = screen.getByRole('button', { name: /ask ai/i })
-        fireEvent.click(askAiBtn)
+      // Click Ask AI button to open chat panel
+      const askAiBtn = screen.getByRole('button', { name: /ask ai/i })
+      fireEvent.click(askAiBtn)
 
-        const chatInput = screen.getByPlaceholderText(/Ask about this component/i)
-        expect(chatInput.value).toBe('')
-      }
+      // Verify the chat input is empty by default
+      const chatInput = screen.getByPlaceholderText(/Ask about this component/i)
+      expect(chatInput.value).toBe('')
     })
 
-    it('7. permits accordion to expand multiple sections concurrently', () => {
+    it('7. permits accordion to expand multiple sections concurrently', async () => {
       render(
         <MemoryRouter initialEntries={['/guide/compute/traffic-gateways']}>
           <Routes>
@@ -253,17 +259,20 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      const defaultText = 'Content for this section will be added here. Use the "Ask AI" chat to explore this topic.'
+      const defaultTextRegex = /No notes yet/
 
-      expect(screen.getAllByText(defaultText).length).toBe(1)
+      // Wait for async content to resolve
+      await waitFor(() => {
+        expect(screen.getAllByText(defaultTextRegex).length).toBe(1)
+      })
 
       // Open second section
       fireEvent.click(screen.getByText('Use Cases & Tradeoffs'))
-      expect(screen.getAllByText(defaultText).length).toBe(2)
+      expect(screen.getAllByText(defaultTextRegex).length).toBe(2)
 
       // Open third section
       fireEvent.click(screen.getByText('Scaling Estimates & Mechanisms'))
-      expect(screen.getAllByText(defaultText).length).toBe(3)
+      expect(screen.getAllByText(defaultTextRegex).length).toBe(3)
     })
 
     it('8. handles invalid topic or pillar IDs gracefully', () => {
@@ -296,16 +305,15 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       setViewport(390)
 
       render(
-        <MemoryRouter initialEntries={['/guide']}>
-          <GuidePage />
+        <MemoryRouter initialEntries={['/guide/compute/traffic-gateways']}>
+          <Routes>
+            <Route path="/guide/:pillarId/:topicId" element={<GuidePage />} />
+          </Routes>
         </MemoryRouter>
       )
 
       const pageContainer = document.querySelector('.guide-layout') || document.querySelector('#guide-page')
       expect(pageContainer).toBeInTheDocument()
-
-      const sidebar = document.querySelector('#guide-pillar-nav')
-      expect(sidebar).toBeInTheDocument()
     })
 
     it('10. verifies scroll mock functions are called on expand actions', () => {
@@ -313,7 +321,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       window.HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
 
       // Open guide chat panel to trigger scroll behavior
-      useAppStore.setState({ chatOpen: { guide: true, builder: false, study: false } })
+      useAppStore.setState({ chatOpen: { chat: false, guide: true, builder: false, study: false } })
 
       render(
         <MemoryRouter initialEntries={['/guide/compute/traffic-gateways']}>

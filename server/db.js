@@ -64,6 +64,16 @@ function migrate() {
       date TEXT PRIMARY KEY,
       count INTEGER DEFAULT 0
     );
+
+    -- Guide content — committed learning notes per section
+    CREATE TABLE IF NOT EXISTS guide_content (
+      pillar_id   TEXT NOT NULL,
+      topic_id    TEXT NOT NULL,
+      section_id  TEXT NOT NULL,
+      content     TEXT DEFAULT '',
+      committed_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (pillar_id, topic_id, section_id)
+    );
   `)
 
   console.log('[db] Migrations complete')
@@ -75,6 +85,8 @@ function migrate() {
     ['repetitions', 'INTEGER DEFAULT 0'],
     ['next_review', 'TEXT DEFAULT NULL'],
     ['last_reviewed', 'TEXT DEFAULT NULL'],
+    ['state', 'INTEGER DEFAULT 0'],
+    ['learning_step', 'INTEGER DEFAULT 0'],
   ]
   for (const [col, type] of srsColumns) {
     try {
@@ -89,6 +101,27 @@ function migrate() {
     db.exec(`ALTER TABLE decks ADD COLUMN tags TEXT DEFAULT ''`)
   } catch {
     // Column already exists — ignore
+  }
+
+  // Settings column for decks (additive — safe to re-run)
+  try {
+    db.exec(`ALTER TABLE decks ADD COLUMN settings TEXT DEFAULT '{}'`)
+  } catch {
+    // Column already exists — ignore
+  }
+
+  // Migrate already reviewed cards to state = 2 (Review) if they were at state = 0
+  try {
+    db.exec(`UPDATE flashcards SET state = 2 WHERE state = 0 AND repetitions > 0`)
+  } catch {
+    // Ignore migration error or if it's already run
+  }
+
+  // Knowledge Prerequisites (additive — safe to re-run)
+  try {
+    db.exec(`ALTER TABLE flashcards ADD COLUMN prerequisite_id TEXT DEFAULT NULL`)
+  } catch {
+    // Column already exists
   }
 }
 

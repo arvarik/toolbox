@@ -38,7 +38,7 @@ describe('Sidebar Navigation & Mobile Responsiveness Test Suite', () => {
     // Reset store state before each test
     useAppStore.setState({
       sidebarCollapsed: false,
-      chatOpen: { guide: false, builder: false, study: false },
+      chatOpen: { chat: false, guide: false, builder: false, study: false },
       apiKeyConfigured: false,
       toasts: [],
     });

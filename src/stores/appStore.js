@@ -55,6 +55,7 @@ const useAppStore = create((set) => ({
 
   // Chat panels (per-page)
   chatOpen: {
+    chat: false,
     guide: false,
     builder: false,
     study: false,

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
+  MessageSquare,
   BookOpen,
   PenTool,
   GraduationCap,
@@ -9,6 +10,9 @@ import {
   Layers,
   Sun,
   Moon,
+  BrainCircuit,
+  Shuffle,
+  Timer
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 
@@ -16,9 +20,13 @@ const navItems = [
   {
     section: 'Study',
     items: [
-      { to: '/guide', icon: BookOpen, label: 'Guide', shortcut: '⌘1' },
-      { to: '/builder', icon: PenTool, label: 'Builder', shortcut: '⌘2' },
-      { to: '/study', icon: GraduationCap, label: 'Flashcards', shortcut: '⌘3' },
+      { to: '/chat', icon: MessageSquare, label: 'Chat', shortcut: '⌘1' },
+      { to: '/guide', icon: BookOpen, label: 'Guide', shortcut: '⌘2' },
+      { to: '/builder', icon: PenTool, label: 'Builder', shortcut: '⌘3' },
+      { to: '/study', icon: GraduationCap, label: 'Flashcards', shortcut: '⌘4' },
+      { to: '/feynman', icon: BrainCircuit, label: 'Feynman', shortcut: '⌘5' },
+      { to: '/interleaved', icon: Shuffle, label: 'Interleaved', shortcut: '⌘6' },
+      { to: '/flow', icon: Timer, label: 'Flow', shortcut: '⌘7' },
     ],
   },
 ]

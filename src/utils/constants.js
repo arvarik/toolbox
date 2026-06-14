@@ -1,6 +1,12 @@
 /**
  * Pillar definitions — structure only, content will be populated later.
  * Each pillar has an id, name, icon color, and a list of topics.
+ *
+ * Taxonomy note (per Principal Engineer review):
+ *  - Pillars represent CAPABILITIES (the job to be done), not implementations.
+ *  - Observability = PASSIVE signals (metrics, logs, traces).
+ *  - Resiliency = ACTIVE controls (circuit breakers, rate limiters, load shedding).
+ *  - These must be separate pillars.
  */
 export const PILLARS = [
   {
@@ -14,6 +20,8 @@ export const PILLARS = [
       { id: 'stateless-compute', name: 'Stateless Compute Workers' },
       { id: 'message-brokers', name: 'Async Message Brokers' },
       { id: 'stream-processors', name: 'Stateful Stream Processors' },
+      { id: 'batch-processing', name: 'Batch Processing & MapReduce' },
+      { id: 'edge-cdn', name: 'Edge Layer & CDN' },
     ],
   },
   {
@@ -26,6 +34,8 @@ export const PILLARS = [
       { id: 'relational-oltp', name: 'Relational Databases (OLTP)' },
       { id: 'analytical-olap', name: 'Analytical Databases (OLAP)' },
       { id: 'kv-stores', name: 'Key-Value / In-Memory Stores' },
+      { id: 'object-blob-storage', name: 'Object & Blob Storage' },
+      { id: 'full-text-search', name: 'Full-Text Search (Inverted Indexes)' },
       { id: 'vector-indexes', name: 'Vector & Semantic Indexes' },
       { id: 'state-engines', name: 'Durable State Engines' },
     ],
@@ -46,19 +56,48 @@ export const PILLARS = [
   {
     id: 'observability',
     number: 4,
-    name: 'Observability & Safety',
+    // PASSIVE signals only — metrics, logs, distributed traces, evaluation.
+    // Active controls (circuit breakers, rate limiters) live in Pillar 5.
+    name: 'Observability',
     shortName: 'Observability',
     color: '#fbbf24', // amber
     topics: [
       { id: 'telemetry', name: 'Telemetry Pipelines' },
-      { id: 'circuit-breakers', name: 'Circuit Breakers & Rate Limiters' },
       { id: 'hitl-gateways', name: 'Human-In-The-Loop Gateways' },
       { id: 'eval-frameworks', name: 'Evaluation Frameworks' },
     ],
   },
   {
-    id: 'paradigms',
+    id: 'resiliency',
     number: 5,
+    // ACTIVE controls — components that change system behavior under load/failure.
+    // Separated from Observability because these are not passive monitors.
+    name: 'Resiliency & Traffic Control',
+    shortName: 'Resiliency',
+    color: '#f97316', // orange
+    topics: [
+      { id: 'circuit-breakers', name: 'Circuit Breakers' },
+      { id: 'rate-limiters-load-shedding', name: 'Rate Limiters & Load Shedding' },
+      { id: 'retries-backoff', name: 'Retries, Timeouts & Backoff' },
+    ],
+  },
+  {
+    id: 'distributed-mechanics',
+    number: 6,
+    // The "physics" of distributed systems — connective tissue tested heavily in interviews.
+    // Partitioning, replication, and consistency are not components; they are forces.
+    name: 'Distributed Data Mechanics',
+    shortName: 'Distributed',
+    color: '#a78bfa', // violet
+    topics: [
+      { id: 'partitioning-sharding', name: 'Partitioning & Sharding' },
+      { id: 'replication-strategies', name: 'Replication Strategies' },
+      { id: 'consistency-models', name: 'Consistency Models (CAP/PACELC)' },
+    ],
+  },
+  {
+    id: 'paradigms',
+    number: 7,
     name: 'Architectural Paradigms',
     shortName: 'Paradigms',
     color: '#f472b6', // pink
@@ -72,37 +111,55 @@ export const PILLARS = [
 ]
 
 /**
- * Blueprint sections — the 5 study dimensions for each component.
- * Content for each will come from the data layer.
+ * Blueprint sections — the study dimensions for each component.
+ *
+ * Per Principal Engineer review, all compute/storage blueprints now include:
+ *  - "Failure Modes" — how the cog breaks (thundering herds, poison pills, etc.)
+ *  - "Cost Vectors"  — architecture economics at scale (cross-AZ transfer, etc.)
+ *
+ * These two sections are what separate Senior from Principal-level thinking.
  */
+
+// Standard blueprint for stateful/compute cogs
+const STANDARD_COG_SECTIONS = [
+  { id: 'description', name: 'Description & Internal Workings', icon: 'cpu' },
+  { id: 'usecases', name: 'Use Cases & Tradeoffs', icon: 'scale' },
+  { id: 'scaling', name: 'Scaling Estimates & Mechanisms', icon: 'trending-up' },
+  { id: 'availability', name: 'Availability & Reliability', icon: 'shield' },
+  { id: 'failure-modes', name: 'Failure Modes & Blast Radius', icon: 'alert-triangle' },
+  { id: 'cost-vectors', name: 'Cost Vectors at Scale', icon: 'dollar-sign' },
+  { id: 'deployment', name: 'Deployment & APIs', icon: 'box' },
+]
+
+// Resiliency cogs have a slightly different shape
+const RESILIENCY_SECTIONS = [
+  { id: 'description', name: 'Description & Internal Workings', icon: 'cpu' },
+  { id: 'usecases', name: 'When to Deploy & Anti-Patterns', icon: 'scale' },
+  { id: 'configuration', name: 'Configuration & Tuning', icon: 'sliders-horizontal' },
+  { id: 'failure-modes', name: 'Failure Modes & Blast Radius', icon: 'alert-triangle' },
+  { id: 'cost-vectors', name: 'Cost Vectors at Scale', icon: 'dollar-sign' },
+]
+
+// Distributed mechanics are concepts, not deployed cogs — different sections
+const DISTRIBUTED_SECTIONS = [
+  { id: 'concept', name: 'Concept & Mental Model', icon: 'cpu' },
+  { id: 'strategies', name: 'Strategies & Algorithms', icon: 'link' },
+  { id: 'tradeoffs', name: 'Tradeoffs & CAP Implications', icon: 'scale' },
+  { id: 'interview-angles', name: 'Interview Angles & Gotchas', icon: 'target' },
+]
+
 export const BLUEPRINT_SECTIONS = {
-  compute: [
-    { id: 'description', name: 'Description & Internal Workings', icon: 'cpu' },
-    { id: 'usecases', name: 'Use Cases & Tradeoffs', icon: 'scale' },
-    { id: 'scaling', name: 'Scaling Estimates & Mechanisms', icon: 'trending-up' },
-    { id: 'availability', name: 'Availability & Reliability', icon: 'shield' },
-    { id: 'deployment', name: 'Deployment & APIs', icon: 'box' },
-  ],
-  'data-storage': [
-    { id: 'description', name: 'Description & Internal Workings', icon: 'cpu' },
-    { id: 'usecases', name: 'Use Cases & Tradeoffs', icon: 'scale' },
-    { id: 'scaling', name: 'Scaling Estimates & Mechanisms', icon: 'trending-up' },
-    { id: 'availability', name: 'Availability & Reliability', icon: 'shield' },
-    { id: 'deployment', name: 'Deployment & APIs', icon: 'box' },
-  ],
+  compute: STANDARD_COG_SECTIONS,
+  'data-storage': STANDARD_COG_SECTIONS,
   'network-protocols': [
     { id: 'protocol', name: 'Protocol Description & Types', icon: 'radio' },
     { id: 'usecases', name: 'Ideal Use Cases & Anti-Patterns', icon: 'target' },
     { id: 'components', name: 'Associated Components', icon: 'link' },
     { id: 'tradeoffs', name: 'Comparative Tradeoffs', icon: 'scale' },
   ],
-  observability: [
-    { id: 'description', name: 'Description & Internal Workings', icon: 'cpu' },
-    { id: 'usecases', name: 'Use Cases & Tradeoffs', icon: 'scale' },
-    { id: 'scaling', name: 'Scaling Estimates & Mechanisms', icon: 'trending-up' },
-    { id: 'availability', name: 'Availability & Reliability', icon: 'shield' },
-    { id: 'deployment', name: 'Deployment & APIs', icon: 'box' },
-  ],
+  observability: STANDARD_COG_SECTIONS,
+  resiliency: RESILIENCY_SECTIONS,
+  'distributed-mechanics': DISTRIBUTED_SECTIONS,
   paradigms: [
     { id: 'core-goal', name: 'Core Goal & Analysis', icon: 'target' },
     { id: 'components', name: 'Required Components & API Binding', icon: 'puzzle' },
@@ -112,6 +169,13 @@ export const BLUEPRINT_SECTIONS = {
 
 /**
  * Builder component categories for the toolbox palette.
+ *
+ * Changes per review:
+ *  - Added Batch Processor to Compute
+ *  - Added Full-Text Search to Storage
+ *  - Moved Circuit Breaker & Rate Limiter into new "Resiliency" category
+ *  - Added Retry Handler and Load Shedder to Resiliency
+ *  - Observability category now contains only passive telemetry components
  */
 export const BUILDER_COMPONENTS = [
   {
@@ -126,6 +190,8 @@ export const BUILDER_COMPONENTS = [
       { id: 'message-queue', name: 'Message Queue', icon: 'mail' },
       { id: 'event-bus', name: 'Event Bus', icon: 'radio' },
       { id: 'stream-processor', name: 'Stream Processor', icon: 'activity' },
+      { id: 'batch-processor', name: 'Batch Processor', icon: 'layers' },
+      { id: 'cdn', name: 'CDN / Edge Node', icon: 'globe' },
     ],
   },
   {
@@ -135,10 +201,9 @@ export const BUILDER_COMPONENTS = [
       { id: 'sql-db', name: 'SQL Database', icon: 'database' },
       { id: 'nosql-db', name: 'NoSQL Database', icon: 'hard-drive' },
       { id: 'cache', name: 'Cache (Redis)', icon: 'zap' },
-      { id: 'object-storage', name: 'Object Storage', icon: 'archive' },
-      { id: 'search-index', name: 'Search Index', icon: 'search' },
+      { id: 'object-storage', name: 'Object Storage (S3/GCS)', icon: 'archive' },
+      { id: 'search-index', name: 'Full-Text Search (ES)', icon: 'search' },
       { id: 'vector-db', name: 'Vector Database', icon: 'brain' },
-      { id: 'cdn', name: 'CDN', icon: 'globe' },
     ],
   },
   {
@@ -152,13 +217,22 @@ export const BUILDER_COMPONENTS = [
     ],
   },
   {
-    category: 'Observability',
-    color: '#fbbf24',
+    category: 'Resiliency',
+    color: '#f97316',
     items: [
       { id: 'rate-limiter', name: 'Rate Limiter', icon: 'shield' },
       { id: 'circuit-breaker', name: 'Circuit Breaker', icon: 'alert-triangle' },
+      { id: 'retry-handler', name: 'Retry / Backoff Handler', icon: 'refresh-cw' },
+      { id: 'load-shedder', name: 'Load Shedder', icon: 'filter' },
+    ],
+  },
+  {
+    category: 'Observability',
+    color: '#fbbf24',
+    items: [
       { id: 'logger', name: 'Log Aggregator', icon: 'file-text' },
       { id: 'metrics', name: 'Metrics Collector', icon: 'bar-chart' },
+      { id: 'tracer', name: 'Distributed Tracer', icon: 'git-branch' },
     ],
   },
 ]
