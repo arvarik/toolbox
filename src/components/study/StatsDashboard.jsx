@@ -2,9 +2,8 @@ import { useMemo } from 'react'
 import { ArrowLeft, BarChart2, Calendar, ShieldAlert, Award } from 'lucide-react'
 
 export default function StatsDashboard({ deck, onBack }) {
-  const cards = deck.cards || []
-  
   const stats = useMemo(() => {
+    const cards = deck.cards || []
     const total = cards.length
     
     // 1. States counts
@@ -68,7 +67,7 @@ export default function StatsDashboard({ deck, onBack }) {
       easeBuckets,
       intervalBuckets
     }
-  }, [cards])
+  }, [deck.cards])
 
   // Chart rendering helpers
   const maxIntervalCount = Math.max(...Object.values(stats.intervalBuckets), 1)

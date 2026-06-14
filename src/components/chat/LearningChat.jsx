@@ -1,10 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Send, Sparkles, Copy, Check, Trash2, GitCommit,
-  Plus, ChevronDown, Edit2, X,
+  Plus, ChevronDown, Edit2, X, RotateCcw, Square
 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import MarkdownRenderer from '../shared/MarkdownRenderer'
 import useAppStore from '../../stores/appStore'
 import { chatApi } from '../../utils/api'
 
@@ -63,16 +62,7 @@ function CopyButton({ text }) {
 
 function MdContent({ text }) {
   if (!text) return null
-  return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-      pre: (p) => { const r = { ...p }; delete r.node; return <pre {...r} /> },
-      code: (p) => { const r = { ...p }; delete r.node; return <code {...r} /> },
-      strong: (p) => { const r = { ...p }; delete r.node; return <strong {...r} /> },
-      h3: (p) => { const r = { ...p }; delete r.node; return <h3 {...r} /> },
-    }}>
-      {text}
-    </ReactMarkdown>
-  )
+  return <MarkdownRenderer content={text} />
 }
 
 const STARTER_PROMPTS = [
@@ -283,7 +273,8 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
 
   // Derive current session
   const currentSession = sessions[currentId] || null
-  const messages = currentSession?.messages || []
+  const emptyMessages = useMemo(() => [], [])
+  const messages = currentSession?.messages || emptyMessages
 
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
@@ -292,6 +283,7 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const seedFiredRef = useRef(null) // track which seed prompt has been fired
+  const abortControllerRef = useRef(null)
 
   // Persist sessions whenever they change
   useEffect(() => { saveSessions(sessions) }, [sessions])
@@ -323,12 +315,13 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
     })
   }, [currentId])
 
-  const handleSend = useCallback(async (customText) => {
+  const handleSend = useCallback(async (customText, overrideHistory = null) => {
     const text = typeof customText === 'string' ? customText.trim() : input.trim()
     if (!text || isLoading) return
 
+    const currentHistory = overrideHistory || messages
     const userMessage = { role: 'user', content: text }
-    const newMessages = [...messages, userMessage]
+    const newMessages = [...currentHistory, userMessage]
     setMessages(newMessages)
     if (typeof customText !== 'string') setInput('')
     setIsLoading(true)
@@ -338,15 +331,20 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
       const aiPlaceholder = { role: 'ai', content: '' }
       setMessages([...newMessages, aiPlaceholder])
 
+      abortControllerRef.current = new AbortController()
+      const signal = abortControllerRef.current.signal
+
       const fullText = await chatApi.stream(
-        { message: text, context: LEARN_SYSTEM_CONTEXT, history: messages, model: selectedModel },
+        { message: text, context: LEARN_SYSTEM_CONTEXT, history: currentHistory, model: selectedModel },
         (partialText) => {
           setMessages((prev) => {
             const updated = [...prev]
             updated[updated.length - 1] = { role: 'ai', content: partialText }
             return updated
           })
-        }
+        },
+        null,
+        signal
       )
 
       setMessages((prev) => {
@@ -355,12 +353,13 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
         return updated
       })
     } catch (err) {
+      if (err.name === 'AbortError') return
       setErrorMsg(err.message)
       setMessages([...newMessages, { role: 'ai', content: `Error: ${err.message}. Please check your API key in Settings.` }])
     } finally {
       setIsLoading(false)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [input, isLoading, messages, selectedModel, setMessages])
 
   // Fire seed prompt when it changes (from to-do panel clicks)
@@ -375,6 +374,23 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
+  }
+
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      setIsLoading(false)
+    }
+  }
+
+  const handleRetry = (index) => {
+    const userMsg = messages[index]
+    if (userMsg && userMsg.role === 'user') {
+      const newHistory = messages.slice(0, index)
+      setMessages(newHistory)
+      // Pass newHistory directly to bypass closure trap
+      setTimeout(() => handleSend(userMsg.content, newHistory), 50)
+    }
   }
 
   // ── Session management ──────────────────────────────────────────────────────
@@ -521,6 +537,18 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
                   <CopyButton text={msg.content} />
                 </div>
               )}
+              {msg.role === 'user' && !isLoading && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-1)' }}>
+                  <button 
+                    onClick={() => handleRetry(i)}
+                    className="btn-ghost"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center' }}
+                    title="Retry this prompt"
+                  >
+                    <RotateCcw size={13} />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -547,6 +575,30 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
       {/* ── Input ── */}
       <div className="learning-chat-input-area">
         <div className="learning-chat-input-wrapper">
+          {isLoading && (
+            <button
+              onClick={handleStop}
+              style={{
+                position: 'absolute',
+                top: '-40px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '6px 12px',
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-full)',
+                fontSize: 'var(--text-xs)',
+                cursor: 'pointer',
+                color: 'var(--color-text-secondary)',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
+              }}
+            >
+              <Square fill="currentColor" size={10} /> Stop generating
+            </button>
+          )}
           <textarea
             ref={inputRef}
             className="learning-chat-input"

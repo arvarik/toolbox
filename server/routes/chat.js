@@ -26,12 +26,16 @@ router.post('/', async (req, res) => {
   try {
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     const genAI = new GoogleGenerativeAI(config.value)
-    const model = genAI.getGenerativeModel({ model: requestedModel || 'gemini-3.5-flash' })
 
     // Build system context based on the page
     const systemContext = context
       ? `You are an expert system design interview tutor. Context: ${context}\n\n`
       : 'You are an expert system design interview tutor helping a student prepare for system design interviews.\n\n'
+
+    const model = genAI.getGenerativeModel({ 
+      model: requestedModel || 'gemini-3.5-flash',
+      systemInstruction: systemContext
+    })
 
     // Build conversation history
     const chatHistory = history.map((msg) => ({
@@ -42,12 +46,16 @@ router.post('/', async (req, res) => {
     const chat = model.startChat({
       history: chatHistory,
       generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 2048,
+        temperature: 0.5,
+        maxOutputTokens: 8192,
+        thinkingConfig: {
+          thinkingBudget: 1024,
+          includeThoughts: false
+        }
       },
     })
 
-    const result = await chat.sendMessage(systemContext + message)
+    const result = await chat.sendMessage(message)
     const response = result.response.text()
 
     res.json({ response })
@@ -83,16 +91,96 @@ router.post('/stream', async (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no')
   res.flushHeaders()
 
+  let isAborted = false;
+  req.on('close', () => {
+    isAborted = true;
+  });
+
   try {
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     const genAI = new GoogleGenerativeAI(config.value)
-    const model = genAI.getGenerativeModel({ model: requestedModel || 'gemini-3.5-flash' })
 
-    const systemContext = context
+    // Tools definition
+    const tools = [{
+      functionDeclarations: [
+        {
+          name: "search_flashcards",
+          description: "Search the user's flashcards. Useful to see what concepts they have learned or are struggling with.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              query: { type: "STRING", description: "Search query for flashcards" }
+            },
+            required: ["query"]
+          }
+        },
+        {
+          name: "search_guide",
+          description: "Search the global system design guide content.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              query: { type: "STRING", description: "Topic to search for in the guide" }
+            },
+            required: ["query"]
+          }
+        },
+        {
+          name: "submit_draft",
+          description: "MANDATORY: You must NEVER give the final answer directly to the user. You MUST first use this tool to submit your proposed draft. A critic will review it and return feedback or approval. If approved, you can then output the final text.",
+          parameters: {
+            type: "OBJECT",
+            properties: {
+              draft_text: { type: "STRING", description: "Your proposed final answer to the user." }
+            },
+            required: ["draft_text"]
+          }
+        }
+      ]
+    }];
+
+    // ─── 1. Memory Compaction ───────────────────────────────────────────────
+    let compactedHistory = history;
+    let memorySummary = "";
+
+    if (history.length > 8) {
+      res.write(`data: ${JSON.stringify({ tool: 'Compacting Memory...' })}\n\n`)
+      
+      const oldMessages = history.slice(0, history.length - 4);
+      compactedHistory = history.slice(history.length - 4);
+      
+      const summaryModel = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' })
+      const summaryPrompt = `Summarize this chat history into a dense "Working Memory Summary" of key concepts discussed, the user's current understanding, and any unresolved issues. Keep it under 150 words.\n\nHistory:\n${oldMessages.map(m => `${m.role}: ${m.content}`).join('\n')}`;
+      
+      const summaryResult = await summaryModel.generateContent(summaryPrompt);
+      memorySummary = `\n\n--- WORKING MEMORY SUMMARY ---\n${summaryResult.response.text()}\n------------------------------\n`;
+    }
+
+    // ─── 2. Dynamic Context ─────────────────────────────────────────────────
+    // Get some quick stats
+    const statsRow = db.prepare("SELECT COUNT(*) as c FROM flashcards WHERE state < 2").get()
+    const struggling = statsRow?.c || 0;
+    
+    const profileRow = db.prepare("SELECT profile_text FROM user_profile WHERE id = 1").get();
+    const userProfile = profileRow?.profile_text || "";
+
+    let systemContext = context
       ? `You are an expert system design interview tutor. Context: ${context}\n\n`
-      : 'You are an expert system design interview tutor helping a student prepare for system design interviews.\n\n'
+      : 'You are an expert system design interview tutor helping a student prepare for system design interviews.\n\n';
+      
+    systemContext += `\n[Global Stats: User has ${struggling} cards in learning state (not yet mastered).]`;
+    if (userProfile) {
+      systemContext += `\n\n[Shadow Memory / User Profile]:\n${userProfile}`;
+    }
+    if (memorySummary) systemContext += memorySummary;
 
-    const chatHistory = history.map((msg) => ({
+    const model = genAI.getGenerativeModel({ 
+      model: requestedModel || 'gemini-3.5-flash',
+      tools: tools,
+      systemInstruction: systemContext
+    })
+
+    const chatHistory = compactedHistory.map((msg) => ({
       role: msg.role === 'ai' ? 'model' : 'user',
       parts: [{ text: msg.content }],
     }))
@@ -100,26 +188,115 @@ router.post('/stream', async (req, res) => {
     const chat = model.startChat({
       history: chatHistory,
       generationConfig: {
-        temperature: 0.7,
-        maxOutputTokens: 2048,
+        temperature: 0.5,
+        maxOutputTokens: 8192,
+        thinkingConfig: {
+          thinkingBudget: 1024,
+          includeThoughts: false
+        }
       },
     })
 
-    const result = await chat.sendMessageStream(systemContext + message)
+    // ─── 3. Harness Loop ────────────────────────────────────────────────────
+    let currentMessage = message;
+    let isFunctionCall = false;
+    let generatedText = '';
 
-    for await (const chunk of result.stream) {
-      const text = chunk.text()
-      if (text) {
-        // Encode as SSE data event — escape newlines for SSE protocol
-        const lines = text.split('\n')
-        for (const line of lines) {
-          res.write(`data: ${JSON.stringify({ text: line })}\n\n`)
+    do {
+      isFunctionCall = false;
+      const result = await chat.sendMessageStream(currentMessage);
+      
+      for await (const chunk of result.stream) {
+        if (isAborted) break;
+
+        if (chunk.functionCalls && chunk.functionCalls.length > 0) {
+          isFunctionCall = true;
+          const functionResponses = [];
+          
+          for (const call of chunk.functionCalls) {
+            const fnName = call.name;
+            const args = call.args;
+            
+            res.write(`data: ${JSON.stringify({ tool: "Running " + fnName + "..." })}\n\n`);
+            
+            let toolResult = null;
+            if (fnName === 'search_flashcards') {
+              const q = args.query || '';
+              const rows = db.prepare("SELECT front, back, state, ease_factor FROM flashcards WHERE front LIKE ? OR back LIKE ? LIMIT 5").all(`%${q}%`, `%${q}%`);
+              toolResult = rows.length > 0 ? rows : "No flashcards found.";
+            } else if (fnName === 'search_guide') {
+              const q = args.query || '';
+              const rows = db.prepare("SELECT content FROM guide_content WHERE content LIKE ? LIMIT 3").all(`%${q}%`);
+              toolResult = rows.length > 0 ? rows.map(r => r.content) : "No guide content found.";
+            } else if (fnName === 'submit_draft') {
+              const draft = args.draft_text || '';
+              res.write(`data: ${JSON.stringify({ tool: 'Critic reviewing draft...' })}\n\n`);
+              
+              const criticModel = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
+              const criticPrompt = `You are a strict technical critic. Review this proposed answer to the user.\n\nDraft:\n${draft}\n\nProvide feedback on accuracy, hallucinations, and clarity. If it is high quality and accurate, output exactly "APPROVED". Otherwise, point out the flaws briefly.`;
+              
+              const criticResult = await criticModel.generateContent(criticPrompt);
+              const critique = criticResult.response.text().trim();
+              
+              if (critique === 'APPROVED') {
+                 toolResult = "APPROVED. You may now output exactly the draft text to the user.";
+              } else {
+                 toolResult = `REJECTED. Feedback: ${critique}\n\nPlease revise your draft and submit again using submit_draft, or if you think the critic is wrong, address it in your output.`;
+              }
+            }
+
+            functionResponses.push({
+              functionResponse: {
+                name: fnName,
+                response: { result: toolResult }
+              }
+            });
+          }
+          currentMessage = functionResponses;
+          break; // Exit the stream processing for this turn, loop back to send functionResponses
+        } else {
+          const text = chunk.text()
+          if (text) {
+            generatedText += text;
+            const lines = text.split('\n')
+            for (const line of lines) {
+              res.write(`data: ${JSON.stringify({ text: line })}\n\n`)
+            }
+          }
         }
       }
-    }
+    } while (isFunctionCall && !isAborted);
 
     res.write('data: [DONE]\n\n')
     res.end()
+
+    // ─── 4. Shadow Memory Extraction (Async) ────────────────────────────────
+    setTimeout(async () => {
+      try {
+        if (chatHistory.length > 1) {
+          const extractionModel = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
+          const oldProfile = db.prepare("SELECT profile_text FROM user_profile WHERE id = 1").get()?.profile_text || "";
+          
+          const extractionPrompt = `You are a background profiler. Analyze the following chat history. Extract any hard facts about the user (e.g., their upcoming interviews, concepts they struggle with, preferences).
+Current Profile:
+${oldProfile}
+
+Chat History:
+${chatHistory.map(m => `${m.role}: ${m.parts[0].text}`).join('\n')}
+user: ${message}
+model: ${generatedText}
+
+Output a unified, updated profile text for this user. If there are no new facts, just output the Current Profile unchanged.`;
+          
+          const extractResult = await extractionModel.generateContent(extractionPrompt);
+          const newProfile = extractResult.response.text().trim();
+          
+          db.prepare("INSERT INTO user_profile (id, profile_text, updated_at) VALUES (1, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET profile_text = excluded.profile_text, updated_at = excluded.updated_at").run(newProfile);
+        }
+      } catch (err) {
+        console.error('[Shadow Memory] Error:', err.message);
+      }
+    }, 0);
   } catch (err) {
     console.error('[chat/stream] Error:', err.message)
     res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`)
@@ -249,7 +426,7 @@ Evaluate their explanation.`
     try {
       evaluation = JSON.parse(text)
     } catch (e) {
-      console.error('[chat/evaluate-interceptor] Failed to parse JSON:', text)
+      console.error('[chat/evaluate-interceptor] Failed to parse JSON:', e.message, text)
       // Fallback
       evaluation = { pass: false, feedback: "Error evaluating response format." }
     }

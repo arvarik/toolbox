@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { GitCommit, Check, ChevronRight, ChevronDown, Loader2, X, Sparkles } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import MarkdownRenderer from '../shared/MarkdownRenderer'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
 import { chatApi, guideContentApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
@@ -206,7 +205,7 @@ export default function CommitModal({ open, onClose, messages = [], onCommitSucc
                 fontSize: 'var(--text-sm)',
                 lineHeight: 'var(--leading-relaxed)',
               }}>
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewContent}</ReactMarkdown>
+                <MarkdownRenderer content={previewContent} />
               </div>
             </div>
             <div style={{

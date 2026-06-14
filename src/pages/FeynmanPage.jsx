@@ -2,8 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { BrainCircuit, Play, Loader, CheckCircle, Mic, MicOff } from 'lucide-react'
 import { chatApi } from '../utils/api'
 import useAppStore from '../stores/appStore'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import MarkdownRenderer from '../components/shared/MarkdownRenderer'
 
 export default function FeynmanPage() {
   const [topic, setTopic] = useState('')
@@ -190,7 +189,7 @@ Format your response in Markdown with the exact following sections:
             Feedback Analysis
           </h2>
           <div className="markdown-body" style={{ color: 'var(--color-text)' }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{feedback || 'Waiting for AI...'}</ReactMarkdown>
+            <MarkdownRenderer content={feedback || 'Waiting for AI...'} />
             <div ref={feedbackEndRef} />
           </div>
         </div>

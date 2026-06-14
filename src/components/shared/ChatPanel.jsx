@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, X, Sparkles, Copy, Check } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { Send, X, Sparkles, Copy, Check, RotateCcw, Square } from 'lucide-react'
+import MarkdownRenderer from './MarkdownRenderer'
 import useAppStore from '../../stores/appStore'
 import { chatApi } from '../../utils/api'
 
@@ -158,14 +157,16 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
 
   const timeoutRef = useRef(null)
   const hasTriggeredRef = useRef(false)
+  const abortControllerRef = useRef(null)
 
-  const handleSend = async (customText) => {
+  const handleSend = async (customText, overrideHistory = null) => {
     const text = typeof customText === 'string' ? customText : input.trim()
     // isLoading and empty text guard
     if (!text || isLoading) return
 
+    const currentHistory = overrideHistory || messages
     const userMessage = { role: 'user', content: text }
-    const newMessages = [...messages, userMessage]
+    const newMessages = [...currentHistory, userMessage]
     setMessages(newMessages)
     
     // Clear input if we typed it
@@ -200,11 +201,14 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
       const aiPlaceholder = { role: 'ai', content: '' }
       setMessages([...newMessages, aiPlaceholder])
 
+      abortControllerRef.current = new AbortController()
+      const signal = abortControllerRef.current.signal
+
       const fullText = await chatApi.stream(
         {
           message: text,
           context: contextString,
-          history: messages,
+          history: currentHistory,
           model: selectedModel,
         },
         (partialText) => {
@@ -214,7 +218,9 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
             updated[updated.length - 1] = { role: 'ai', content: partialText }
             return updated
           })
-        }
+        },
+        null,
+        signal
       )
 
       // Final update with complete text
@@ -224,6 +230,7 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
         return updated
       })
     } catch (err) {
+      if (err.name === 'AbortError') return
       setErrorMsg(err.message)
       setMessages([...newMessages, {
         role: 'ai',
@@ -278,6 +285,23 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
     }
   }
 
+  const handleStop = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+      setIsLoading(false)
+    }
+  }
+
+  const handleRetry = (index) => {
+    const userMsg = messages[index]
+    if (userMsg && userMsg.role === 'user') {
+      const newHistory = messages.slice(0, index)
+      setMessages(newHistory)
+      // Pass newHistory directly to bypass closure trap
+      setTimeout(() => handleSend(userMsg.content, newHistory), 50)
+    }
+  }
+
   const handleClear = () => {
     setMessages([])
     saveHistoryForPage(page, [])
@@ -313,35 +337,7 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
 
   const parseMarkdown = (text) => {
     if (!text) return null
-    return (
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={{
-          h3: (props) => {
-            const rest = { ...props }
-            delete rest.node
-            return <h3 data-testid="markdown-h3" {...rest} />
-          },
-          strong: (props) => {
-            const rest = { ...props }
-            delete rest.node
-            return <strong data-testid="markdown-bold" {...rest} />
-          },
-          pre: (props) => {
-            const rest = { ...props }
-            delete rest.node
-            return <pre {...rest} />
-          },
-          code: (props) => {
-            const rest = { ...props }
-            delete rest.node
-            return <code data-testid="markdown-code" {...rest} />
-          },
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    )
+    return <MarkdownRenderer content={text} />
   }
 
   if (!isOpen) return null
@@ -461,6 +457,18 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
                   <CopyButton text={msg.content} />
                 </div>
               )}
+              {msg.role === 'user' && !isLoading && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-1)' }}>
+                  <button 
+                    onClick={() => handleRetry(i)}
+                    className="btn-ghost"
+                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center' }}
+                    title="Retry this prompt"
+                  >
+                    <RotateCcw size={13} />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -493,6 +501,31 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
       {/* Input */}
       <div className="chat-input-area">
         <div className="chat-input-wrapper">
+          {isLoading && (
+            <button
+              onClick={handleStop}
+              style={{
+                position: 'absolute',
+                top: '-32px',
+                left: '50%',
+                transform: 'translateX(-50%)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                padding: '4px 10px',
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-full)',
+                fontSize: 'var(--text-xs)',
+                cursor: 'pointer',
+                color: 'var(--color-text-secondary)',
+                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+                zIndex: 10
+              }}
+            >
+              <Square fill="currentColor" size={10} /> Stop generating
+            </button>
+          )}
           <textarea
             ref={inputRef}
             className="chat-input"

@@ -6,8 +6,7 @@ import {
   AlertTriangle, DollarSign, Layers, GitBranch, Filter, RefreshCw,
   Edit3, Save, X, Trash2, BookOpen, Sparkles,
 } from 'lucide-react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import MarkdownRenderer from '../shared/MarkdownRenderer'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
 import { guideContentApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
@@ -552,9 +551,7 @@ export default function BlueprintShell() {
                             border: '1px solid var(--color-border)',
                           }}
                         >
-                          <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                            {committed.content}
-                          </ReactMarkdown>
+                          <MarkdownRenderer content={committed.content} />
                           {committed.committedAt && (
                             <div style={{
                               marginTop: 'var(--space-3)',

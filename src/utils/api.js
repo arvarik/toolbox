@@ -115,13 +115,16 @@ export const chatApi = {
    * Stream a chat response via SSE.
    * @param {Object} data - { message, context, history }
    * @param {Function} onChunk - Called with each text chunk as it arrives
+   * @param {Function} onTool - Called with tool execution strings
+   * @param {AbortSignal} [signal] - Optional signal to abort the fetch
    * @returns {Promise<string>} - The full accumulated response text
    */
-  stream: async (data, onChunk) => {
+  stream: async (data, onChunk, onTool, signal) => {
     const res = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data),
+      signal,
     })
 
     if (!res.ok) {
@@ -155,6 +158,11 @@ export const chatApi = {
           const parsed = JSON.parse(payload)
           if (parsed.error) {
             throw new Error(parsed.error)
+          }
+          if (parsed.tool) {
+            if (onTool) onTool(parsed.tool)
+            fullText += `\n\n*⚙️ ${parsed.tool}*\n\n`
+            onChunk(fullText)
           }
           if (parsed.text !== undefined) {
             fullText += parsed.text + '\n'

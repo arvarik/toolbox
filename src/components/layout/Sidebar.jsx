@@ -8,8 +8,6 @@ import {
   Settings,
   PanelLeftClose,
   Layers,
-  Sun,
-  Moon,
   BrainCircuit,
   Shuffle,
   Timer
@@ -38,8 +36,8 @@ const bottomItems = [
 export default function Sidebar() {
   const collapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
-  const theme = useAppStore((s) => s.theme)
-  const toggleTheme = useAppStore((s) => s.toggleTheme)
+  const model = useAppStore((s) => s.model)
+  const setModel = useAppStore((s) => s.setModel)
   const location = useLocation()
 
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
@@ -93,23 +91,30 @@ export default function Sidebar() {
         {/* Spacer */}
         <div style={{ flex: 1 }} />
 
-        {/* Theme toggle */}
-        <button
-          className="sidebar-link"
-          onClick={toggleTheme}
-          aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          id="theme-toggle"
-          style={{ border: 'none', background: 'none', width: '100%', textAlign: 'left' }}
-        >
-          {theme === 'dark' ? (
-            <Sun className="sidebar-link-icon" />
-          ) : (
-            <Moon className="sidebar-link-icon" />
-          )}
-          <span className="sidebar-link-label">
-            {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
-          </span>
-        </button>
+        {/* Model Selection */}
+        {!collapsed && (
+          <div style={{ padding: '0 var(--space-4)', marginBottom: 'var(--space-2)' }}>
+            <div className="sidebar-section-label" style={{ marginBottom: '4px' }}>Model</div>
+            <select 
+              value={model} 
+              onChange={(e) => setModel(e.target.value)}
+              style={{
+                width: '100%',
+                background: 'var(--color-surface)',
+                color: 'var(--color-text-secondary)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '4px 8px',
+                fontSize: '11px',
+                outline: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+              <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (High)</option>
+            </select>
+          </div>
+        )}
 
         {/* Bottom nav items */}
         {bottomItems.map((item) => {

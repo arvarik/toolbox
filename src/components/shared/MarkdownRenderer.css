@@ -1,0 +1,41 @@
+/* MarkdownRenderer.css */
+.markdown-renderer {
+  line-height: 1.6;
+}
+
+.markdown-renderer p {
+  margin-bottom: 0.8em;
+}
+
+.markdown-renderer p:last-child {
+  margin-bottom: 0;
+}
+
+/* Ensure math blocks scroll horizontally if they are too wide */
+.markdown-renderer .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.5em 0;
+  margin: 1em 0;
+}
+
+.markdown-renderer pre {
+  margin: 1em 0;
+}
+
+.markdown-renderer a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-renderer a:hover {
+  text-decoration: none;
+}
+
+/* Fix up the inline code block style inside headers or other styled elements */
+.markdown-renderer h1 code,
+.markdown-renderer h2 code,
+.markdown-renderer h3 code {
+  font-size: 0.9em;
+}

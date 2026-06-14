@@ -74,6 +74,13 @@ function migrate() {
       committed_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (pillar_id, topic_id, section_id)
     );
+
+    -- Shadow Memory (User Profile)
+    CREATE TABLE IF NOT EXISTS user_profile (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      profile_text TEXT DEFAULT '',
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
   `)
 
   console.log('[db] Migrations complete')
