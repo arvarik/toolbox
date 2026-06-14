@@ -9,8 +9,7 @@ import {
   PanelLeftClose,
   Layers,
   BrainCircuit,
-  Shuffle,
-  Timer
+  Shuffle
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import PomodoroWidget from './PomodoroWidget'

@@ -81,6 +81,16 @@ function migrate() {
       profile_text TEXT DEFAULT '',
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- AI Generated Chat Starters
+    CREATE TABLE IF NOT EXISTS chat_starters (
+      pillar_id TEXT NOT NULL,
+      topic_id TEXT NOT NULL,
+      suggestions TEXT DEFAULT '[]',
+      content_hash TEXT DEFAULT '',
+      updated_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (pillar_id, topic_id)
+    );
   `)
 
   console.log('[db] Migrations complete')

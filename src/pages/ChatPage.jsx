@@ -99,8 +99,8 @@ export default function ChatPage() {
   const [commitOpen, setCommitOpen] = useState(false)
   const [learningMessages, setLearningMessages] = useState([])
 
-  // Seed prompt for LearningChat — set when user clicks a to-do item
-  const [seedPrompt, setSeedPrompt] = useState(null)
+  // Active topic for LearningChat to fetch starters
+  const [activeStudyTopic, setActiveStudyTopic] = useState(null)
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768)
@@ -113,15 +113,12 @@ export default function ChatPage() {
     setCommitOpen(true)
   }, [])
 
-  const handleStudyTopic = useCallback((_pillar, _topic, prompt) => {
+  const handleStudyTopic = useCallback((pillar, topic) => {
     // Close the drawer first on mobile so user sees the chat
     setTodoDrawerOpen(false)
     // Use a frame delay so the drawer close animation starts before chat fires
-    requestAnimationFrame(() => setSeedPrompt(prompt))
+    requestAnimationFrame(() => setActiveStudyTopic({ pillar, topic }))
   }, [])
-
-  // Clear seed after it's been consumed (LearningChat fires it once)
-  const handleSeedConsumed = useCallback(() => setSeedPrompt(null), [])
 
   return (
     <div className="learning-hub-layout" id="chat-page">
@@ -154,9 +151,8 @@ export default function ChatPage() {
         )}
 
         <LearningChat
-          seedPrompt={seedPrompt}
+          activeTopic={activeStudyTopic}
           onCommitClick={handleCommitClick}
-          onSeedConsumed={handleSeedConsumed}
         />
       </div>
 

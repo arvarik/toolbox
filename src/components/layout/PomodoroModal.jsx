@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { X, Play, Pause, Square, Check, RefreshCw, Settings2, Timer as TimerIcon } from 'lucide-react'
+import { X, Play, Pause, Square, Settings2, Timer as TimerIcon } from 'lucide-react'
 import useTimerStore from '../../stores/useTimerStore'
 
 export default function PomodoroModal({ onClose }) {
@@ -8,7 +8,7 @@ export default function PomodoroModal({ onClose }) {
     start, pause, resume, stop,
     isStrictMode, setStrictMode,
     taskName, setTaskName,
-    plantState, focusLost
+    plantState, focusLost, addTime
   } = useTimerStore()
 
   const [isEditingSettings, setIsEditingSettings] = useState(false)

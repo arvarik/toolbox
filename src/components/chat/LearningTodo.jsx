@@ -5,14 +5,6 @@ import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
 import { guideContentApi } from '../../utils/api'
 
 /**
- * Builds a study prompt for a given topic + pillar.
- * Sent to LearningChat as a seed prompt when user clicks a to-do item.
- */
-function buildStudyPrompt(pillar, topic) {
-  return `Let's do a deep dive on "${topic.name}" (${pillar.name}). Start by explaining the core concept and internal workings, then cover key use cases, tradeoffs, scaling strategies, and the most common interview gotchas. Ask me questions to test my understanding as we go.`
-}
-
-/**
  * LearningTodo — smart to-do list showing unfilled guide sections.
  * Shows progress per pillar/topic and lets users start focused study sessions.
  *
@@ -107,8 +99,7 @@ export default function LearningTodo({ onStudyTopic }) {
               cursor: 'pointer',
             }}
             onClick={() => {
-              const prompt = buildStudyPrompt(suggestedPillar, suggestedTopic)
-              onStudyTopic?.(suggestedPillar, suggestedTopic, prompt)
+              onStudyTopic?.(suggestedPillar, suggestedTopic)
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', marginBottom: 'var(--space-1)' }}>
@@ -194,8 +185,7 @@ export default function LearningTodo({ onStudyTopic }) {
                           <div
                             className="todo-topic-row"
                             onClick={() => {
-                              const prompt = buildStudyPrompt(pillar, topic)
-                              onStudyTopic?.(pillar, topic, prompt)
+                              onStudyTopic?.(pillar, topic)
                             }}
                           >
                             <div style={{ flexShrink: 0, marginTop: 1 }}>

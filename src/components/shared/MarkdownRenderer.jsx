@@ -78,6 +78,7 @@ export default function MarkdownRenderer({ content, className = '' }) {
             return <div className="code-block-wrapper" style={{ position: 'relative', margin: '1em 0' }}><pre style={{ margin: 0, padding: 0 }} {...rest} /></div>
           },
           code(props) {
+            // eslint-disable-next-line no-unused-vars
             const { className, children, node, ...rest } = props;
             const match = /language-(\w+)/.exec(className || '')
             const codeString = String(children).replace(/\n$/, '')

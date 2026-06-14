@@ -243,10 +243,10 @@ function SessionPicker({ sessions, currentId, onSelect, onCreate, onRename, onDe
  * LearningChat — full-page AI chat with named, per-session history.
  * Sessions are persisted in localStorage.
  *
- * @param {string|null} seedPrompt - Fires this prompt on mount/change (from to-do clicks)
+ * @param {Object|null} activeTopic - {pillar, topic} from LearningTodo. Fetches dynamic starters.
  * @param {Function} onCommitClick - Called with current session messages
  */
-export default function LearningChat({ seedPrompt, onCommitClick }) {
+export default function LearningChat({ activeTopic, onCommitClick }) {
   const apiKeyConfigured = useAppStore((s) => s.apiKeyConfigured)
   const selectedModel = useAppStore((s) => s.model)
   const addToast = useAppStore((s) => s.addToast)
@@ -280,10 +280,17 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
   const [isLoading, setIsLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState(null)
 
+  const [starters, setStarters] = useState(STARTER_PROMPTS)
+  const [loadingStarters, setLoadingStarters] = useState(false)
+
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
-  const seedFiredRef = useRef(null) // track which seed prompt has been fired
   const abortControllerRef = useRef(null)
+
+  const currentIdRef = useRef(currentId)
+  useEffect(() => { currentIdRef.current = currentId }, [currentId])
+  const sessionsRef = useRef(sessions)
+  useEffect(() => { sessionsRef.current = sessions }, [sessions])
 
   // Persist sessions whenever they change
   useEffect(() => { saveSessions(sessions) }, [sessions])
@@ -362,15 +369,41 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
      
   }, [input, isLoading, messages, selectedModel, setMessages])
 
-  // Fire seed prompt when it changes (from to-do panel clicks)
+  // Handle activeTopic changes (from to-do panel clicks)
   useEffect(() => {
-    if (seedPrompt && seedPrompt !== seedFiredRef.current && !isLoading) {
-      seedFiredRef.current = seedPrompt
-      const t = setTimeout(() => handleSend(seedPrompt), 150)
-      return () => clearTimeout(t)
+    if (!activeTopic) {
+      setTimeout(() => setStarters(STARTER_PROMPTS), 0)
+      return
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [seedPrompt])
+
+    const currId = currentIdRef.current
+    const session = sessionsRef.current[currId]
+
+    // Switch to a fresh session for this topic if the current one is in use
+    setTimeout(() => {
+      if (session && session.messages.length > 0) {
+        const s = makeSession(`Study: ${activeTopic.topic.name}`)
+        setSessions((prev) => ({ ...prev, [s.id]: s }))
+        setCurrentId(s.id)
+      } else if (session) {
+        setSessions((prev) => ({ ...prev, [currId]: { ...session, name: `Study: ${activeTopic.topic.name}` } }))
+      }
+    }, 0)
+
+    let active = true
+    setTimeout(() => setLoadingStarters(true), 0)
+    fetch(`/api/chat/starters?pillarId=${activeTopic.pillar.id}&topicId=${activeTopic.topic.id}&topicName=${encodeURIComponent(activeTopic.topic.name)}&model=${selectedModel}`)
+      .then(res => res.json())
+      .then(data => {
+        if (active && data.suggestions) {
+          setStarters(data.suggestions)
+        }
+      })
+      .catch(err => console.error('Failed to fetch starters', err))
+      .finally(() => { if (active) setLoadingStarters(false) })
+
+    return () => { active = false }
+  }, [activeTopic, selectedModel])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
@@ -517,9 +550,20 @@ export default function LearningChat({ seedPrompt, onCommitClick }) {
 
             {apiKeyConfigured && (
               <div className="learning-starter-prompts">
-                {STARTER_PROMPTS.map((p, i) => (
-                  <button key={i} className="learning-starter-btn" onClick={() => handleSend(p)}>{p}</button>
-                ))}
+                {loadingStarters ? (
+                  Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="learning-starter-btn" style={{ 
+                      height: '36px', 
+                      background: 'var(--color-bg-hover)', 
+                      animation: 'pulse 1.5s ease-in-out infinite',
+                      border: '1px solid transparent'
+                    }} />
+                  ))
+                ) : (
+                  starters.map((p, i) => (
+                    <button key={i} className="learning-starter-btn" onClick={() => handleSend(p)}>{p}</button>
+                  ))
+                )}
               </div>
             )}
           </div>

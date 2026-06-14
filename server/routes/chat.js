@@ -1,7 +1,103 @@
 import { Router } from 'express'
+import crypto from 'crypto'
 import db from '../db.js'
 
 const router = Router()
+
+/**
+ * GET /api/chat/starters
+ * Generate dynamic chat starters based on a specific topic's guide content.
+ * Query: ?pillarId=X&topicId=Y&topicName=Z&model=gemini-3.5-flash
+ */
+router.get('/starters', async (req, res) => {
+  const { pillarId, topicId, topicName, model: requestedModel } = req.query
+
+  if (!pillarId || !topicId) {
+    return res.status(400).json({ message: 'pillarId and topicId are required' })
+  }
+
+  try {
+    // 1. Fetch current guide content for this topic
+    const rows = db.prepare('SELECT content FROM guide_content WHERE pillar_id = ? AND topic_id = ?').all(pillarId, topicId)
+    const combinedContent = rows.map(r => r.content).join('\n')
+    
+    // 2. Compute a simple hash
+    const contentHash = crypto.createHash('md5').update(combinedContent).digest('hex')
+
+    // 3. Check cache
+    const cached = db.prepare('SELECT suggestions, content_hash FROM chat_starters WHERE pillar_id = ? AND topic_id = ?').get(pillarId, topicId)
+    
+    if (cached && cached.content_hash === contentHash && cached.suggestions !== '[]') {
+      try {
+        const parsed = JSON.parse(cached.suggestions)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return res.json({ suggestions: parsed })
+        }
+      } catch {
+        // Cache invalid, fall through to regenerate
+      }
+    }
+
+    // 4. Cache missing or stale — generate new ones
+    const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
+    if (!config?.value) {
+      return res.status(400).json({ message: 'API key not configured.' })
+    }
+
+    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(config.value)
+    const model = genAI.getGenerativeModel({
+      model: requestedModel || 'gemini-3.5-flash',
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: SchemaType.ARRAY,
+          items: {
+            type: SchemaType.STRING,
+          },
+          description: "An array of exactly 3 to 4 short, engaging study questions for the user to ask the AI."
+        }
+      }
+    })
+
+    const prompt = combinedContent.trim() ? 
+      `The user has been taking notes on the topic "${topicName || topicId}". 
+Based ONLY on these notes, generate 3 to 4 specific, challenging questions the user could ask you (the AI tutor) to dive deeper, test their knowledge, or clarify something complex.
+Format as short questions (e.g. "Can you quiz me on [X]?", "Why did we choose [Y] over [Z]?").
+User Notes:
+${combinedContent}`
+      :
+      `The user is about to start studying the topic "${topicName || topicId}".
+Generate 3 to 4 engaging starter questions they could ask you to begin the study session (e.g. "What is [X] and why is it used?", "Explain [X] to me like I'm 5.").`
+
+    const result = await model.generateContent(prompt)
+    let suggestionsText = result.response.text()
+    
+    // Validate JSON
+    let parsedSuggestions = []
+    try {
+      parsedSuggestions = JSON.parse(suggestionsText)
+    } catch {
+      parsedSuggestions = ["Let's do a deep dive on this topic", "Test my knowledge on this topic"]
+      suggestionsText = JSON.stringify(parsedSuggestions)
+    }
+
+    // Save to DB
+    db.prepare(`
+      INSERT INTO chat_starters (pillar_id, topic_id, suggestions, content_hash, updated_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(pillar_id, topic_id) DO UPDATE SET 
+        suggestions = excluded.suggestions,
+        content_hash = excluded.content_hash,
+        updated_at = excluded.updated_at
+    `).run(pillarId, topicId, JSON.stringify(parsedSuggestions), contentHash)
+
+    res.json({ suggestions: parsedSuggestions })
+  } catch (err) {
+    console.error('[chat/starters] Error:', err.message)
+    res.status(500).json({ message: 'Failed to generate starters.' })
+  }
+})
 
 /**
  * POST /api/chat
