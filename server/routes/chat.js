@@ -64,7 +64,8 @@ router.get('/starters', async (req, res) => {
       try {
         const parsed = JSON.parse(cached.suggestions)
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return res.json({ suggestions: parsed })
+          const shuffled = [...parsed].sort(() => 0.5 - Math.random())
+          return res.json({ suggestions: shuffled.slice(0, 4) })
         }
       } catch {
         // Cache invalid, fall through to regenerate
@@ -88,7 +89,7 @@ router.get('/starters', async (req, res) => {
           items: {
             type: SchemaType.STRING,
           },
-          description: "An array of exactly 3 to 4 short, engaging study questions for the user to ask the AI."
+          description: "An array of 12 to 15 short, engaging study questions for the user to ask the AI."
         }
       }
     })
@@ -108,7 +109,7 @@ ${missingSections.length > 0 ? missingSections.map(s => `- ${s.name}`).join('\n'
 User Profile / Shadow Memory (tailor your suggestions if this is relevant):
 ${userProfile || "No profile available yet."}
 
-Based on this state, generate 3 to 4 highly targeted starter questions the user could click to continue their study session.
+Based on this state, generate 12 to 15 highly targeted starter questions the user could click to continue their study session.
 - If they have covered some sections, suggest questions that bridge the gap to the missing sections, or challenge their understanding of what they've written.
 - If they are starting fresh, suggest questions to tackle the most important introductory sections.
 - Tailor the questions to their user profile if relevant (e.g. focusing on their weak points or upcoming interviews).
@@ -127,7 +128,7 @@ Based on this state, generate 3 to 4 highly targeted starter questions the user 
       suggestionsText = JSON.stringify(parsedSuggestions)
     }
 
-    // Save to DB
+    // Save to DB (save all generated prompts)
     db.prepare(`
       INSERT INTO chat_starters (pillar_id, topic_id, suggestions, content_hash, updated_at)
       VALUES (?, ?, ?, ?, datetime('now'))
@@ -137,7 +138,9 @@ Based on this state, generate 3 to 4 highly targeted starter questions the user 
         updated_at = excluded.updated_at
     `).run(pillarId, topicId, JSON.stringify(parsedSuggestions), contentHash)
 
-    res.json({ suggestions: parsedSuggestions })
+    // Return a random selection of 4 prompts
+    const shuffled = [...parsedSuggestions].sort(() => 0.5 - Math.random())
+    res.json({ suggestions: shuffled.slice(0, 4) })
   } catch (err) {
     console.error('[chat/starters] Error:', err.message)
     res.status(500).json({ message: 'Failed to generate starters.' })

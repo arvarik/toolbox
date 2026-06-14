@@ -392,7 +392,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
     let active = true
     setTimeout(() => setLoadingStarters(true), 0)
-    fetch(`/api/chat/starters?pillarId=${activeTopic.pillar.id}&topicId=${activeTopic.topic.id}&topicName=${encodeURIComponent(activeTopic.topic.name)}&model=${selectedModel}`)
+    fetch(`/api/chat/starters?pillarId=${activeTopic.pillar.id}&topicId=${activeTopic.topic.id}&topicName=${encodeURIComponent(activeTopic.topic.name)}&model=${selectedModel}`, { cache: 'no-store' })
       .then(res => res.json())
       .then(data => {
         if (active && data.suggestions) {
