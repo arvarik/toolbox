@@ -13,6 +13,7 @@ import {
   Timer
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
+import PomodoroWidget from './PomodoroWidget'
 
 const navItems = [
   {
@@ -24,7 +25,6 @@ const navItems = [
       { to: '/study', icon: GraduationCap, label: 'Flashcards', shortcut: '⌘4' },
       { to: '/feynman', icon: BrainCircuit, label: 'Feynman', shortcut: '⌘5' },
       { to: '/interleaved', icon: Shuffle, label: 'Interleaved', shortcut: '⌘6' },
-      { to: '/flow', icon: Timer, label: 'Flow', shortcut: '⌘7' },
     ],
   },
 ]
@@ -115,6 +115,9 @@ export default function Sidebar() {
             </select>
           </div>
         )}
+
+        {/* Pomodoro Widget */}
+        <PomodoroWidget />
 
         {/* Bottom nav items */}
         {bottomItems.map((item) => {

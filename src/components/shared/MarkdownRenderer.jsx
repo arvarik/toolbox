@@ -78,19 +78,13 @@ export default function MarkdownRenderer({ content, className = '' }) {
             return <div className="code-block-wrapper" style={{ position: 'relative', margin: '1em 0' }}><pre style={{ margin: 0, padding: 0 }} {...rest} /></div>
           },
           code(props) {
-            const rest = { ...props };
-            const inline = rest.inline;
-            const className = rest.className;
-            const children = rest.children;
-            delete rest.node;
-            delete rest.inline;
-            
+            const { className, children, node, ...rest } = props;
             const match = /language-(\w+)/.exec(className || '')
             const codeString = String(children).replace(/\n$/, '')
             
-            if (!inline && match) {
+            if (match) {
               return (
-                <>
+                <div style={{ position: 'relative', margin: '1em 0' }}>
                   <CodeCopyButton text={codeString} />
                   <div data-testid="markdown-code">
                     <SyntaxHighlighter
@@ -108,35 +102,10 @@ export default function MarkdownRenderer({ content, className = '' }) {
                       {codeString}
                     </SyntaxHighlighter>
                   </div>
-                </>
+                </div>
               )
             }
             
-            if (!inline && !match) {
-               // Fallback for code blocks without language
-               return (
-                <>
-                  <CodeCopyButton text={codeString} />
-                  <div data-testid="markdown-code">
-                    <SyntaxHighlighter
-                      {...rest}
-                      style={vscDarkPlus}
-                      language="text"
-                      PreTag="div"
-                      customStyle={{
-                        margin: 0,
-                        borderRadius: 'var(--radius-md, 8px)',
-                        padding: '1em',
-                        fontSize: '0.9em',
-                      }}
-                    >
-                      {codeString}
-                    </SyntaxHighlighter>
-                  </div>
-                </>
-               )
-            }
-
             return (
               <code data-testid="markdown-code" className={className} {...rest} style={{ 
                 background: 'var(--color-bg-tertiary, rgba(0,0,0,0.05))',
@@ -161,7 +130,9 @@ export default function MarkdownRenderer({ content, className = '' }) {
             )
           },
           th: (props) => { const rest = { ...props }; delete rest.node; return <th style={{ borderBottom: '2px solid var(--color-border)', padding: '8px', textAlign: 'left' }} {...rest} /> },
-          td: (props) => { const rest = { ...props }; delete rest.node; return <td style={{ borderBottom: '1px solid var(--color-border)', padding: '8px' }} {...rest} /> }
+          td: (props) => { const rest = { ...props }; delete rest.node; return <td style={{ borderBottom: '1px solid var(--color-border)', padding: '8px' }} {...rest} /> },
+          // Use <div> instead of <p> to prevent invalid nesting when code blocks appear inside paragraphs
+          p: (props) => { const rest = { ...props }; delete rest.node; return <div style={{ marginBottom: '0.75em', lineHeight: '1.7' }} {...rest} /> },
         }}
       >
         {content}

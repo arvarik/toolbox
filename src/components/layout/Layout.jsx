@@ -9,6 +9,7 @@ import ToastContainer from '../shared/ToastContainer'
 import ErrorBoundary from '../shared/ErrorBoundary'
 import SearchDialog from '../shared/SearchDialog'
 import useAppStore from '../../stores/appStore'
+import useTimerStore from '../../stores/useTimerStore'
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts'
 import { configApi } from '../../utils/api'
 
@@ -18,6 +19,35 @@ export default function Layout() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const setApiKeyConfigured = useAppStore((s) => s.setApiKeyConfigured)
+  const addToast = useAppStore((s) => s.addToast)
+
+  // Pomodoro timer state
+  const tick = useTimerStore((s) => s.tick)
+  const status = useTimerStore((s) => s.status)
+  const isStrictMode = useTimerStore((s) => s.isStrictMode)
+  const killPlant = useTimerStore((s) => s.killPlant)
+
+  // Timer Tick
+  useEffect(() => {
+    if (status !== 'running') return
+    const interval = setInterval(tick, 1000)
+    return () => clearInterval(interval)
+  }, [status, tick])
+
+  // Strict Mode Visibility
+  useEffect(() => {
+    if (status !== 'running' || !isStrictMode) return
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        killPlant()
+        addToast({ type: 'error', message: 'You left the app! Your Focus Plant died.' })
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [status, isStrictMode, killPlant, addToast])
 
   // Global keyboard shortcuts
   useKeyboardShortcuts()

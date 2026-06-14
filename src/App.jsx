@@ -8,7 +8,6 @@ import StudyPage from './pages/StudyPage'
 import SettingsPage from './pages/SettingsPage'
 import FeynmanPage from './pages/FeynmanPage'
 import InterleavedPage from './pages/InterleavedPage'
-import FlowPage from './pages/FlowPage'
 import { processSyncQueue } from './utils/db'
 
 export default function App() {
@@ -40,7 +39,6 @@ export default function App() {
         <Route path="/study" element={<StudyPage />} />
         <Route path="/feynman" element={<FeynmanPage />} />
         <Route path="/interleaved" element={<InterleavedPage />} />
-        <Route path="/flow" element={<FlowPage />} />
         <Route path="/settings" element={<SettingsPage />} />
       </Route>
     </Routes>

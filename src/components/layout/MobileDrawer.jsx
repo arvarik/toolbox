@@ -1,5 +1,6 @@
-import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, Timer } from 'lucide-react'
+import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
+import PomodoroWidget from './PomodoroWidget'
 
 const navItems = [
   { to: '/guide', icon: BookOpen, label: 'Guide' },
@@ -7,7 +8,6 @@ const navItems = [
   { to: '/study', icon: GraduationCap, label: 'Flashcards' },
   { to: '/feynman', icon: BrainCircuit, label: 'Feynman' },
   { to: '/interleaved', icon: Shuffle, label: 'Interleaved' },
-  { to: '/flow', icon: Timer, label: 'Flow' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
@@ -54,6 +54,10 @@ export default function MobileDrawer({ open, onClose }) {
               </NavLink>
             )
           })}
+          
+          <div style={{ marginTop: 'var(--space-4)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--color-border)' }}>
+            <PomodoroWidget />
+          </div>
         </nav>
       </div>
     </div>

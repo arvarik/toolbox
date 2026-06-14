@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { MessageSquare, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, Timer } from 'lucide-react'
+import { MessageSquare, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle } from 'lucide-react'
 
 const navItems = [
   { to: '/chat', icon: MessageSquare, label: 'Chat' },
@@ -8,7 +8,6 @@ const navItems = [
   { to: '/study', icon: GraduationCap, label: 'Cards' },
   { to: '/feynman', icon: BrainCircuit, label: 'Feynman' },
   { to: '/interleaved', icon: Shuffle, label: 'Mixed' },
-  { to: '/flow', icon: Timer, label: 'Flow' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 

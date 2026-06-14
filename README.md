@@ -7,6 +7,7 @@ A self-hosted web application for preparing for software engineering system desi
 - **📖 Guide** — Structured study material organized by 5 pillars covering compute, storage, protocols, observability, and architectural paradigms. Each topic follows a consistent blueprint with AI-powered Q&A.
 - **🎨 Interactive Builder** — Whiteboard canvas with a toolbox of system components. Drag, drop, and connect components to practice architecture design. AI verification to check your work.
 - **📚 Flashcards** — Create, edit, and study flashcard decks. AI-powered card generation from topic descriptions. Flip-card UI with shuffle and progress tracking.
+- **🍅 Pomodoro Timer** — Integrated focus timer in the sidebar with focus plant gamification. Work and break modes track your sessions globally as you study.
 - **⚙️ Settings** — Configure your Gemini API key, export/import data, and manage preferences.
 
 ## Tech Stack
