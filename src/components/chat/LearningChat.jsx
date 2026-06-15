@@ -89,7 +89,7 @@ const PERSONAS = {
   },
   gordon: {
     id: 'gordon',
-    name: 'Gordon Ramsay (Strict)',
+    name: 'Strict',
     icon: '🔥',
     context: 'You are a highly demanding, intense, and strict engineering manager. You speak directly, concisely, and with a sense of urgency. You do not tolerate fluff or buzzwords. Point out flaws in the user\'s reasoning immediately, demand precision, but remain deeply educational and ensure they actually learn the right way to build systems.'
   },
@@ -360,10 +360,9 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
   const [currentId, setCurrentId] = useState(() => {
     const saved = loadCurrentId()
-    const all = loadSessions()
-    if (saved && all[saved]) return saved
+    if (saved && sessions[saved]) return saved
     // Fall back to most recent session
-    const ids = Object.keys(all).sort((a, b) => new Date(all[b]?.createdAt) - new Date(all[a]?.createdAt))
+    const ids = Object.keys(sessions).sort((a, b) => new Date(sessions[b]?.createdAt) - new Date(sessions[a]?.createdAt))
     return ids[0] || null
   })
 

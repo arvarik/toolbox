@@ -9,6 +9,12 @@ mermaid.initialize({
   fontFamily: 'Inter, system-ui, sans-serif'
 })
 
+/**
+ * @component MermaidRenderer
+ * @description Renders a mermaid.js flowchart from raw syntax. Handles parsing errors and provides expand/collapse functionality.
+ * @param {Object} props
+ * @param {string} props.chart - The raw mermaid diagram syntax string.
+ */
 export default function MermaidRenderer({ chart }) {
   const containerRef = useRef(null)
   const [svgContent, setSvgContent] = useState('')

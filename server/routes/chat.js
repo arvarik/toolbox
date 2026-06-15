@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import db from '../db.js'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../src/utils/constants.js'
 import logger from '../utils/logger.js'
+import { generateEmbedding, cosineSimilarity } from '../utils/embeddings.js'
 
 const router = Router()
 
@@ -284,48 +285,78 @@ router.post('/stream', async (req, res) => {
       ]
     }];
 
-    // ─── 1. Memory Compaction ───────────────────────────────────────────────
-    let compactedHistory = history;
-    let memorySummary = "";
+    // ─── 1. Infinite Working Memory (No Compaction) ─────────────────────────
+    // We do NOT compact memory. We pass the full history.
+    const fullHistory = history;
 
-    if (history.length > 8) {
-      res.write(`data: ${JSON.stringify({ tool: 'Compacting Memory...' })}\n\n`)
-      
-      const oldMessages = history.slice(0, history.length - 4);
-      compactedHistory = history.slice(history.length - 4);
-      
-      const summaryModel = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' })
-      const summaryPrompt = `Summarize this chat history into a dense "Working Memory Summary" of key concepts discussed, the user's current understanding, and any unresolved issues. Keep it under 150 words.\n\nHistory:\n${oldMessages.map(m => `${m.role}: ${m.content}`).join('\n')}`;
-      
-      const summaryResult = await summaryModel.generateContent(summaryPrompt);
-      memorySummary = `\n\n--- WORKING MEMORY SUMMARY ---\n${summaryResult.response.text()}\n------------------------------\n`;
-    }
-
-    // ─── 2. Dynamic Context ─────────────────────────────────────────────────
-    // Get some quick stats
-    const statsRow = db.prepare("SELECT COUNT(*) as c FROM flashcards WHERE state < 2").get()
-    const struggling = statsRow?.c || 0;
+    // Fetch all flashcards and guide notes to build the ultimate context
+    const allFlashcards = db.prepare("SELECT id, front, back, state, interval FROM flashcards").all();
+    const allGuides = db.prepare("SELECT section_id, content FROM guide_content WHERE content != ''").all();
     
+    let globalKnowledgeContext = `\n\n--- GLOBAL FLASHCARD DATABASE ---\n`;
+    allFlashcards.forEach(f => {
+      globalKnowledgeContext += `Card [${f.id}]: Q: ${f.front} | A: ${f.back} (State: ${f.state}, Interval: ${f.interval})\n`;
+    });
+    globalKnowledgeContext += `\n--- GLOBAL GUIDE NOTES ---\n`;
+    allGuides.forEach(g => {
+      globalKnowledgeContext += `Section [${g.section_id}]: ${g.content}\n`;
+    });
+
+    // ─── 2. Autonomous Episodic Memory Injection ────────────────────────────
     const profileRow = db.prepare("SELECT profile_text FROM user_profile WHERE id = 1").get();
     const userProfile = profileRow?.profile_text || "";
+
+    // Semantic search for episodic memories related to current message
+    const msgEmbedding = await generateEmbedding(message);
+    const episodes = db.prepare("SELECT memory_text, embedding FROM episodic_memory ORDER BY created_at DESC").all();
+    
+    let topEpisodes = [];
+    if (msgEmbedding.length > 0) {
+      const scored = episodes.map(ep => {
+        let sim = 0;
+        try {
+          const epEmb = JSON.parse(ep.embedding);
+          sim = cosineSimilarity(msgEmbedding, epEmb);
+        } catch (e) { void e; }
+        return { text: ep.memory_text, sim };
+      }).sort((a, b) => b.sim - a.sim);
+      topEpisodes = scored.slice(0, 5).map(e => e.text);
+    }
 
     let systemContext = context
       ? `You are an expert system design interview tutor. Context: ${context}\n\n`
       : 'You are an expert system design interview tutor helping a student prepare for system design interviews.\n\n';
       
-    systemContext += `\n[Global Stats: User has ${struggling} cards in learning state (not yet mastered).]`;
     if (userProfile) {
       systemContext += `\n\n[Shadow Memory / User Profile]:\n${userProfile}`;
     }
-    if (memorySummary) systemContext += memorySummary;
+    if (topEpisodes.length > 0) {
+      systemContext += `\n\n[Relevant Past Learning Episodes]:\n` + topEpisodes.map(t => `- ${t}`).join('\n');
+    }
+    
+    // Append the massive knowledge base
+    systemContext += globalKnowledgeContext;
 
-    const model = genAI.getGenerativeModel({ 
-      model: requestedModel || 'gemini-3.5-flash',
-      tools: tools,
-      systemInstruction: systemContext
-    })
+    let model;
+    try {
+      const { GoogleAICacheManager } = await import('@google/generative-ai/server');
+      const cacheManager = new GoogleAICacheManager(config.value);
+      const cache = await cacheManager.create({
+        model: 'models/' + (requestedModel || 'gemini-3.5-flash'),
+        contents: [{ role: 'user', parts: [{ text: systemContext }] }],
+        ttlSeconds: 600
+      });
+      model = genAI.getGenerativeModelFromCachedContent(cache, { tools: tools });
+    } catch (cacheErr) {
+      logger.warn(`[chat/stream] Context caching skipped or failed (${cacheErr.message}). Falling back to standard model init.`);
+      model = genAI.getGenerativeModel({ 
+        model: requestedModel || 'gemini-3.5-flash',
+        tools: tools,
+        systemInstruction: systemContext
+      });
+    }
 
-    const chatHistory = compactedHistory.map((msg) => ({
+    const chatHistory = fullHistory.map((msg) => ({
       role: msg.role === 'ai' ? 'model' : 'user',
       parts: [{ text: msg.content }],
     }))
@@ -367,12 +398,40 @@ router.post('/stream', async (req, res) => {
             let toolResult = null;
             if (fnName === 'search_flashcards') {
               const q = args.query || '';
-              const rows = db.prepare("SELECT front, back, state, ease_factor FROM flashcards WHERE front LIKE ? OR back LIKE ? LIMIT 5").all(`%${q}%`, `%${q}%`);
-              toolResult = rows.length > 0 ? rows : "No flashcards found.";
+              const qEmb = await generateEmbedding(q);
+              const rows = db.prepare("SELECT front, back, state, ease_factor, embedding FROM flashcards").all();
+              
+              if (qEmb.length > 0) {
+                const scored = rows.map(r => {
+                  let sim = 0;
+                  try {
+                    if (r.embedding) sim = cosineSimilarity(qEmb, JSON.parse(r.embedding));
+                  } catch (e) { void e; }
+                  return { ...r, sim };
+                }).sort((a, b) => b.sim - a.sim);
+                toolResult = scored.slice(0, 5).map(r => ({ front: r.front, back: r.back, state: r.state, ease_factor: r.ease_factor }));
+              } else {
+                toolResult = rows.slice(0, 5);
+              }
+              if (!toolResult.length) toolResult = "No flashcards found.";
             } else if (fnName === 'search_guide') {
               const q = args.query || '';
-              const rows = db.prepare("SELECT content FROM guide_content WHERE content LIKE ? LIMIT 3").all(`%${q}%`);
-              toolResult = rows.length > 0 ? rows.map(r => r.content) : "No guide content found.";
+              const qEmb = await generateEmbedding(q);
+              const rows = db.prepare("SELECT content, embedding FROM guide_content").all();
+              
+              if (qEmb.length > 0) {
+                const scored = rows.map(r => {
+                  let sim = 0;
+                  try {
+                    if (r.embedding) sim = cosineSimilarity(qEmb, JSON.parse(r.embedding));
+                  } catch (e) { void e; }
+                  return { ...r, sim };
+                }).sort((a, b) => b.sim - a.sim);
+                toolResult = scored.slice(0, 3).map(r => r.content);
+              } else {
+                toolResult = rows.slice(0, 3).map(r => r.content);
+              }
+              if (!toolResult.length) toolResult = "No guide content found.";
             } else if (fnName === 'submit_draft') {
               const draft = args.draft_text || '';
               res.write(`data: ${JSON.stringify({ tool: 'Critic reviewing draft...' })}\n\n`);
@@ -415,31 +474,50 @@ router.post('/stream', async (req, res) => {
     res.write('data: [DONE]\n\n')
     res.end()
 
-    // ─── 4. Shadow Memory Extraction (Async) ────────────────────────────────
+    // ─── 4. Autonomous Memory Management (Antigravity Agent) ────────────────
     setTimeout(async () => {
       try {
-        if (chatHistory.length > 1) {
-          const extractionModel = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
-          const oldProfile = db.prepare("SELECT profile_text FROM user_profile WHERE id = 1").get()?.profile_text || "";
+        if (chatHistory.length > 0) {
+          const { GoogleGenAI } = await import('@google/genai');
+          const client = new GoogleGenAI({ apiKey: config.value });
           
-          const extractionPrompt = `You are a background profiler. Analyze the following chat history. Extract any hard facts about the user (e.g., their upcoming interviews, concepts they struggle with, preferences).
-Current Profile:
-${oldProfile}
+          const extractionPrompt = `You are the autonomous memory manager (antigravity agent) for this user.
+Analyze the following latest interaction. Extract ANY new, highly important episodic learning events (struggles, analogies that clicked, specific facts mastered).
+Only return events that are worth remembering long-term.
 
 Chat History:
 ${chatHistory.map(m => `${m.role}: ${m.parts[0].text}`).join('\n')}
 user: ${message}
 model: ${generatedText}
 
-Output a unified, updated profile text for this user. If there are no new facts, just output the Current Profile unchanged.`;
+Return JSON matching: { "events": [{ "memory_text": "string", "importance_score": 5 }] }`;
           
-          const extractResult = await extractionModel.generateContent(extractionPrompt);
-          const newProfile = extractResult.response.text().trim();
+          const extractResult = await client.interactions.create({
+            agent: 'antigravity-preview-05-2026',
+            input: extractionPrompt,
+            environment: 'remote'
+          });
           
-          db.prepare("INSERT INTO user_profile (id, profile_text, updated_at) VALUES (1, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET profile_text = excluded.profile_text, updated_at = excluded.updated_at").run(newProfile);
+          let data;
+          try {
+            const outText = extractResult.output_text;
+            const match = outText.match(/```(?:json)?\n([\s\S]*?)\n```/) || outText.match(/{[\s\S]*}/);
+            data = JSON.parse(match ? (match[1] || match[0]) : outText);
+          } catch(e) {
+            logger.error('[Memory Manager] JSON Parse error', e.message);
+          }
+          
+          if (data && data.events && data.events.length > 0) {
+            for (const ev of data.events) {
+              const emb = await generateEmbedding(ev.memory_text);
+              db.prepare("INSERT INTO episodic_memory (memory_text, importance_score, embedding, created_at) VALUES (?, ?, ?, datetime('now'))")
+                .run(ev.memory_text, ev.importance_score, JSON.stringify(emb));
+            }
+            logger.info(`[Memory Manager] Extracted ${data.events.length} episodic memories.`);
+          }
         }
       } catch (err) {
-        logger.error('[Shadow Memory] Error:', err.message);
+        logger.error('[Memory Manager] Error:', err.message);
       }
     }, 0);
   } catch (err) {
@@ -584,8 +662,12 @@ Evaluate their explanation.`
 })
 
 /**
- * POST /api/chat/concept-map
- * Generates a Mermaid concept map from a session history.
+ * @route POST /api/chat/concept-map
+ * @description Generates a Mermaid concept map from a session history.
+ * Pings Gemini to extract key concepts, entities, and relationships, returning a valid mermaid graph.
+ * @param {Object[]} req.body.history - Array of chat messages.
+ * @param {string} req.body.model - Gemini model to use.
+ * @returns {Object} JSON object with a 'response' containing the markdown block for mermaid code.
  */
 router.post('/concept-map', async (req, res) => {
   const { history = [], model: requestedModel } = req.body

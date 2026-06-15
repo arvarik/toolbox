@@ -90,6 +90,7 @@ vi.mock('../utils/api', () => {
         if (onChunk) onChunk(text)
         return text
       }),
+      generateConceptMap: vi.fn(() => Promise.resolve({ response: 'graph TD\nA-->B' })),
     },
     guideContentApi: {
       progress: vi.fn(() => Promise.resolve({})),

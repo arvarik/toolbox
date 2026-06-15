@@ -73,6 +73,7 @@ function migrate() {
       section_id  TEXT NOT NULL,
       content     TEXT DEFAULT '',
       committed_at TEXT DEFAULT (datetime('now')),
+      embedding TEXT DEFAULT NULL,
       PRIMARY KEY (pillar_id, topic_id, section_id)
     );
 
@@ -81,6 +82,15 @@ function migrate() {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       profile_text TEXT DEFAULT '',
       updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- Episodic Memory Stream
+    CREATE TABLE IF NOT EXISTS episodic_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      memory_text TEXT NOT NULL,
+      importance_score INTEGER DEFAULT 0,
+      embedding TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT (datetime('now'))
     );
 
     -- AI Generated Chat Starters
@@ -138,6 +148,19 @@ function migrate() {
   // Knowledge Prerequisites (additive — safe to re-run)
   try {
     db.exec(`ALTER TABLE flashcards ADD COLUMN prerequisite_id TEXT DEFAULT NULL`)
+  } catch {
+    // Column already exists
+  }
+
+  // Embeddings columns (additive — safe to re-run)
+  try {
+    db.exec(`ALTER TABLE flashcards ADD COLUMN embedding TEXT DEFAULT NULL`)
+  } catch {
+    // Column already exists
+  }
+  
+  try {
+    db.exec(`ALTER TABLE guide_content ADD COLUMN embedding TEXT DEFAULT NULL`)
   } catch {
     // Column already exists
   }
