@@ -10,6 +10,9 @@ import boardRoutes from './routes/boards.js'
 import chatRoutes from './routes/chat.js'
 import studySessionRoutes from './routes/study_sessions.js'
 import guideContentRoutes from './routes/guide_content.js'
+import profileRoutes from './routes/profile.js'
+import systemRoutes from './routes/system.js'
+import searchRoutes from './routes/search.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -29,6 +32,9 @@ app.use('/api/boards', boardRoutes)
 app.use('/api/chat', chatRoutes)
 app.use('/api/study_sessions', studySessionRoutes)
 app.use('/api/guide-content', guideContentRoutes)
+app.use('/api/profile', profileRoutes)
+app.use('/api/system', systemRoutes)
+app.use('/api/search', searchRoutes)
 
 // Health check
 app.get('/api/health', (req, res) => {

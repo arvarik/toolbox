@@ -217,4 +217,25 @@ export const guideContentApi = {
 
   /** Get a map of all filled section keys. Returns { 'pillarId__topicId__sectionId': true } */
   progress: () => request('/guide-content/progress'),
+
+  /** Get a download URL for the exported markdown file (Note: usually triggered via window.open, but here for completeness) */
+  exportUrl: () => `${API_BASE}/guide-content/export`,
+}
+
+/* ---- Profile ---- */
+export const profileApi = {
+  get: () => request('/profile'),
+  update: (profileText) => request('/profile', { method: 'PUT', body: { profileText } }),
+  clear: () => request('/profile', { method: 'DELETE' }),
+}
+
+/* ---- System ---- */
+export const systemApi = {
+  stats: () => request('/system/stats'),
+  clearCache: () => request('/system/clear-cache', { method: 'POST' }),
+}
+
+/* ---- Search ---- */
+export const searchApi = {
+  query: (q) => request(`/search?q=${encodeURIComponent(q)}`),
 }

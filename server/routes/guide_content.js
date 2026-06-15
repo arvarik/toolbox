@@ -1,7 +1,57 @@
 import { Router } from 'express'
 import db from '../db.js'
+import { PILLARS, BLUEPRINT_SECTIONS } from '../../src/utils/constants.js'
 
 const router = Router()
+
+/**
+ * GET /api/guide-content/export
+ * Exports all committed guide content as a single Markdown file.
+ */
+router.get('/export', (req, res) => {
+  try {
+    const rows = db.prepare(`
+      SELECT pillar_id, topic_id, section_id, content 
+      FROM guide_content 
+      WHERE content IS NOT NULL AND content != ''
+    `).all()
+
+    let markdown = '# Toolbox System Design Guide\\n\\n'
+
+    // Group by Pillar
+    for (const pillar of PILLARS) {
+      const pillarRows = rows.filter(r => r.pillar_id === pillar.id)
+      if (pillarRows.length === 0) continue
+
+      markdown += `## Pillar: ${pillar.name}\\n\\n`
+
+      // Group by Topic
+      for (const topic of pillar.topics) {
+        const topicRows = pillarRows.filter(r => r.topic_id === topic.id)
+        if (topicRows.length === 0) continue
+
+        markdown += `### Topic: ${topic.name}\\n\\n`
+
+        const blueprint = BLUEPRINT_SECTIONS[pillar.id] || []
+        
+        // Group by Section based on blueprint order
+        for (const section of blueprint) {
+          const row = topicRows.find(r => r.section_id === section.id)
+          if (row) {
+            markdown += `#### ${section.name}\\n\\n${row.content}\\n\\n`
+          }
+        }
+      }
+    }
+
+    res.setHeader('Content-Type', 'text/markdown')
+    res.setHeader('Content-Disposition', 'attachment; filename="system_design_guide.md"')
+    res.send(markdown)
+  } catch (err) {
+    console.error('[guide-content] Error exporting guide:', err.message)
+    res.status(500).json({ message: 'Failed to export guide' })
+  }
+})
 
 /**
  * GET /api/guide-content/progress
