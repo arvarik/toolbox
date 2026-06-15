@@ -61,11 +61,17 @@ docker run -d \
 
 ### Proxmox LXC Deployment
 
-1. Create a new LXC container (Debian/Ubuntu) with Docker installed
-2. Clone this repository into the container
-3. Copy `.env.example` to `.env` and set your `GEMINI_API_KEY`
-4. Run `docker compose up -d`
-5. Access via `http://<lxc-ip>:3100`
+1. Create a new LXC container (Debian/Ubuntu) with Docker installed.
+2. Clone this repository into the container.
+3. Copy `.env.example` to `.env` and set your `GEMINI_API_KEY`.
+4. Run `docker compose up -d`.
+5. Access via `http://<lxc-ip>:3100`.
+
+> [!NOTE]
+> **Proxmox/LXC Optimizations:**
+> - **IPv6 Loopback Workaround:** The health check uses `127.0.0.1` instead of `localhost` to prevent IPv6 DNS resolution issues typical in Alpine-based Docker containers running inside LXC.
+> - **Resource Constraints:** CPU (`0.5`) and memory limits (`512M`) are pre-configured in `docker-compose.yml` to prevent resource hogging on the host.
+> - **Watchtower Integration:** Pre-labeled for automatic updates using Centurylink Watchtower (`com.centurylinklabs.watchtower.enable=true`).
 
 > **Tip:** You can also set the API key through the Settings page in the UI after deployment.
 
