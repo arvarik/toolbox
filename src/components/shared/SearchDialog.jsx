@@ -2,6 +2,18 @@ import { useState, useEffect, useRef } from 'react'
 import { Search, X, ArrowRight } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { PILLARS } from '../../utils/constants'
+import { searchApi } from '../../utils/api'
+
+// Build default list from pillars
+const defaultTopics = PILLARS.flatMap((pillar) =>
+  pillar.topics.map((topic) => ({
+    id: topic.id,
+    name: topic.name,
+    pillarName: pillar.shortName,
+    pillarColor: pillar.color,
+    path: `/guide/${pillar.id}/${topic.id}`,
+  }))
+)
 
 /**
  * SearchDialog — command-palette-style search overlay for all guide topics.
@@ -13,32 +25,77 @@ export default function SearchDialog({ open, onClose }) {
   const inputRef = useRef(null)
   const navigate = useNavigate()
 
-  // Build flat searchable list from pillars
-  const allTopics = PILLARS.flatMap((pillar) =>
-    pillar.topics.map((topic) => ({
-      id: topic.id,
-      name: topic.name,
-      pillarId: pillar.id,
-      pillarName: pillar.shortName,
-      pillarColor: pillar.color,
-      path: `/guide/${pillar.id}/${topic.id}`,
-    }))
-  )
+  const [results, setResults] = useState([])
 
-  // Filter by query
-  const filtered = query.trim()
-    ? allTopics.filter(
-        (t) =>
-          t.name.toLowerCase().includes(query.toLowerCase()) ||
-          t.pillarName.toLowerCase().includes(query.toLowerCase())
-      )
-    : allTopics
+  // Fetch from global search API when query changes
+  useEffect(() => {
+    if (!query.trim()) {
+      const timer = setTimeout(() => setResults(defaultTopics), 0)
+      return () => clearTimeout(timer)
+    }
+
+    const fetchSearch = async () => {
+      try {
+        const res = await searchApi.query(query)
+        const combined = []
+
+        res.guideContent.forEach(item => {
+          combined.push({
+            id: `guide-${item.section_id}`,
+            name: item.section_id.replace(/-/g, ' '),
+            pillarName: `Guide Note: ${item.topic_id}`,
+            pillarColor: '#4f46e5',
+            path: `/guide/${item.pillar_id}/${item.topic_id}`
+          })
+        })
+
+        res.flashcards.forEach(item => {
+          combined.push({
+            id: `fc-${item.id}`,
+            name: item.front,
+            pillarName: `Flashcard (Deck ${item.deck_id})`,
+            pillarColor: '#34d399',
+            path: '/study'
+          })
+        })
+
+        res.boards.forEach(item => {
+          combined.push({
+            id: `board-${item.id}`,
+            name: item.name,
+            pillarName: 'Whiteboard',
+            pillarColor: '#fbbf24',
+            path: '/builder'
+          })
+        })
+
+        res.decks.forEach(item => {
+          combined.push({
+            id: `deck-${item.id}`,
+            name: item.name,
+            pillarName: 'Deck',
+            pillarColor: '#60a5fa',
+            path: '/study'
+          })
+        })
+
+        setResults(combined)
+        setSelectedIndex(0)
+      } catch (err) {
+        console.error('Search failed:', err)
+      }
+    }
+
+    const timer = setTimeout(fetchSearch, 150)
+    return () => clearTimeout(timer)
+  }, [query])
 
   // Focus input on open
   useEffect(() => {
     if (open) {
       setTimeout(() => {
         setQuery('')
+        setResults(defaultTopics)
         setSelectedIndex(0)
         inputRef.current?.focus()
       }, 50)
@@ -51,12 +108,12 @@ export default function SearchDialog({ open, onClose }) {
       onClose()
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setSelectedIndex((prev) => Math.min(prev + 1, filtered.length - 1))
+      setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setSelectedIndex((prev) => Math.max(prev - 1, 0))
-    } else if (e.key === 'Enter' && filtered[selectedIndex]) {
-      navigate(filtered[selectedIndex].path)
+    } else if (e.key === 'Enter' && results[selectedIndex]) {
+      navigate(results[selectedIndex].path)
       onClose()
     }
   }
@@ -95,12 +152,12 @@ export default function SearchDialog({ open, onClose }) {
 
         {/* Results */}
         <div className="search-bar-results">
-          {filtered.length === 0 ? (
+          {results.length === 0 ? (
             <div style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--color-text-tertiary)', fontSize: 'var(--text-sm)' }}>
-              No matching topics found.
+              No matching results found.
             </div>
           ) : (
-            filtered.map((topic, i) => (
+            results.map((topic, i) => (
               <button
                 key={topic.id}
                 className={`search-result-item${i === selectedIndex ? ' selected' : ''}`}
@@ -119,8 +176,8 @@ export default function SearchDialog({ open, onClose }) {
                     flexShrink: 0,
                   }}
                 />
-                <div style={{ flex: 1 }}>
-                  <div className="search-result-name">{topic.name}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="search-result-name" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{topic.name}</div>
                   <div className="search-result-pillar">{topic.pillarName}</div>
                 </div>
                 <ArrowRight size={12} style={{ color: 'var(--color-text-disabled)' }} />

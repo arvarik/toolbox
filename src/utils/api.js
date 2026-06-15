@@ -233,6 +233,7 @@ export const profileApi = {
 export const systemApi = {
   stats: () => request('/system/stats'),
   clearCache: () => request('/system/clear-cache', { method: 'POST' }),
+  exportDbUrl: () => `${API_BASE}/system/export-db`,
 }
 
 /* ---- Search ---- */

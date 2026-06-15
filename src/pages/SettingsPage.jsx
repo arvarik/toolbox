@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon } from 'lucide-react'
 import useAppStore from '../stores/appStore'
-import { configApi } from '../utils/api'
+import { configApi, systemApi, profileApi, guideContentApi } from '../utils/api'
 import Modal from '../components/shared/Modal'
 
 const AVAILABLE_MODELS = [
@@ -18,6 +18,9 @@ export default function SettingsPage() {
   const [isTesting, setIsTesting] = useState(false)
   const [keyStatus, setKeyStatus] = useState(apiKeyConfigured ? 'connected' : 'disconnected')
   const [showConfirmModal, setShowConfirmModal] = useState(false)
+  const [systemStats, setSystemStats] = useState(null)
+  const [profileText, setProfileText] = useState('')
+  const [isSavingProfile, setIsSavingProfile] = useState(false)
 
   // Check initial API key status on mount
   useEffect(() => {
@@ -27,6 +30,9 @@ export default function SettingsPage() {
         setKeyStatus('connected')
       }
     }).catch(() => {})
+
+    systemApi.stats().then(setSystemStats).catch(console.error)
+    profileApi.get().then(res => setProfileText(res.profileText || '')).catch(console.error)
   }, [setApiKeyConfigured])
 
   const handleSaveKey = async () => {
@@ -62,6 +68,33 @@ export default function SettingsPage() {
     } catch (err) {
       addToast({ type: 'error', message: err.message || 'Failed to remove API key' })
     }
+  }
+
+  const handleClearCache = async () => {
+    try {
+      await systemApi.clearCache()
+      addToast({ type: 'success', message: 'AI starter cache cleared successfully' })
+      systemApi.stats().then(setSystemStats).catch(console.error)
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to clear cache' })
+    }
+  }
+
+  const handleSaveProfile = async () => {
+    setIsSavingProfile(true)
+    try {
+      await profileApi.update(profileText)
+      addToast({ type: 'success', message: 'Shadow memory updated' })
+      systemApi.stats().then(setSystemStats).catch(console.error)
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to update shadow memory' })
+    } finally {
+      setIsSavingProfile(false)
+    }
+  }
+
+  const handleExportGuide = () => {
+    window.open(guideContentApi.exportUrl(), '_blank')
   }
 
   return (
@@ -147,6 +180,34 @@ export default function SettingsPage() {
 
         <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
 
+        {/* AI Shadow Memory */}
+        <div className="settings-section">
+          <h2 className="settings-section-title">AI Shadow Memory</h2>
+          <p className="settings-section-desc">
+            The AI learns facts about you over time (e.g., "Interviewing at Google in 2 weeks") to tailor its explanations. You can view or manually edit its memory here.
+          </p>
+
+          <textarea
+            className="input"
+            rows={5}
+            value={profileText}
+            onChange={(e) => setProfileText(e.target.value)}
+            placeholder="No profile data learned yet. You can manually type facts about yourself here..."
+            style={{ width: '100%', resize: 'vertical', marginTop: 'var(--space-3)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', lineHeight: 1.5 }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
+            <button
+              className="btn btn-primary"
+              onClick={handleSaveProfile}
+              disabled={isSavingProfile}
+            >
+              {isSavingProfile ? 'Saving...' : 'Save Memory'}
+            </button>
+          </div>
+        </div>
+
+        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+
         {/* Model Selection */}
         <div className="settings-section">
           <h2 className="settings-section-title">AI Model</h2>
@@ -215,6 +276,44 @@ export default function SettingsPage() {
 
         <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
 
+        {/* System Diagnostics */}
+        <div className="settings-section">
+          <h2 className="settings-section-title">System Diagnostics</h2>
+          <p className="settings-section-desc">
+            View database statistics and clear caches.
+          </p>
+
+          {systemStats && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 'var(--space-3)', marginTop: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
+              <div style={{ background: 'var(--color-bg-hover)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Guide Sections</div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>{systemStats.guideCount}</div>
+              </div>
+              <div style={{ background: 'var(--color-bg-hover)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Flashcards</div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>{systemStats.flashcardsCount}</div>
+              </div>
+              <div style={{ background: 'var(--color-bg-hover)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Whiteboards</div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>{systemStats.boardsCount}</div>
+              </div>
+              <div style={{ background: 'var(--color-bg-hover)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Cached AI Starters</div>
+                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>{systemStats.cachedStartersCount}</div>
+              </div>
+            </div>
+          )}
+
+          <button
+            className="btn btn-secondary"
+            onClick={handleClearCache}
+          >
+            Clear AI Starter Caches
+          </button>
+        </div>
+
+        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+
         {/* Data Management */}
         <div className="settings-section">
           <h2 className="settings-section-title">Data Management</h2>
@@ -223,7 +322,11 @@ export default function SettingsPage() {
           </p>
 
           <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
-            <button className="btn btn-secondary" id="export-data-btn">
+            <button className="btn btn-secondary" onClick={handleExportGuide}>
+              <Download size={14} />
+              Export Guide (.md)
+            </button>
+            <button className="btn btn-secondary" id="export-data-btn" onClick={() => window.open(systemApi.exportDbUrl(), '_blank')}>
               <Download size={14} />
               Export All Data
             </button>
@@ -233,7 +336,7 @@ export default function SettingsPage() {
             </button>
           </div>
           <p className="settings-help" style={{ marginTop: 'var(--space-3)' }}>
-            Data is exported as a JSON file containing all your decks, cards, and board configurations.
+            Guide notes are exported as a unified Markdown document. All data is exported as JSON.
           </p>
         </div>
 

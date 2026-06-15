@@ -45,4 +45,18 @@ router.post('/clear-cache', (req, res) => {
   }
 })
 
+/**
+ * GET /api/system/export-db
+ * Downloads the raw SQLite database file.
+ */
+router.get('/export-db', (req, res) => {
+  try {
+    const dbPath = process.env.DB_PATH || './data/toolbox.db'
+    res.download(dbPath, 'toolbox_backup.db')
+  } catch (err) {
+    console.error('[system] Error exporting db:', err.message)
+    res.status(500).json({ message: 'Failed to export database' })
+  }
+})
+
 export default router
