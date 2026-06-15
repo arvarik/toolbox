@@ -10,7 +10,8 @@
     "build": "vite build",
     "start": "NODE_ENV=production node server/index.js",
     "lint": "eslint .",
-    "test:run": "vitest run",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview"
   },
   "dependencies": {

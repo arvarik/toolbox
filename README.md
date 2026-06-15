@@ -1,105 +1,116 @@
-# 🧰 Toolbox — System Design Interview Study App
+<div align="center">
 
-A self-hosted web application for preparing for software engineering system design interviews. Built with React and Node.js, designed to run on your own infrastructure.
+# 🧰 Toolbox
 
-## Features
+**A self-hosted AI study hub for system design interviews**
 
-- **📖 Guide** — Structured study material organized by 5 pillars covering compute, storage, protocols, observability, and architectural paradigms. Each topic follows a consistent blueprint with AI-powered Q&A.
-- **🎨 Interactive Builder** — Whiteboard canvas with a toolbox of system components. Drag, drop, and connect components to practice architecture design. AI verification to check your work.
-- **📚 Flashcards** — Create, edit, and study flashcard decks. AI-powered card generation from topic descriptions. Flip-card UI with shuffle and progress tracking.
-- **🍅 Pomodoro Timer** — Integrated focus timer in the sidebar with focus plant gamification. Work and break modes track your sessions globally as you study.
-- **⚙️ Settings** — Configure your Gemini API key, export/import data, and manage preferences.
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://hub.docker.com)
+[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
-## Tech Stack
+</div>
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 19, Vite, React Router, Zustand |
-| Backend | Node.js, Express |
-| Database | SQLite (better-sqlite3) |
-| AI | Google Gemini API |
-| Deployment | Docker |
+![Toolbox Chat Interface](docs/screenshots/screenshot-chat.png)
 
-## Quick Start (Development)
+Toolbox is a self-hosted web app that brings together everything you need to prepare for system design interviews: an AI tutor, an editable knowledge library, a drag-and-drop architecture whiteboard, spaced-repetition flashcards, and a Pomodoro timer — all in one dark, focused interface.
+
+---
+
+## ✨ Features
+
+| Feature | Description |
+|---------|-------------|
+| 🤖 **AI Learning Chat** | Session-based chat with 4 AI personas (Socratic, ELI5, Strict, Devil's Advocate), topic-specific starter prompts, and concept map generation |
+| 📖 **Knowledge Guide** | 7-pillar structured library with AI-assisted Commit flow to save learnings from chat sessions |
+| 🎨 **Architecture Builder** | Drag-and-drop whiteboard with 20+ components, bezier connections, templates, and AI design verification |
+| 📚 **Flashcards + SRS** | SM-2 spaced repetition system with per-deck settings, card browser, deck stats, and a study activity heatmap |
+| 🧠 **Feynman Simulator** | Voice-enabled Feynman technique: explain a concept, get structured AI feedback on gaps |
+| 🔀 **Interleaved Review** | Study all due cards across every deck in a single shuffled session |
+| 🍅 **Pomodoro Timer** | Persistent focus timer with plant gamification (🌱→🌸→🥀) and Strict Mode |
+| ⚙️ **Shadow Memory** | The AI learns your timeline, strengths, and goals across sessions for personalized coaching |
+
+---
+
+## 📸 Screenshots
+
+<table>
+  <tr>
+    <td align="center"><em>Architecture Whiteboard Builder</em></td>
+    <td align="center"><em>Structured Knowledge Guide</em></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/screenshot-builder.png" alt="Architecture Builder" /></td>
+    <td><img src="docs/screenshots/screenshot-guide.png" alt="Knowledge Guide" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Spaced Repetition Flashcards</em></td>
+    <td align="center"><em>Feynman Technique Simulator</em></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/screenshot-flashcards.png" alt="Flashcards" /></td>
+    <td><img src="docs/screenshots/screenshot-feynman.png" alt="Feynman Simulator" /></td>
+  </tr>
+</table>
+
+---
+
+## 🚀 Quick Start
+
+### Docker Compose (Recommended)
 
 ```bash
-# Install dependencies
-npm install
-
-# Start development server (frontend + backend)
-npm run dev
-```
-
-Frontend runs at `http://localhost:5173`, backend API at `http://localhost:3100`.
-
-## Deployment (Docker)
-
-### Option 1: Docker Compose (Recommended)
-
-```bash
-# Clone and configure
+git clone https://github.com/arvarik/toolbox.git
+cd toolbox
 cp .env.example .env
-# Edit .env to add your GEMINI_API_KEY
-
-# Build and run
+# Add your GEMINI_API_KEY to .env (or configure via the Settings UI)
 docker compose up -d
-
-# Access at http://your-server:3100
 ```
 
-### Option 2: Docker Build
+Access at `http://your-server:3100`.
+
+> Get a free Gemini API key at [Google AI Studio](https://aistudio.google.com/apikey)
+
+### Local Development
 
 ```bash
-docker build -t toolbox .
-docker run -d \
-  --name toolbox \
-  -p 3100:3100 \
-  -v toolbox-data:/app/data \
-  -e GEMINI_API_KEY=your-key-here \
-  toolbox
+npm install
+npm run dev   # Vite (5173) + Express (3100)
 ```
 
-### Proxmox LXC Deployment
+---
 
-1. Create a new LXC container (Debian/Ubuntu) with Docker installed.
-2. Clone this repository into the container.
-3. Copy `.env.example` to `.env` and set your `GEMINI_API_KEY`.
-4. Run `docker compose up -d`.
-5. Access via `http://<lxc-ip>:3100`.
+## 📚 Documentation
 
-> [!NOTE]
-> **Proxmox/LXC Optimizations:**
-> - **IPv6 Loopback Workaround:** The health check uses `127.0.0.1` instead of `localhost` to prevent IPv6 DNS resolution issues typical in Alpine-based Docker containers running inside LXC.
-> - **Resource Constraints:** CPU (`0.5`) and memory limits (`512M`) are pre-configured in `docker-compose.yml` to prevent resource hogging on the host.
-> - **Watchtower Integration:** Pre-labeled for automatic updates using Centurylink Watchtower (`com.centurylinklabs.watchtower.enable=true`).
+| Document | Description |
+|----------|-------------|
+| [User Guide](docs/user-guide.md) | Complete guide to all features and workflows |
+| [API Reference](docs/api.md) | Full REST API — every endpoint, request/response shape |
+| [SRS Algorithm](docs/srs-algorithm.md) | SM-2 implementation, state machine, Hypercorrection Penalty |
+| [Deployment Guide](docs/deployment.md) | Docker, Proxmox LXC, Nginx/Caddy setup |
+| [Architecture](docs/architecture.md) | Tech stack, data model, AI integration |
+| [Design Reference](docs/design.md) | CSS design system, component patterns, motion guidelines |
+| [Agent Instructions](docs/AGENTS.md) | For AI coding agents — rules, patterns, gotchas |
+| [Contributing](CONTRIBUTING.md) | Dev setup, coding standards, PR process |
 
-> **Tip:** You can also set the API key through the Settings page in the UI after deployment.
+---
 
-## Configuration
+## ⚙️ Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3100` | Server port |
-| `DB_PATH` | `./data/toolbox.db` | SQLite database file path |
-| `GEMINI_API_KEY` | — | Google Gemini API key (can also be set via UI) |
+| `DB_PATH` | `./data/toolbox.db` | SQLite database path |
+| `GEMINI_API_KEY` | — | Gemini API key (can also be set via Settings UI) |
 
-## Project Structure
+All user data lives in a single SQLite file — back it up by copying that file.
 
-```
-toolbox/
-├── server/           # Express backend
-│   ├── index.js      # Server entry point
-│   ├── db.js         # SQLite setup & migrations
-│   └── routes/       # API route handlers
-├── src/              # React frontend
-│   ├── components/   # Reusable UI components
-│   ├── pages/        # Page-level components
-│   ├── stores/       # Zustand state management
-│   └── utils/        # Constants and API client
-├── Dockerfile        # Multi-stage Docker build
-└── docker-compose.yml
-```
+---
 
-## License
+## 🛠️ Tech Stack
+
+React 19 · Vite · React Router · Zustand · Vanilla CSS · Node.js · Express · SQLite (`better-sqlite3`) · Google Gemini API · Docker
+
+---
+
+## 📄 License
 
 MIT
