@@ -42,19 +42,17 @@ export default function PomodoroWidget() {
   return (
     <>
       <div 
-        className="sidebar-link" 
+        className={`sidebar-link ${isActive ? 'active' : ''}`}
         onClick={() => setIsModalOpen(true)}
         style={{ 
           cursor: 'pointer', 
-          borderLeft: isActive ? '3px solid var(--color-primary)' : '3px solid transparent',
-          backgroundColor: isActive ? 'var(--color-bg-tertiary)' : 'transparent',
           position: 'relative' // for the focus lost plant emoji
         }}
         title="Pomodoro Timer"
       >
         {/* Icon */}
         <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
-          <TimerIcon className="sidebar-link-icon" style={{ color: isActive ? 'var(--color-primary)' : 'inherit', opacity: isActive ? 1 : 0.7 }} />
+          <TimerIcon className="sidebar-link-icon" style={{ color: isActive ? 'var(--color-accent)' : 'inherit' }} />
           {collapsed && isActive && (
             <div style={{ position: 'absolute', bottom: -6, right: -6, fontSize: '10px' }}>
               {getPlantEmoji()}
@@ -64,7 +62,7 @@ export default function PomodoroWidget() {
 
         {/* Label */}
         <span className="sidebar-link-label" style={{ 
-          color: isActive ? 'var(--color-primary)' : 'inherit',
+          color: isActive ? 'var(--color-accent)' : 'inherit',
           display: 'flex',
           flexDirection: 'column',
           lineHeight: 1.2

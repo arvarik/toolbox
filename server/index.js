@@ -3,6 +3,7 @@ import express from 'express'
 import cors from 'cors'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import logger from './utils/logger.js'
 
 import configRoutes from './routes/config.js'
 import deckRoutes from './routes/decks.js'
@@ -57,12 +58,12 @@ if (isProduction) {
 // Error handler
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-  console.error('[server] Error:', err.message)
+  logger.error('[server] Error:', err.message)
   res.status(500).json({ message: 'Internal server error' })
 })
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n  🧰 Toolbox server running at http://localhost:${PORT}`)
-  console.log(`  📦 Mode: ${isProduction ? 'production' : 'development'}`)
-  console.log(`  💾 Database: ${process.env.DB_PATH || './data/toolbox.db'}\n`)
+  logger.info(`\n  🧰 Toolbox server running at http://localhost:${PORT}`)
+  logger.info(`  📦 Mode: ${isProduction ? 'production' : 'development'}`)
+  logger.info(`  💾 Database: ${process.env.DB_PATH || './data/toolbox.db'}\n`)
 })

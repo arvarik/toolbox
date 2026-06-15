@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import db from '../db.js'
+import logger from '../utils/logger.js'
 
 const router = Router()
 
@@ -26,7 +27,7 @@ router.get('/stats', (req, res) => {
       profileSize
     })
   } catch (err) {
-    console.error('[system] Error fetching stats:', err.message)
+    logger.error('[system] Error fetching stats:', err.message)
     res.status(500).json({ message: 'Failed to fetch system stats' })
   }
 })
@@ -40,7 +41,7 @@ router.post('/clear-cache', (req, res) => {
     db.prepare('DELETE FROM chat_starters').run()
     res.json({ success: true, message: 'AI Starter Cache cleared.' })
   } catch (err) {
-    console.error('[system] Error clearing cache:', err.message)
+    logger.error('[system] Error clearing cache:', err.message)
     res.status(500).json({ message: 'Failed to clear cache' })
   }
 })
@@ -54,7 +55,7 @@ router.get('/export-db', (req, res) => {
     const dbPath = process.env.DB_PATH || './data/toolbox.db'
     res.download(dbPath, 'toolbox_backup.db')
   } catch (err) {
-    console.error('[system] Error exporting db:', err.message)
+    logger.error('[system] Error exporting db:', err.message)
     res.status(500).json({ message: 'Failed to export database' })
   }
 })

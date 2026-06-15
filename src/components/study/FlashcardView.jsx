@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock, Keyboard } from 'lucide-react'
 import { flashcardsApi, chatApi } from '../../utils/api'
 import StudySessionSummary from './StudySessionSummary'
+import useAppStore from '../../stores/appStore'
 
 function getCurrentTime() {
   return Date.now()
@@ -101,6 +102,11 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
     try {
       // API call to update the card in database
       const updatedCardData = await flashcardsApi.review(targetDeckId, currentCard.id, quality, confidence)
+      
+      if (quality === 5 && !skipInterceptor) {
+        useAppStore.getState().triggerAhaMoment()
+      }
+
       const newReviewedCount = reviewedCount + 1
       setReviewedCount(newReviewedCount)
 
@@ -198,6 +204,7 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
       
       if (evaluation.pass) {
         setInterceptorActive(false)
+        useAppStore.getState().triggerAhaMoment()
         handleRate(interceptorQuality, true)
       } else {
         setInterceptorFeedback(evaluation.feedback || "Your explanation was incorrect or incomplete. Please review the material.")
@@ -206,6 +213,7 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
       console.error('Interceptor failed:', err)
       // On failure, gracefully fallback to accepting their rating so they aren't blocked
       setInterceptorActive(false)
+      useAppStore.getState().triggerAhaMoment()
       handleRate(interceptorQuality, true)
     } finally {
       setInterceptorLoading(false)

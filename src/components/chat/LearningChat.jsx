@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Send, Sparkles, Copy, Check, Trash2, GitCommit,
-  Plus, ChevronDown, Edit2, X, RotateCcw, Square
+  Plus, ChevronDown, Edit2, X, RotateCcw, Square, Map
 } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import useAppStore from '../../stores/appStore'
@@ -74,8 +74,104 @@ const STARTER_PROMPTS = [
   'What separates a Senior from a Principal answer in a system design interview?',
 ]
 
-const LEARN_SYSTEM_CONTEXT =
-  'You are an expert system design interview coach. Help the user study deeply through explanation, examples, analogies, and Socratic questioning. Correct misconceptions, surface edge cases, and highlight what separates good from great interview answers. Be concise but thorough. Format responses clearly with markdown.'
+const PERSONAS = {
+  socratic: {
+    id: 'socratic',
+    name: 'Socratic Tutor',
+    icon: '💡',
+    context: 'You are an expert system design interview coach. Help the user study deeply through explanation, examples, analogies, and Socratic questioning. Correct misconceptions, surface edge cases, and highlight what separates good from great interview answers. Be concise but thorough. Format responses clearly with markdown.'
+  },
+  eli5: {
+    id: 'eli5',
+    name: 'Explain Like I\'m 5',
+    icon: '🧸',
+    context: 'You are an expert tutor. Explain concepts using extremely simple language, every-day analogies (like Legos, pizza delivery, water pipes), and avoid jargon entirely. Break down complex system design topics so a 5-year-old could intuitively understand the core mechanics.'
+  },
+  gordon: {
+    id: 'gordon',
+    name: 'Gordon Ramsay (Strict)',
+    icon: '🔥',
+    context: 'You are a highly demanding, intense, and strict engineering manager. You speak directly, concisely, and with a sense of urgency. You do not tolerate fluff or buzzwords. Point out flaws in the user\'s reasoning immediately, demand precision, but remain deeply educational and ensure they actually learn the right way to build systems.'
+  },
+  devil: {
+    id: 'devil',
+    name: "Devil's Advocate",
+    icon: '👿',
+    context: 'You are a ruthless technical critic and debate simulator. Whatever the user proposes, you politely but aggressively disagree and poke holes in their logic, scalability, or fault-tolerance. Force the user to defend their architectural choices vigorously. This is for interview prep, so be rigorous.'
+  }
+}
+
+// ─── Persona Picker Dropdown ──────────────────────────────────────────────────
+function PersonaPicker({ activeId, onSelect }) {
+  const [open, setOpen] = useState(false)
+  const dropRef = useRef(null)
+
+  useEffect(() => {
+    const handler = (e) => { if (dropRef.current && !dropRef.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const current = PERSONAS[activeId]
+
+  return (
+    <div ref={dropRef} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+          background: 'var(--color-bg-secondary)',
+          border: '1px solid var(--color-border)',
+          borderRadius: 'var(--radius-full)',
+          padding: '4px 12px',
+          cursor: 'pointer', color: 'var(--color-text-primary)',
+          fontSize: 'var(--text-xs)', fontWeight: 600,
+          transition: 'border-color 0.2s',
+        }}
+        title="Change AI Persona"
+      >
+        <span>{current?.icon}</span>
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {current?.name}
+        </span>
+        <ChevronDown size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', bottom: 'calc(100% + 8px)', right: 0,
+          background: 'var(--color-surface)',
+          border: '1px solid var(--color-border)',
+          borderRadius: 'var(--radius-lg)',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+          minWidth: 200, zIndex: 200, overflow: 'hidden',
+          display: 'flex', flexDirection: 'column'
+        }}>
+          {Object.values(PERSONAS).map(p => (
+            <button
+              key={p.id}
+              onClick={() => { onSelect(p.id); setOpen(false) }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
+                padding: 'var(--space-3) var(--space-4)',
+                background: p.id === activeId ? 'var(--color-accent-subtle)' : 'transparent',
+                border: 'none', borderBottom: '1px solid var(--color-border)',
+                cursor: 'pointer', textAlign: 'left',
+                color: p.id === activeId ? 'var(--color-accent)' : 'var(--color-text-primary)',
+                fontSize: 'var(--text-sm)', fontWeight: p.id === activeId ? 600 : 400
+              }}
+              onMouseEnter={(e) => { if (p.id !== activeId) e.currentTarget.style.background = 'var(--color-bg-hover)' }}
+              onMouseLeave={(e) => { if (p.id !== activeId) e.currentTarget.style.background = 'transparent' }}
+            >
+              <span>{p.icon}</span>
+              <span>{p.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ─── Session Picker Dropdown ──────────────────────────────────────────────────
 function SessionPicker({ sessions, currentId, onSelect, onCreate, onRename, onDelete }) {
@@ -282,6 +378,8 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
   const [starters, setStarters] = useState(STARTER_PROMPTS)
   const [loadingStarters, setLoadingStarters] = useState(false)
+  const [generatingMap, setGeneratingMap] = useState(false)
+  const [personaId, setPersonaId] = useState('socratic')
 
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
@@ -340,9 +438,10 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
       abortControllerRef.current = new AbortController()
       const signal = abortControllerRef.current.signal
+      const currentPersona = PERSONAS[personaId].context
 
       const fullText = await chatApi.stream(
-        { message: text, context: LEARN_SYSTEM_CONTEXT, history: currentHistory, model: selectedModel },
+        { message: text, context: currentPersona, history: currentHistory, model: selectedModel },
         (partialText) => {
           setMessages((prev) => {
             const updated = [...prev]
@@ -367,7 +466,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       setIsLoading(false)
     }
      
-  }, [input, isLoading, messages, selectedModel, setMessages])
+  }, [input, isLoading, messages, selectedModel, setMessages, personaId])
 
   // Handle activeTopic changes (from to-do panel clicks)
   useEffect(() => {
@@ -423,6 +522,21 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       setMessages(newHistory)
       // Pass newHistory directly to bypass closure trap
       setTimeout(() => handleSend(userMsg.content, newHistory), 50)
+    }
+  }
+
+  const handleGenerateConceptMap = async () => {
+    if (messages.length < 2 || generatingMap) return
+    setGeneratingMap(true)
+    setErrorMsg(null)
+
+    try {
+      const { response } = await chatApi.generateConceptMap({ history: messages, model: selectedModel })
+      setMessages((prev) => [...prev, { role: 'ai', content: `Here's a concept map summarizing what we just discussed:\n\n${response}` }])
+    } catch (err) {
+      setErrorMsg(`Failed to generate concept map: ${err.message}`)
+    } finally {
+      setGeneratingMap(false)
     }
   }
 
@@ -500,6 +614,18 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
+          {messages.length >= 4 && (
+             <button
+               className="btn btn-ghost"
+               style={{ fontSize: 'var(--text-xs)', padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
+               onClick={handleGenerateConceptMap}
+               disabled={generatingMap}
+               title="Generate a visual Concept Map of this session"
+             >
+               <Map size={13} style={{ animation: generatingMap ? 'spin 2s linear infinite' : 'none' }} />
+               {generatingMap ? 'Generating Map...' : 'Generate Map'}
+             </button>
+          )}
           {aiMessages.length > 0 && (
             <button
               className="btn btn-primary"
@@ -551,7 +677,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
             {apiKeyConfigured && (
               <div className="learning-starter-prompts">
                 {loadingStarters ? (
-                  Array.from({ length: 3 }).map((_, i) => (
+                  Array.from({ length: 6 }).map((_, i) => (
                     <div key={i} className="learning-starter-btn" style={{ 
                       height: '36px', 
                       background: 'var(--color-bg-hover)', 
@@ -617,7 +743,10 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       </div>
 
       {/* ── Input ── */}
-      <div className="learning-chat-input-area">
+      <div className="learning-chat-input-area" style={{ position: 'relative' }}>
+        <div style={{ position: 'absolute', top: '-40px', right: '0' }}>
+          <PersonaPicker activeId={personaId} onSelect={setPersonaId} />
+        </div>
         <div className="learning-chat-input-wrapper">
           {isLoading && (
             <button

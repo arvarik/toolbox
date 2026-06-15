@@ -1021,6 +1021,22 @@ textarea.input {
   flex-direction: column;
 }
 
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+}
+@media (max-width: 960px) {
+  .guide-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (max-width: 640px) {
+  .guide-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .pillar-group {
   margin-bottom: var(--space-4);
 }

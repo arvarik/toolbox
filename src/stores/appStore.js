@@ -1,3 +1,8 @@
+/**
+ * @fileoverview Global Application Store
+ * Manages UI state (theme, chat overlays), API configuration (model selection, API key presence),
+ * and shared workspace data (diagram nodes/edges).
+ */
 import { create } from 'zustand'
 
 // Read initial theme from localStorage
@@ -101,6 +106,21 @@ const useAppStore = create((set) => ({
     set((s) => ({ edges: [...s.edges, edge] })),
   removeEdge: (id) =>
     set((s) => ({ edges: s.edges.filter((e) => e.id !== id) })),
+  // Aha! Moment micro-interaction
+  ahaMomentActive: false,
+  triggerAhaMoment: () => {
+    // Attempt to trigger haptic feedback if supported
+    try {
+      if (typeof navigator !== 'undefined' && navigator.vibrate) {
+        navigator.vibrate([40, 60, 100]); // "Thump" pattern
+      }
+    } catch {
+      // Ignore haptic errors on unsupported devices
+    }
+    set({ ahaMomentActive: true })
+    // Auto-reset after animation duration (e.g. 1500ms)
+    setTimeout(() => set({ ahaMomentActive: false }), 2000)
+  },
 }))
 
 export default useAppStore

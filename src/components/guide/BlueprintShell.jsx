@@ -248,69 +248,81 @@ export default function BlueprintShell() {
           </div>
         </div>
 
-        <div className="deck-grid">
+        <div className="guide-grid">
           {pillarStats.map((p) => (
             <div
               key={p.id}
               className="card card-interactive"
               onClick={() => navigate(`/guide/${p.id}`)}
-              style={{ cursor: 'pointer', position: 'relative', overflow: 'hidden' }}
+              style={{ 
+                display: 'flex', 
+                flexDirection: 'column', 
+                padding: 'var(--space-5)', 
+                position: 'relative', 
+                overflow: 'hidden',
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-xl)',
+                transition: 'all 0.2s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = p.color;
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = `0 4px 12px ${p.color}15`;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--color-border)';
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
             >
-              {/* Subtle pillar color accent at top */}
               <div style={{
-                position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-                background: p.color,
-                opacity: p.percent > 0 ? 0.8 : 0.2,
-                transition: 'opacity 0.3s ease',
-              }} />
-
-              <div style={{
-                display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
-                marginBottom: 'var(--space-3)',
+                display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
+                marginBottom: 'var(--space-4)',
               }}>
                 <div
                   style={{
-                    width: 36, height: 36,
+                    width: 40, height: 40,
                     borderRadius: 'var(--radius-md)',
                     background: `${p.color}15`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}
                 >
-                  <Cpu size={18} style={{ color: p.color }} />
+                  <Cpu size={20} style={{ color: p.color }} />
                 </div>
-                {/* Progress badge */}
-                {p.filled > 0 && (
-                  <span style={{
-                    fontSize: '10px', fontWeight: 700,
-                    color: p.percent === 100 ? '#22c55e' : 'var(--color-accent)',
-                    background: p.percent === 100 ? 'rgba(34,197,94,0.12)' : 'var(--color-accent-subtle)',
-                    padding: '2px 8px', borderRadius: 'var(--radius-full)',
-                  }}>
-                    {p.percent === 100 ? '✓ Complete' : `${p.filled}/${p.total}`}
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                    {p.shortName}
+                  </div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
+                    {p.topics.length} topics
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress Section */}
+              <div style={{ marginTop: 'auto' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                  <span style={{ fontSize: '11px', color: 'var(--color-text-secondary)', fontWeight: 500 }}>
+                    {p.percent === 100 ? 'Complete' : 'Progress'}
                   </span>
-                )}
-              </div>
-              <div style={{ fontSize: 'var(--text-md)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>
-                {p.shortName}
-              </div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-3)' }}>
-                {p.topics.length} topics · {(BLUEPRINT_SECTIONS[p.id] || []).length} sections each
-              </div>
-              {/* Mini progress bar */}
-              {p.total > 0 && (
+                  <span style={{ fontSize: '11px', color: p.percent > 0 ? p.color : 'var(--color-text-tertiary)', fontWeight: 600 }}>
+                    {p.filled}/{p.total}
+                  </span>
+                </div>
                 <div style={{
-                  height: 3, background: 'var(--color-bg-tertiary)',
+                  height: 4, background: 'var(--color-bg-tertiary)',
                   borderRadius: 'var(--radius-full)', overflow: 'hidden',
                 }}>
                   <div style={{
                     height: '100%',
-                    width: `${p.percent}%`,
+                    width: `${Math.max(p.percent, 0)}%`,
                     background: p.color,
                     borderRadius: 'var(--radius-full)',
                     transition: 'width 0.4s ease',
                   }} />
                 </div>
-              )}
+              </div>
             </div>
           ))}
         </div>
@@ -337,30 +349,52 @@ export default function BlueprintShell() {
           </p>
         </div>
 
-        <div className="deck-grid">
+        <div className="guide-grid">
           {pillar.topics.map((t) => (
             <div
               key={t.id}
               className="card card-interactive"
               onClick={() => navigate(`/guide/${pillar.id}/${t.id}`)}
-              style={{ cursor: 'pointer' }}
+              style={{ 
+                cursor: 'pointer',
+                display: 'flex', 
+                flexDirection: 'column', 
+                padding: 'var(--space-5)', 
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-xl)',
+                transition: 'all 0.2s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = pillar.color;
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.boxShadow = `0 4px 12px ${pillar.color}15`;
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = 'var(--color-border)';
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.boxShadow = 'none';
+              }}
             >
-              <div
-                style={{
-                  width: 36, height: 36,
-                  borderRadius: 'var(--radius-md)',
-                  background: `${pillar.color}15`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  marginBottom: 'var(--space-3)',
-                }}
-              >
-                <Cpu size={18} style={{ color: pillar.color }} />
-              </div>
-              <div style={{ fontSize: 'var(--text-md)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>
-                {t.name}
-              </div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
-                {sections.length} blueprint sections
+              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+                <div
+                  style={{
+                    width: 40, height: 40,
+                    borderRadius: 'var(--radius-md)',
+                    background: `${pillar.color}15`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}
+                >
+                  <Cpu size={20} style={{ color: pillar.color }} />
+                </div>
+                <div>
+                  <div style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                    {t.name}
+                  </div>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
+                    {sections.length} blueprint sections
+                  </div>
+                </div>
               </div>
             </div>
           ))}

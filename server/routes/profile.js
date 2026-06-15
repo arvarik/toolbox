@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import db from '../db.js'
+import logger from '../utils/logger.js'
 
 const router = Router()
 
@@ -12,7 +13,7 @@ router.get('/', (req, res) => {
     const row = db.prepare('SELECT profile_text FROM user_profile WHERE id = 1').get()
     res.json({ profileText: row?.profile_text || '' })
   } catch (err) {
-    console.error('[profile] Error fetching profile:', err.message)
+    logger.error('[profile] Error fetching profile:', err.message)
     res.status(500).json({ message: 'Failed to fetch profile' })
   }
 })
@@ -40,7 +41,7 @@ router.put('/', (req, res) => {
     
     res.json({ success: true, profileText })
   } catch (err) {
-    console.error('[profile] Error updating profile:', err.message)
+    logger.error('[profile] Error updating profile:', err.message)
     res.status(500).json({ message: 'Failed to update profile' })
   }
 })
@@ -54,7 +55,7 @@ router.delete('/', (req, res) => {
     db.prepare('DELETE FROM user_profile WHERE id = 1').run()
     res.json({ success: true, message: 'Profile cleared' })
   } catch (err) {
-    console.error('[profile] Error clearing profile:', err.message)
+    logger.error('[profile] Error clearing profile:', err.message)
     res.status(500).json({ message: 'Failed to clear profile' })
   }
 })

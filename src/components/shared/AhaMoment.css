@@ -1,0 +1,65 @@
+.aha-moment-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.aha-glow {
+  position: absolute;
+  width: 300px;
+  height: 300px;
+  background: radial-gradient(circle, rgba(250,204,21,0.4) 0%, rgba(250,204,21,0) 70%);
+  border-radius: 50%;
+  animation: aha-glow-anim 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  mix-blend-mode: screen;
+}
+
+@keyframes aha-glow-anim {
+  0% { transform: scale(0.5); opacity: 0; }
+  20% { transform: scale(1.5); opacity: 1; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+
+.aha-particle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--color-accent);
+  border-radius: 50%;
+  box-shadow: 0 0 10px var(--color-accent);
+  animation: aha-particle-anim 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  opacity: 0;
+}
+
+@keyframes aha-particle-anim {
+  0% { 
+    transform: translate(0, 0) scale(1);
+    opacity: 1;
+  }
+  100% { 
+    transform: translate(var(--tx), var(--ty)) scale(0);
+    opacity: 0;
+  }
+}
+
+.aha-shatter {
+  position: absolute;
+  width: 100vw;
+  height: 100vh;
+  backdrop-filter: blur(0px);
+  animation: aha-shatter-anim 1.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+@keyframes aha-shatter-anim {
+  0% { backdrop-filter: blur(0px); opacity: 0; }
+  10% { backdrop-filter: blur(4px); opacity: 1; background: rgba(255,255,255,0.05); }
+  100% { backdrop-filter: blur(0px); opacity: 0; background: transparent; }
+}

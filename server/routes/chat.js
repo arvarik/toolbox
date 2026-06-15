@@ -2,6 +2,7 @@ import { Router } from 'express'
 import crypto from 'crypto'
 import db from '../db.js'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../src/utils/constants.js'
+import logger from '../utils/logger.js'
 
 const router = Router()
 
@@ -65,7 +66,7 @@ router.get('/starters', async (req, res) => {
         const parsed = JSON.parse(cached.suggestions)
         if (Array.isArray(parsed) && parsed.length > 0) {
           const shuffled = [...parsed].sort(() => 0.5 - Math.random())
-          return res.json({ suggestions: shuffled.slice(0, 4) })
+          return res.json({ suggestions: shuffled.slice(0, 6) })
         }
       } catch {
         // Cache invalid, fall through to regenerate
@@ -138,11 +139,11 @@ Based on this state, generate 12 to 15 highly targeted starter questions the use
         updated_at = excluded.updated_at
     `).run(pillarId, topicId, JSON.stringify(parsedSuggestions), contentHash)
 
-    // Return a random selection of 4 prompts
+    // Return a random selection of 6 prompts
     const shuffled = [...parsedSuggestions].sort(() => 0.5 - Math.random())
-    res.json({ suggestions: shuffled.slice(0, 4) })
+    res.json({ suggestions: shuffled.slice(0, 6) })
   } catch (err) {
-    console.error('[chat/starters] Error:', err.message)
+    logger.error('[chat/starters] Error:', err.message)
     res.status(500).json({ message: 'Failed to generate starters.' })
   }
 })
@@ -204,7 +205,7 @@ router.post('/', async (req, res) => {
 
     res.json({ response })
   } catch (err) {
-    console.error('[chat] Error:', err.message)
+    logger.error('[chat] Error:', err.message)
     res.status(500).json({ message: 'Failed to get AI response. Please check your API key.' })
   }
 })
@@ -438,11 +439,11 @@ Output a unified, updated profile text for this user. If there are no new facts,
           db.prepare("INSERT INTO user_profile (id, profile_text, updated_at) VALUES (1, ?, datetime('now')) ON CONFLICT(id) DO UPDATE SET profile_text = excluded.profile_text, updated_at = excluded.updated_at").run(newProfile);
         }
       } catch (err) {
-        console.error('[Shadow Memory] Error:', err.message);
+        logger.error('[Shadow Memory] Error:', err.message);
       }
     }, 0);
   } catch (err) {
-    console.error('[chat/stream] Error:', err.message)
+    logger.error('[chat/stream] Error:', err.message)
     res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`)
     res.end()
   }
@@ -505,7 +506,7 @@ Now write the guide section content:`
 
     res.json({ content })
   } catch (err) {
-    console.error('[chat/summarize] Error:', err.message)
+    logger.error('[chat/summarize] Error:', err.message)
     res.status(500).json({ message: 'Failed to summarize. Please check your API key.' })
   }
 })
@@ -570,15 +571,68 @@ Evaluate their explanation.`
     try {
       evaluation = JSON.parse(text)
     } catch (e) {
-      console.error('[chat/evaluate-interceptor] Failed to parse JSON:', e.message, text)
+      logger.error('[chat/evaluate-interceptor] Failed to parse JSON:', e.message, text)
       // Fallback
       evaluation = { pass: false, feedback: "Error evaluating response format." }
     }
 
     res.json(evaluation)
   } catch (err) {
-    console.error('[chat/evaluate-interceptor] Error:', err.message)
+    logger.error('[chat/evaluate-interceptor] Error:', err.message)
     res.status(500).json({ message: 'Failed to evaluate. Please check your API key.' })
+  }
+})
+
+/**
+ * POST /api/chat/concept-map
+ * Generates a Mermaid concept map from a session history.
+ */
+router.post('/concept-map', async (req, res) => {
+  const { history = [], model: requestedModel } = req.body
+
+  if (!history || history.length === 0) {
+    return res.status(400).json({ message: 'History is required to generate a map.' })
+  }
+
+  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
+  if (!config?.value) {
+    return res.status(400).json({
+      message: 'Gemini API key not configured. Please add your key in Settings.',
+    })
+  }
+
+  try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(config.value)
+    const model = genAI.getGenerativeModel({ model: requestedModel || 'gemini-3.5-flash' })
+
+    const historyText = history.map(msg => `${msg.role}: ${msg.content}`).join('\n\n')
+
+    const prompt = `You are an expert educational visualizer. Extract the key concepts, entities, and their relationships from the following chat history. 
+Your output MUST be a valid, syntactically correct \`mermaid\` graph definition (e.g. \`graph TD\`).
+Use concise node labels and relationship labels. Do not use complex mermaid syntax that might break rendering.
+Only output the markdown block containing the mermaid code. Do not output anything else.
+
+Example format:
+\`\`\`mermaid
+graph TD
+  A[Concept 1] -->|relates to| B[Concept 2]
+\`\`\`
+
+Chat History:
+${historyText}`
+
+    const result = await model.generateContent(prompt)
+    let responseText = result.response.text()
+    
+    if (!responseText.includes('```mermaid')) {
+      responseText = `\`\`\`mermaid\n${responseText.replace(/```/g, '')}\n\`\`\``
+    }
+
+    res.json({ response: responseText })
+  } catch (err) {
+    logger.error('[chat/concept-map] Error:', err.message)
+    res.status(500).json({ message: 'Failed to generate concept map.' })
   }
 })
 

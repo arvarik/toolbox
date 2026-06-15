@@ -6,6 +6,7 @@ import rehypeKatex from 'rehype-katex'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Check, Copy } from 'lucide-react'
+import MermaidRenderer from './MermaidRenderer'
 
 // Optional custom style additions for markdown wrapper
 import './MarkdownRenderer.css'
@@ -83,6 +84,10 @@ export default function MarkdownRenderer({ content, className = '' }) {
             const match = /language-(\w+)/.exec(className || '')
             const codeString = String(children).replace(/\n$/, '')
             
+            if (match && match[1] === 'mermaid') {
+              return <MermaidRenderer chart={codeString} />
+            }
+
             if (match) {
               return (
                 <div style={{ position: 'relative', margin: '1em 0' }}>

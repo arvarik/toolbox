@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import db from '../db.js'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../src/utils/constants.js'
+import logger from '../utils/logger.js'
 
 const router = Router()
 
@@ -48,7 +49,7 @@ router.get('/export', (req, res) => {
     res.setHeader('Content-Disposition', 'attachment; filename="system_design_guide.md"')
     res.send(markdown)
   } catch (err) {
-    console.error('[guide-content] Error exporting guide:', err.message)
+    logger.error('[guide-content] Error exporting guide:', err.message)
     res.status(500).json({ message: 'Failed to export guide' })
   }
 })

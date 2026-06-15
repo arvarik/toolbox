@@ -193,6 +193,13 @@ export const chatApi = {
    * @returns {Promise<{ pass: boolean, feedback: string }>}
    */
   evaluateInterceptor: (data) => request('/chat/evaluate-interceptor', { method: 'POST', body: data }),
+
+  /**
+   * Generates a Mermaid concept map from a session history.
+   * @param {Object} data - { history, model }
+   * @returns {Promise<{ response: string }>}
+   */
+  generateConceptMap: (data) => request('/chat/concept-map', { method: 'POST', body: data }),
 }
 
 /* ---- Guide Content ---- */

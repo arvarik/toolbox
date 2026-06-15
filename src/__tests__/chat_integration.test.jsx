@@ -101,6 +101,15 @@ vi.mock('../utils/api', () => {
     studySessionsApi: {
       list: vi.fn(() => Promise.resolve([])),
     },
+    systemApi: {
+      stats: vi.fn(() => Promise.resolve({ ds: { sizeBytes: 0 }, dsCount: 0 })),
+      clearCache: vi.fn(() => Promise.resolve({ success: true })),
+      exportDbUrl: vi.fn(() => '#')
+    },
+    profileApi: {
+      get: vi.fn(() => Promise.resolve({ profileText: '' })),
+      update: vi.fn(() => Promise.resolve({ success: true }))
+    }
   }
 })
 

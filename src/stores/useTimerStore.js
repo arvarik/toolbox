@@ -1,12 +1,28 @@
+/**
+ * @fileoverview Pomodoro Timer State Machine and Store
+ * Manages the global state of the Pomodoro timer, including durations, modes, and progress.
+ * Integrates with a "plant" growth metaphor to incentivize studying.
+ */
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+/**
+ * Default durations for the different timer modes.
+ * @constant {Object}
+ * @property {number} pomodoro - 25 minutes in ms
+ * @property {number} shortBreak - 5 minutes in ms
+ * @property {number} longBreak - 15 minutes in ms
+ */
 const POMODORO_DURATIONS = {
   pomodoro: 25 * 60 * 1000,
   shortBreak: 5 * 60 * 1000,
   longBreak: 15 * 60 * 1000,
 }
 
+/**
+ * Zustand store for Pomodoro state management.
+ * Persists preferences (durations, strict mode) and active task name.
+ */
 const useTimerStore = create(
   persist(
     (set, get) => ({
@@ -86,6 +102,11 @@ const useTimerStore = create(
         })
       },
 
+      /**
+       * Called on every interval tick (typically every second).
+       * Updates `timeLeft` relative to `endTime`.
+       * Transitions the plant state (seed -> sprout -> plant -> flower) based on progress.
+       */
       tick: () => {
         const { status, endTime, mode, durations } = get()
         if (status !== 'running' || !endTime) return

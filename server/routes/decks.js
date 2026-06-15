@@ -5,14 +5,22 @@ import db from '../db.js'
 const router = Router()
 
 /**
- * Anki-style Spaced Repetition Scheduling Algorithm
+ * @function calculateNextSrsState
+ * @description Anki-style Spaced Repetition Scheduling Algorithm (SM-2 variant).
  * Supports New, Learning, Review, and Relearning states with sub-day step intervals.
+ * Incorporates a "Hypercorrection Penalty" based on self-reported confidence.
  * 
  * Quality maps:
- *   0, 1 -> Again
- *   2, 3 -> Hard
- *   4    -> Good
- *   5    -> Easy
+ *   0, 1 -> Again (Failure)
+ *   2, 3 -> Hard (Pass with difficulty)
+ *   4    -> Good (Pass)
+ *   5    -> Easy (Pass easily)
+ * 
+ * @param {Object} card - The current card state (ease_factor, interval, state, learning_step).
+ * @param {number} quality - User rating from 0-5.
+ * @param {Object} settings - Deck SRS settings (steps, lapse_steps, easy_bonus).
+ * @param {string} confidence - User confidence rating ('low', 'medium', 'high').
+ * @returns {Object} The calculated next state properties for the flashcard.
  */
 function calculateNextSrsState(card, quality, settings, confidence = 'medium') {
   const ease_factor = card.ease_factor !== undefined && card.ease_factor !== null ? card.ease_factor : 2.5

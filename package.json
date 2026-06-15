@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
     "dev:client": "vite",
-    "dev:server": "node server/index.js",
+    "dev:server": "node --watch server/index.js",
     "build": "vite build",
     "start": "NODE_ENV=production node server/index.js",
     "lint": "eslint .",
@@ -22,6 +22,7 @@
     "idb": "^8.0.3",
     "katex": "^0.17.0",
     "lucide-react": "^1.17.0",
+    "mermaid": "^11.15.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
     "react-markdown": "^9.0.1",

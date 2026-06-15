@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs'
+import logger from './utils/logger.js'
 
 const DB_PATH = process.env.DB_PATH || './data/toolbox.db'
 
@@ -93,7 +94,7 @@ function migrate() {
     );
   `)
 
-  console.log('[db] Migrations complete')
+  logger.info('[db] Migrations complete')
 
   // SRS columns migration (additive — safe to re-run)
   const srsColumns = [
@@ -153,7 +154,7 @@ if (process.env.GEMINI_API_KEY) {
       VALUES ('gemini_api_key', ?, datetime('now'))
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
     `).run(process.env.GEMINI_API_KEY)
-    console.log('[db] Seeded Gemini API key from environment')
+    logger.info('[db] Seeded Gemini API key from environment')
   }
 }
 

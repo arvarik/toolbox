@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import db from '../db.js'
+import logger from '../utils/logger.js'
 
 const router = Router()
 
@@ -56,7 +57,7 @@ router.get('/', (req, res) => {
       decks
     })
   } catch (err) {
-    console.error('[search] Error running global search:', err.message)
+    logger.error('[search] Error running global search:', err.message)
     res.status(500).json({ message: 'Failed to run global search' })
   }
 })
