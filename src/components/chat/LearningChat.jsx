@@ -37,12 +37,16 @@ function saveCurrentId(id) {
   try { localStorage.setItem(CURRENT_KEY, id) } catch { /* ignore */ }
 }
 
-function makeSession(name) {
+function makeSession(name, topicContext) {
   return {
     id: `session-${Date.now()}`,
     name: name || `Session ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
     createdAt: new Date().toISOString(),
     messages: [],
+    // Topic binding for intelligent commit (null if unbound)
+    pillarId: topicContext?.pillarId || null,
+    topicId: topicContext?.topicId || null,
+    topicName: topicContext?.topicName || null,
   }
 }
 
@@ -478,13 +482,24 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     const session = sessionsRef.current[currId]
 
     // Switch to a fresh session for this topic if the current one is in use
+    const topicCtx = {
+      pillarId: activeTopic.pillar.id,
+      topicId: activeTopic.topic.id,
+      topicName: activeTopic.topic.name,
+    }
     setTimeout(() => {
       if (session && session.messages.length > 0) {
-        const s = makeSession(`Study: ${activeTopic.topic.name}`)
+        const s = makeSession(`Study: ${activeTopic.topic.name}`, topicCtx)
         setSessions((prev) => ({ ...prev, [s.id]: s }))
         setCurrentId(s.id)
       } else if (session) {
-        setSessions((prev) => ({ ...prev, [currId]: { ...session, name: `Study: ${activeTopic.topic.name}` } }))
+        setSessions((prev) => ({ ...prev, [currId]: {
+          ...session,
+          name: `Study: ${activeTopic.topic.name}`,
+          pillarId: topicCtx.pillarId,
+          topicId: topicCtx.topicId,
+          topicName: topicCtx.topicName,
+        } }))
       }
     }, 0)
 
@@ -628,8 +643,21 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
           {aiMessages.length > 0 && (
             <button
               className="btn btn-primary"
-              style={{ fontSize: 'var(--text-xs)', padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
-              onClick={() => onCommitClick?.(messages)}
+              style={{
+                fontSize: 'var(--text-xs)', padding: '5px 12px',
+                display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
+                opacity: currentSession?.pillarId ? 1 : 0.5,
+              }}
+              onClick={() => onCommitClick?.(messages, {
+                pillarId: currentSession?.pillarId,
+                topicId: currentSession?.topicId,
+                topicName: currentSession?.topicName,
+              })}
+              disabled={!currentSession?.pillarId}
+              title={currentSession?.pillarId
+                ? `Commit session to ${currentSession.topicName} guide`
+                : 'Start a session from the Study Plan to enable commit'
+              }
               id="commit-to-guide-btn"
             >
               <GitCommit size={13} />

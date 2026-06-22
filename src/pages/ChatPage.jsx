@@ -98,6 +98,7 @@ export default function ChatPage() {
   // Commit modal state
   const [commitOpen, setCommitOpen] = useState(false)
   const [learningMessages, setLearningMessages] = useState([])
+  const [commitTopicContext, setCommitTopicContext] = useState(null) // { pillarId, topicId, topicName }
 
   // Active topic for LearningChat to fetch starters
   const [activeStudyTopic, setActiveStudyTopic] = useState(null)
@@ -108,8 +109,9 @@ export default function ChatPage() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
-  const handleCommitClick = useCallback((messages) => {
+  const handleCommitClick = useCallback((messages, topicContext) => {
     setLearningMessages(messages)
+    setCommitTopicContext(topicContext || null)
     setCommitOpen(true)
   }, [])
 
@@ -168,6 +170,7 @@ export default function ChatPage() {
         open={commitOpen}
         onClose={() => setCommitOpen(false)}
         messages={learningMessages}
+        topicContext={commitTopicContext}
         onCommitSuccess={() => {}}
       />
     </div>

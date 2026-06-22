@@ -200,6 +200,20 @@ export const chatApi = {
    * @returns {Promise<{ response: string }>}
    */
   generateConceptMap: (data) => request('/chat/concept-map', { method: 'POST', body: data }),
+
+  /**
+   * Analyze a chat session and generate reconciled guide section updates.
+   * @param {Object} data - { messages, pillarId, topicId, topicName, model }
+   * @returns {Promise<{ updates: Array<{ sectionId, sectionName, reason, existingContent, newContent, isNew }> }>}
+   */
+  commitAnalyze: (data) => request('/chat/commit', { method: 'POST', body: data }),
+
+  /**
+   * Batch-save approved section updates from the commit preview.
+   * @param {Object} data - { pillarId, topicId, updates: [{ sectionId, content }] }
+   * @returns {Promise<{ ok: boolean, savedCount: number }>}
+   */
+  commitSave: (data) => request('/chat/commit/save', { method: 'POST', body: data }),
 }
 
 /* ---- Guide Content ---- */

@@ -694,4 +694,247 @@ ${historyText}`
   }
 })
 
+// ─── Intelligent Commit Flow ──────────────────────────────────────────────────
+
+/**
+ * POST /api/chat/commit
+ * Analyze a chat session against a guide topic's sections.
+ * Step 1: Identify which sections were substantively discussed.
+ * Step 2: For each identified section, reconcile session content with existing guide content.
+ *
+ * Body: { messages, pillarId, topicId, topicName, model }
+ * Returns: { updates: [{ sectionId, sectionName, existingContent, newContent, isNew }] }
+ */
+router.post('/commit', async (req, res) => {
+  const { messages = [], pillarId, topicId, topicName, model: requestedModel } = req.body
+
+  if (!messages.length || !pillarId || !topicId) {
+    return res.status(400).json({ message: 'messages, pillarId, and topicId are required' })
+  }
+
+  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
+  if (!config?.value) {
+    return res.status(400).json({
+      message: 'Gemini API key not configured. Please add your key in Settings.',
+    })
+  }
+
+  const sections = BLUEPRINT_SECTIONS[pillarId]
+  if (!sections || sections.length === 0) {
+    return res.status(400).json({ message: `No blueprint sections found for pillar "${pillarId}"` })
+  }
+
+  try {
+    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(config.value)
+    const modelName = requestedModel || 'gemini-3.5-flash'
+
+    // ─── Step 1: Identify which sections were discussed ───────────────────────
+    logger.info(`[chat/commit] Analyzing session for topic "${topicName}" (${pillarId}/${topicId}). ${messages.length} messages.`)
+
+    const conversationText = messages
+      .map((m) => `[${m.role === 'ai' ? 'Tutor' : 'Student'}]: ${m.content}`)
+      .join('\n\n')
+
+    const sectionList = sections.map((s) => `- "${s.id}": ${s.name}`).join('\n')
+
+    const analysisModel = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: SchemaType.OBJECT,
+          properties: {
+            sections: {
+              type: SchemaType.ARRAY,
+              items: {
+                type: SchemaType.OBJECT,
+                properties: {
+                  id: { type: SchemaType.STRING, description: 'The section id from the provided list' },
+                  reason: { type: SchemaType.STRING, description: 'Brief reason why this section was covered in the conversation' }
+                },
+                required: ['id', 'reason']
+              },
+              description: 'List of sections that were substantively discussed'
+            }
+          },
+          required: ['sections']
+        }
+      }
+    })
+
+    const analysisPrompt = `You are analyzing a study session conversation about "${topicName}" in a system design guide.
+
+Your task: Determine which guide sections were **substantively discussed** in the conversation. A section counts as "discussed" if the conversation contains real technical content, examples, tradeoffs, or explanations that would meaningfully contribute to that section.
+
+Do NOT include a section just because it was briefly mentioned in passing — only include sections where the student actually LEARNED something that should be recorded.
+
+Available sections for "${topicName}":
+${sectionList}
+
+--- CONVERSATION ---
+${conversationText}
+--- END CONVERSATION ---
+
+Return the list of sections that were substantively covered.`
+
+    const analysisResult = await analysisModel.generateContent(analysisPrompt)
+    const analysisText = analysisResult.response.text()
+    let identifiedSections
+
+    try {
+      const parsed = JSON.parse(analysisText)
+      identifiedSections = parsed.sections || []
+    } catch (parseErr) {
+      logger.error('[chat/commit] Failed to parse section analysis:', parseErr.message, analysisText)
+      return res.status(500).json({ message: 'Failed to analyze conversation sections.' })
+    }
+
+    // Validate section IDs against the actual section list
+    const validSectionIds = new Set(sections.map((s) => s.id))
+    identifiedSections = identifiedSections.filter((s) => validSectionIds.has(s.id))
+
+    if (identifiedSections.length === 0) {
+      logger.info('[chat/commit] No sections identified as discussed.')
+      return res.json({ updates: [] })
+    }
+
+    logger.info(`[chat/commit] Identified ${identifiedSections.length} sections: ${identifiedSections.map((s) => s.id).join(', ')}`)
+
+    // ─── Step 2: Reconcile each section ──────────────────────────────────────
+    const reconcileModel = genAI.getGenerativeModel({ model: modelName })
+    const updates = []
+
+    for (const identified of identifiedSections) {
+      const section = sections.find((s) => s.id === identified.id)
+      if (!section) continue
+
+      // Fetch existing guide content for this section
+      const existingRow = db.prepare(
+        'SELECT content FROM guide_content WHERE pillar_id = ? AND topic_id = ? AND section_id = ?'
+      ).get(pillarId, topicId, identified.id)
+
+      const existingContent = existingRow?.content || ''
+      const isNew = !existingContent.trim()
+
+      let reconcilePrompt
+      if (isNew) {
+        // No existing content — create from scratch
+        reconcilePrompt = `You are a technical writing assistant compiling a system design study guide.
+
+Topic: "${topicName}"
+Section: "${section.name}"
+
+A student just completed a study session. Extract and synthesize the key insights, definitions, patterns, tradeoffs, and concrete examples from their conversation that are relevant to this section.
+
+Format as clean, dense markdown for a technical reference guide:
+- Use ## for subsection headers when needed
+- Use bullet points for lists of properties, tradeoffs, or examples
+- Use backtick inline code for technical terms, thresholds, and config values
+- Use **bold** for key terms on first use
+- Be concise — this is a study reference, not an essay
+
+--- CONVERSATION ---
+${conversationText}
+--- END CONVERSATION ---
+
+Write the "${section.name}" section content:`
+      } else {
+        // Existing content — reconcile/merge
+        reconcilePrompt = `You are a technical writing assistant maintaining a system design study guide.
+
+Topic: "${topicName}"
+Section: "${section.name}"
+
+The student has completed a new study session. Your task is to **reconcile** the new learnings with the existing section content. You must:
+
+1. PRESERVE all existing knowledge that is still accurate
+2. ADD new insights, examples, and details from the session
+3. NEVER duplicate information — if the session covers something already in the guide, keep the better version
+4. Reorganize and re-flow the section so it reads naturally as a unified reference
+5. Maintain the same markdown formatting style as the existing content
+
+--- EXISTING GUIDE CONTENT ---
+${existingContent}
+--- END EXISTING CONTENT ---
+
+--- NEW SESSION CONVERSATION ---
+${conversationText}
+--- END CONVERSATION ---
+
+Write the updated "${section.name}" section, seamlessly merging existing and new content:`
+      }
+
+      try {
+        const reconcileResult = await reconcileModel.generateContent(reconcilePrompt)
+        const newContent = reconcileResult.response.text()
+
+        updates.push({
+          sectionId: identified.id,
+          sectionName: section.name,
+          reason: identified.reason,
+          existingContent,
+          newContent,
+          isNew,
+        })
+
+        logger.info(`[chat/commit] Reconciled section "${section.name}" (${isNew ? 'new' : 'merged'}, ${newContent.length} chars)`)
+      } catch (sectionErr) {
+        logger.error(`[chat/commit] Failed to reconcile section "${section.name}":`, sectionErr.message)
+        // Continue with other sections — don't fail the whole commit
+      }
+    }
+
+    logger.info(`[chat/commit] Analysis complete. ${updates.length} section updates ready for preview.`)
+    res.json({ updates })
+  } catch (err) {
+    logger.error('[chat/commit] Error:', err.message)
+    res.status(500).json({ message: 'Failed to analyze session. Please try again.' })
+  }
+})
+
+/**
+ * POST /api/chat/commit/save
+ * Batch-save approved section updates from the commit preview.
+ * Uses a DB transaction for atomic writes.
+ *
+ * Body: { pillarId, topicId, updates: [{ sectionId, content }] }
+ * Returns: { ok: true, savedCount: N }
+ */
+router.post('/commit/save', async (req, res) => {
+  const { pillarId, topicId, updates = [] } = req.body
+
+  if (!pillarId || !topicId || updates.length === 0) {
+    return res.status(400).json({ message: 'pillarId, topicId, and updates are required' })
+  }
+
+  try {
+    const upsertStmt = db.prepare(`
+      INSERT INTO guide_content (pillar_id, topic_id, section_id, content, committed_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(pillar_id, topic_id, section_id)
+      DO UPDATE SET content = excluded.content, committed_at = excluded.committed_at
+    `)
+
+    const saveAll = db.transaction((items) => {
+      let count = 0
+      for (const item of items) {
+        if (item.sectionId && item.content) {
+          upsertStmt.run(pillarId, topicId, item.sectionId, item.content)
+          count++
+        }
+      }
+      return count
+    })
+
+    const savedCount = saveAll(updates)
+
+    logger.info(`[chat/commit/save] Saved ${savedCount} sections for ${pillarId}/${topicId}`)
+    res.json({ ok: true, savedCount })
+  } catch (err) {
+    logger.error('[chat/commit/save] Error:', err.message)
+    res.status(500).json({ message: 'Failed to save guide updates.' })
+  }
+})
+
 export default router

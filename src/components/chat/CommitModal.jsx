@@ -1,117 +1,135 @@
 import { useState, useEffect } from 'react'
-import { GitCommit, Check, ChevronRight, ChevronDown, Loader2, X, Sparkles } from 'lucide-react'
+import { GitCommit, Check, Loader2, X, Sparkles, Eye, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
-import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
-import { chatApi, guideContentApi } from '../../utils/api'
+import { chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
 
 /**
- * CommitModal — lets the user select AI message excerpts from a learning session,
- * pick a target blueprint section, and commit a Gemini-summarized version to the guide.
+ * CommitModal — Intelligent session-to-guide commit.
+ *
+ * Flow:
+ * 1. Opens → immediately starts analyzing the conversation with Gemini
+ * 2. Gemini identifies which guide sections were discussed
+ * 3. For each section, reconciles session content with existing guide content
+ * 4. Shows a preview with toggles per section
+ * 5. User confirms → batch saves all enabled sections
  *
  * @param {boolean} open
  * @param {Function} onClose
  * @param {Array} messages - Full message history from LearningChat
+ * @param {Object} topicContext - { pillarId, topicId, topicName }
  * @param {Function} onCommitSuccess - Called after a successful commit
  */
-export default function CommitModal({ open, onClose, messages = [], onCommitSuccess }) {
+export default function CommitModal({ open, onClose, messages = [], topicContext, onCommitSuccess }) {
   const selectedModel = useAppStore((s) => s.model)
   const addToast = useAppStore((s) => s.addToast)
 
-  // All AI messages as selectable excerpts (default: last 10 AI msgs selected)
-  const aiMessages = messages
-    .map((m, i) => ({ ...m, originalIndex: i }))
-    .filter((m) => m.role === 'ai' && m.content.trim().length > 0)
+  // Phase: 'analyzing' | 'preview' | 'saving' | 'done' | 'error'
+  const [phase, setPhase] = useState('analyzing')
+  const [errorMsg, setErrorMsg] = useState('')
+  const [updates, setUpdates] = useState([]) // Array of section updates from the API
+  const [enabledSections, setEnabledSections] = useState(new Set()) // Which sections to commit
+  const [expandedSections, setExpandedSections] = useState(new Set()) // Which previews are expanded
+  const [savedCount, setSavedCount] = useState(0)
 
-  const defaultSelected = new Set(
-    aiMessages.slice(-10).map((m) => m.originalIndex)
-  )
-
-  const [selectedMsgs, setSelectedMsgs] = useState(defaultSelected)
-  const [expandedPillars, setExpandedPillars] = useState({})
-  const [selectedTarget, setSelectedTarget] = useState(null) // { pillarId, topicId, sectionId, sectionName, topicName }
-  const [phase, setPhase] = useState('select') // 'select' | 'summarizing' | 'preview' | 'saving' | 'done'
-  const [previewContent, setPreviewContent] = useState('')
-
-  // Reset state when modal opens
+  // Auto-analyze when the modal opens
   useEffect(() => {
-    if (open) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setSelectedMsgs(
-        new Set(aiMessages.slice(-10).map((m) => m.originalIndex))
-      )
-      setExpandedPillars({})
-      setSelectedTarget(null)
-      setPhase('select')
-      setPreviewContent('')
+    if (!open || !topicContext?.pillarId) return
+
+    let cancelled = false
+
+    const analyze = async () => {
+      setPhase('analyzing')
+      setErrorMsg('')
+      setUpdates([])
+      setEnabledSections(new Set())
+      setExpandedSections(new Set())
+      setSavedCount(0)
+
+      try {
+        const result = await chatApi.commitAnalyze({
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          pillarId: topicContext.pillarId,
+          topicId: topicContext.topicId,
+          topicName: topicContext.topicName,
+          model: selectedModel,
+        })
+
+        if (cancelled) return
+
+        if (!result.updates || result.updates.length === 0) {
+          setPhase('error')
+          setErrorMsg('No guide sections were identified from this conversation. Try having a more in-depth discussion about specific topics before committing.')
+          return
+        }
+
+        setUpdates(result.updates)
+        // Enable all sections by default
+        setEnabledSections(new Set(result.updates.map((u) => u.sectionId)))
+        // Expand the first section
+        if (result.updates.length > 0) {
+          setExpandedSections(new Set([result.updates[0].sectionId]))
+        }
+        setPhase('preview')
+      } catch (err) {
+        if (!cancelled) {
+          setPhase('error')
+          setErrorMsg(err.message || 'Failed to analyze session.')
+        }
+      }
     }
+
+    analyze()
+    return () => { cancelled = true }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  }, [open, topicContext?.pillarId, topicContext?.topicId])
 
   if (!open) return null
 
-  const toggleMsg = (idx) => {
-    setSelectedMsgs((prev) => {
+  const toggleSection = (sectionId) => {
+    setEnabledSections((prev) => {
       const next = new Set(prev)
-      if (next.has(idx)) next.delete(idx)
-      else next.add(idx)
+      if (next.has(sectionId)) next.delete(sectionId)
+      else next.add(sectionId)
       return next
     })
   }
 
-  const togglePillar = (pillarId) => {
-    setExpandedPillars((prev) => ({ ...prev, [pillarId]: !prev[pillarId] }))
+  const toggleExpand = (sectionId) => {
+    setExpandedSections((prev) => {
+      const next = new Set(prev)
+      if (next.has(sectionId)) next.delete(sectionId)
+      else next.add(sectionId)
+      return next
+    })
   }
 
-  const selectTarget = (pillarId, topicId, sectionId, sectionName, topicName) => {
-    setSelectedTarget({ pillarId, topicId, sectionId, sectionName, topicName })
-  }
+  const handleSave = async () => {
+    const toSave = updates.filter((u) => enabledSections.has(u.sectionId))
+    if (toSave.length === 0) return
 
-  const handleSummarize = async () => {
-    if (!selectedTarget || selectedMsgs.size === 0) return
-    setPhase('summarizing')
-
-    const excerpts = aiMessages
-      .filter((m) => selectedMsgs.has(m.originalIndex))
-      .map((m) => m.content)
-
-    try {
-      const result = await chatApi.summarize({
-        excerpts,
-        sectionId: selectedTarget.sectionId,
-        sectionName: selectedTarget.sectionName,
-        topicName: selectedTarget.topicName,
-        model: selectedModel,
-      })
-      setPreviewContent(result.content)
-      setPhase('preview')
-    } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Summarization failed' })
-      setPhase('select')
-    }
-  }
-
-  const handleCommit = async () => {
     setPhase('saving')
     try {
-      await guideContentApi.upsert(
-        selectedTarget.pillarId,
-        selectedTarget.topicId,
-        selectedTarget.sectionId,
-        previewContent
-      )
+      const result = await chatApi.commitSave({
+        pillarId: topicContext.pillarId,
+        topicId: topicContext.topicId,
+        updates: toSave.map((u) => ({ sectionId: u.sectionId, content: u.newContent })),
+      })
+      setSavedCount(result.savedCount || toSave.length)
       setPhase('done')
-      addToast({ type: 'success', message: `Committed to "${selectedTarget.sectionName}"` })
-      onCommitSuccess?.(selectedTarget)
-      setTimeout(onClose, 1200)
+      addToast({
+        type: 'success',
+        message: `Committed ${result.savedCount || toSave.length} section${toSave.length !== 1 ? 's' : ''} to "${topicContext.topicName}" guide`,
+      })
+      onCommitSuccess?.(topicContext)
+      setTimeout(onClose, 1500)
     } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Failed to commit' })
+      addToast({ type: 'error', message: err.message || 'Failed to save.' })
       setPhase('preview')
     }
   }
 
-  const selectedCount = selectedMsgs.size
-  const canProceed = selectedCount > 0 && selectedTarget !== null
+  const enabledCount = enabledSections.size
 
   return (
     <div
@@ -123,7 +141,7 @@ export default function CommitModal({ open, onClose, messages = [], onCommitSucc
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 'var(--space-4)',
       }}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
+      onClick={(e) => { if (e.target === e.currentTarget && phase !== 'saving') onClose() }}
     >
       <div
         style={{
@@ -131,7 +149,7 @@ export default function CommitModal({ open, onClose, messages = [], onCommitSucc
           borderRadius: 'var(--radius-xl)',
           border: '1px solid var(--color-border)',
           width: '100%',
-          maxWidth: 920,
+          maxWidth: 780,
           maxHeight: '90vh',
           display: 'flex',
           flexDirection: 'column',
@@ -140,7 +158,7 @@ export default function CommitModal({ open, onClose, messages = [], onCommitSucc
         }}
         id="commit-modal"
       >
-        {/* Modal Header */}
+        {/* ── Header ── */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'space-between',
           padding: 'var(--space-5) var(--space-6)',
@@ -158,16 +176,74 @@ export default function CommitModal({ open, onClose, messages = [], onCommitSucc
             <div>
               <div style={{ fontWeight: 700, fontSize: 'var(--text-md)' }}>Commit to Guide</div>
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-                Select excerpts and a target section, then let AI summarize
+                {topicContext?.topicName || 'Unknown topic'}
               </div>
             </div>
           </div>
-          <button className="btn btn-ghost btn-icon" onClick={onClose}>
+          <button className="btn btn-ghost btn-icon" onClick={onClose} disabled={phase === 'saving'}>
             <X size={16} />
           </button>
         </div>
 
-        {/* Done state */}
+        {/* ── Analyzing Phase ── */}
+        {phase === 'analyzing' && (
+          <div style={{
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 'var(--space-10)',
+            minHeight: 280,
+          }}>
+            <div style={{ textAlign: 'center' }}>
+              <div style={{
+                width: 56, height: 56, borderRadius: '50%',
+                background: 'var(--color-accent-subtle)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                margin: '0 auto var(--space-4)',
+              }}>
+                <Sparkles size={24} style={{ color: 'var(--color-accent)', animation: 'pulse 1.5s ease-in-out infinite' }} />
+              </div>
+              <div style={{ fontWeight: 700, fontSize: 'var(--text-md)', marginBottom: 'var(--space-2)' }}>
+                Analyzing Your Session
+              </div>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', maxWidth: 320, margin: '0 auto', lineHeight: 1.6 }}>
+                AI is reading through your conversation, identifying which guide sections were covered, and reconciling with existing content…
+              </div>
+              <div style={{ marginTop: 'var(--space-4)' }}>
+                <Loader2 size={20} style={{ color: 'var(--color-accent)', animation: 'spin 1s linear infinite' }} />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Error Phase ── */}
+        {phase === 'error' && (
+          <div style={{
+            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: 'var(--space-8)',
+            minHeight: 240,
+          }}>
+            <div style={{ textAlign: 'center', maxWidth: 400 }}>
+              <div style={{
+                width: 48, height: 48, borderRadius: '50%',
+                background: 'rgba(239,68,68,0.12)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                margin: '0 auto var(--space-3)',
+              }}>
+                <AlertCircle size={22} style={{ color: '#ef4444' }} />
+              </div>
+              <div style={{ fontWeight: 600, fontSize: 'var(--text-md)', marginBottom: 'var(--space-2)' }}>
+                Nothing to Commit
+              </div>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+                {errorMsg}
+              </div>
+              <button className="btn btn-secondary" style={{ marginTop: 'var(--space-4)' }} onClick={onClose}>
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Done Phase ── */}
         {phase === 'done' && (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--space-8)' }}>
             <div style={{ textAlign: 'center' }}>
@@ -181,198 +257,139 @@ export default function CommitModal({ open, onClose, messages = [], onCommitSucc
               </div>
               <div style={{ fontWeight: 700, fontSize: 'var(--text-lg)' }}>Committed!</div>
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginTop: 'var(--space-1)' }}>
-                Notes saved to {selectedTarget?.sectionName}
+                {savedCount} section{savedCount !== 1 ? 's' : ''} saved to {topicContext?.topicName}
               </div>
             </div>
           </div>
         )}
 
-        {/* Preview phase */}
+        {/* ── Preview Phase ── */}
         {(phase === 'preview' || phase === 'saving') && (
-          <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ padding: 'var(--space-4) var(--space-6)', borderBottom: '1px solid var(--color-border)', flexShrink: 0 }}>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-                Preview for <strong style={{ color: 'var(--color-text-primary)' }}>{selectedTarget?.topicName}</strong> →{' '}
-                <strong style={{ color: 'var(--color-accent)' }}>{selectedTarget?.sectionName}</strong>
-              </div>
-            </div>
-            <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-6)' }}>
-              <div style={{
-                background: 'var(--color-bg-secondary)',
-                borderRadius: 'var(--radius-lg)',
-                padding: 'var(--space-6)',
-                border: '1px solid var(--color-border)',
-                fontSize: 'var(--text-sm)',
-                lineHeight: 'var(--leading-relaxed)',
-              }}>
-                <MarkdownRenderer content={previewContent} />
-              </div>
-            </div>
-            <div style={{
-              padding: 'var(--space-4) var(--space-6)',
-              borderTop: '1px solid var(--color-border)',
-              display: 'flex', gap: 'var(--space-3)', justifyContent: 'flex-end',
-              flexShrink: 0,
-            }}>
-              <button className="btn btn-secondary" onClick={() => setPhase('select')} disabled={phase === 'saving'}>
-                ← Back
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleCommit}
-                disabled={phase === 'saving'}
-                id="confirm-commit-btn"
-              >
-                {phase === 'saving' ? (
-                  <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Saving...</>
-                ) : (
-                  <><Check size={14} /> Save to Guide</>
-                )}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Select phase */}
-        {(phase === 'select' || phase === 'summarizing') && (
           <>
-            <div style={{ flex: 1, overflow: 'hidden', display: 'flex', minHeight: 0 }}>
-              {/* Left: Message selection */}
-              <div style={{
-                flex: 1, overflow: 'auto',
-                padding: 'var(--space-4) var(--space-5)',
-                borderRight: '1px solid var(--color-border)',
-              }}>
-                <div style={{ marginBottom: 'var(--space-3)' }}>
-                  <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-1)' }}>
-                    AI Responses ({selectedCount} selected)
-                  </div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-                    Choose which responses to include in the summary
-                  </div>
-                </div>
+            <div style={{
+              padding: 'var(--space-3) var(--space-6)',
+              borderBottom: '1px solid var(--color-border)',
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              flexShrink: 0,
+              background: 'var(--color-bg-secondary)',
+            }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+                <strong style={{ color: 'var(--color-text-primary)' }}>{updates.length}</strong> section{updates.length !== 1 ? 's' : ''} identified
+                {' · '}
+                <strong style={{ color: 'var(--color-accent)' }}>{enabledCount}</strong> enabled for commit
+              </div>
+              <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                <button
+                  className="btn btn-ghost"
+                  style={{ fontSize: '11px', padding: '3px 8px' }}
+                  onClick={() => {
+                    if (enabledCount === updates.length) {
+                      setEnabledSections(new Set())
+                    } else {
+                      setEnabledSections(new Set(updates.map((u) => u.sectionId)))
+                    }
+                  }}
+                >
+                  {enabledCount === updates.length ? 'Deselect All' : 'Select All'}
+                </button>
+              </div>
+            </div>
 
-                {aiMessages.length === 0 ? (
-                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', padding: 'var(--space-4) 0' }}>
-                    No AI messages yet. Start a learning session first.
-                  </div>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                    {aiMessages.map((msg) => {
-                      const isSelected = selectedMsgs.has(msg.originalIndex)
-                      const preview = msg.content.slice(0, 120).trim() + (msg.content.length > 120 ? '…' : '')
-                      return (
+            {/* Section cards */}
+            <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4) var(--space-6)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                {updates.map((update) => {
+                  const isEnabled = enabledSections.has(update.sectionId)
+                  const isExpanded = expandedSections.has(update.sectionId)
+
+                  return (
+                    <div
+                      key={update.sectionId}
+                      style={{
+                        borderRadius: 'var(--radius-lg)',
+                        border: `1px solid ${isEnabled ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                        background: isEnabled ? 'var(--color-accent-subtle)' : 'var(--color-bg-secondary)',
+                        overflow: 'hidden',
+                        transition: 'all 0.2s ease',
+                        opacity: isEnabled ? 1 : 0.6,
+                      }}
+                    >
+                      {/* Section header */}
+                      <div
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
+                          padding: 'var(--space-3) var(--space-4)',
+                          cursor: 'pointer',
+                        }}
+                        onClick={() => toggleExpand(update.sectionId)}
+                      >
+                        {/* Checkbox */}
                         <div
-                          key={msg.originalIndex}
-                          onClick={() => toggleMsg(msg.originalIndex)}
+                          onClick={(e) => { e.stopPropagation(); toggleSection(update.sectionId) }}
                           style={{
-                            padding: 'var(--space-3)',
-                            borderRadius: 'var(--radius-md)',
-                            border: `1px solid ${isSelected ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                            background: isSelected ? 'var(--color-accent-subtle)' : 'var(--color-bg-secondary)',
+                            width: 20, height: 20, flexShrink: 0,
+                            border: `2px solid ${isEnabled ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                            borderRadius: 'var(--radius-sm)',
+                            background: isEnabled ? 'var(--color-accent)' : 'transparent',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
                             cursor: 'pointer',
-                            transition: 'all var(--duration-fast)',
-                            display: 'flex',
-                            gap: 'var(--space-2)',
-                            alignItems: 'flex-start',
+                            transition: 'all 0.15s ease',
                           }}
                         >
+                          {isEnabled && <Check size={12} color="white" />}
+                        </div>
+
+                        <div style={{ flex: 1, minWidth: 0 }}>
                           <div style={{
-                            width: 18, height: 18, flexShrink: 0, marginTop: 1,
-                            border: `2px solid ${isSelected ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                            borderRadius: 'var(--radius-sm)',
-                            background: isSelected ? 'var(--color-accent)' : 'transparent',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontWeight: 600, fontSize: 'var(--text-sm)',
+                            color: 'var(--color-text-primary)',
+                            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
                           }}>
-                            {isSelected && <Check size={11} color="white" />}
+                            {update.sectionName}
+                            <span style={{
+                              fontSize: '10px', fontWeight: 600,
+                              padding: '1px 6px', borderRadius: 'var(--radius-full)',
+                              background: update.isNew ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)',
+                              color: update.isNew ? '#22c55e' : '#3b82f6',
+                            }}>
+                              {update.isNew ? 'NEW' : 'MERGE'}
+                            </span>
                           </div>
-                          <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
-                            {preview}
+                          <div style={{
+                            fontSize: '11px', color: 'var(--color-text-tertiary)',
+                            marginTop: 2,
+                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                          }}>
+                            {update.reason}
                           </div>
                         </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
 
-              {/* Right: Section picker */}
-              <div style={{ width: 320, overflow: 'auto', padding: 'var(--space-4) var(--space-5)', flexShrink: 0 }}>
-                <div style={{ marginBottom: 'var(--space-3)' }}>
-                  <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: 'var(--space-1)' }}>
-                    Target Section
-                  </div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-                    Where should these notes go in the guide?
-                  </div>
-                </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexShrink: 0 }}>
+                          <Eye size={12} style={{ color: 'var(--color-text-tertiary)' }} />
+                          {isExpanded
+                            ? <ChevronDown size={14} style={{ color: 'var(--color-text-tertiary)' }} />
+                            : <ChevronRight size={14} style={{ color: 'var(--color-text-tertiary)' }} />}
+                        </div>
+                      </div>
 
-                {PILLARS.map((pillar) => {
-                  const isExpanded = expandedPillars[pillar.id]
-                  return (
-                    <div key={pillar.id} style={{ marginBottom: 'var(--space-1)' }}>
-                      <button
-                        onClick={() => togglePillar(pillar.id)}
-                        style={{
-                          width: '100%', display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-                          padding: 'var(--space-2) var(--space-2)',
-                          background: 'none', border: 'none', cursor: 'pointer',
-                          borderRadius: 'var(--radius-sm)',
-                          color: 'var(--color-text-primary)',
-                          fontSize: 'var(--text-xs)', fontWeight: 600,
-                        }}
-                      >
-                        <span style={{
-                          width: 18, height: 18, borderRadius: 'var(--radius-sm)', flexShrink: 0,
-                          background: `${pillar.color}20`, color: pillar.color,
-                          fontSize: '10px', fontWeight: 700,
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        }}>{pillar.number}</span>
-                        <span style={{ flex: 1, textAlign: 'left' }}>{pillar.shortName}</span>
-                        {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                      </button>
-
+                      {/* Expanded preview */}
                       {isExpanded && (
-                        <div style={{ paddingLeft: 'var(--space-5)' }}>
-                          {pillar.topics.map((topic) => {
-                            const sections = BLUEPRINT_SECTIONS[pillar.id] || []
-                            return (
-                              <div key={topic.id} style={{ marginBottom: 'var(--space-1)' }}>
-                                <div style={{
-                                  fontSize: '11px', fontWeight: 600,
-                                  color: 'var(--color-text-secondary)',
-                                  padding: 'var(--space-1) var(--space-2)',
-                                }}>
-                                  {topic.name}
-                                </div>
-                                {sections.map((section) => {
-                                  const isTarget = selectedTarget?.pillarId === pillar.id &&
-                                    selectedTarget?.topicId === topic.id &&
-                                    selectedTarget?.sectionId === section.id
-                                  return (
-                                    <button
-                                      key={section.id}
-                                      onClick={() => selectTarget(pillar.id, topic.id, section.id, section.name, topic.name)}
-                                      style={{
-                                        width: '100%', textAlign: 'left',
-                                        padding: '4px var(--space-2)',
-                                        background: isTarget ? 'var(--color-accent-subtle)' : 'none',
-                                        border: 'none', cursor: 'pointer',
-                                        borderRadius: 'var(--radius-sm)',
-                                        color: isTarget ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
-                                        fontSize: '11px',
-                                        fontWeight: isTarget ? 600 : 400,
-                                        display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
-                                      }}
-                                    >
-                                      {isTarget && <Check size={10} />}
-                                      {section.name}
-                                    </button>
-                                  )
-                                })}
-                              </div>
-                            )
-                          })}
+                        <div style={{
+                          borderTop: '1px solid var(--color-border)',
+                          padding: 'var(--space-4)',
+                          maxHeight: 360,
+                          overflow: 'auto',
+                        }}>
+                          <div style={{
+                            background: 'var(--color-surface)',
+                            borderRadius: 'var(--radius-md)',
+                            padding: 'var(--space-4)',
+                            border: '1px solid var(--color-border)',
+                            fontSize: 'var(--text-sm)',
+                            lineHeight: 'var(--leading-relaxed)',
+                          }}>
+                            <MarkdownRenderer content={update.newContent} />
+                          </div>
                         </div>
                       )}
                     </div>
@@ -385,31 +402,24 @@ export default function CommitModal({ open, onClose, messages = [], onCommitSucc
             <div style={{
               padding: 'var(--space-4) var(--space-6)',
               borderTop: '1px solid var(--color-border)',
-              display: 'flex', gap: 'var(--space-3)', justifyContent: 'space-between',
+              display: 'flex', gap: 'var(--space-3)', justifyContent: 'flex-end',
               alignItems: 'center', flexShrink: 0,
             }}>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-                {selectedTarget
-                  ? <><strong style={{ color: 'var(--color-text-primary)' }}>{selectedTarget.topicName}</strong> → {selectedTarget.sectionName}</>
-                  : 'Select a target section on the right'}
-              </div>
-              <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                <button className="btn btn-secondary" onClick={onClose} disabled={phase === 'summarizing'}>
-                  Cancel
-                </button>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleSummarize}
-                  disabled={!canProceed || phase === 'summarizing'}
-                  id="summarize-btn"
-                >
-                  {phase === 'summarizing' ? (
-                    <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Summarizing...</>
-                  ) : (
-                    <><Sparkles size={14} /> Summarize & Preview</>
-                  )}
-                </button>
-              </div>
+              <button className="btn btn-secondary" onClick={onClose} disabled={phase === 'saving'}>
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleSave}
+                disabled={phase === 'saving' || enabledCount === 0}
+                id="confirm-commit-btn"
+              >
+                {phase === 'saving' ? (
+                  <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Saving…</>
+                ) : (
+                  <><GitCommit size={14} /> Commit {enabledCount} Section{enabledCount !== 1 ? 's' : ''}</>
+                )}
+              </button>
             </div>
           </>
         )}
@@ -417,4 +427,3 @@ export default function CommitModal({ open, onClose, messages = [], onCommitSucc
     </div>
   )
 }
-
