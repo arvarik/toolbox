@@ -178,7 +178,7 @@ export default function DeckEditor({ deck, cards: initialCards = [], onSave, onC
                   <Trash2 size={12} />
                 </button>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
+              <div className="deck-card-fields" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-3)' }}>
                 <div>
                   <label
                     className="settings-label"

@@ -2209,6 +2209,27 @@ textarea.input {
     padding: var(--space-4) !important;
   }
 
+  /* Guide page-wrapper on mobile — reduce horizontal padding for wider text */
+  .guide-content .page-wrapper {
+    padding: var(--space-4) var(--space-3) !important;
+    max-width: 100% !important;
+  }
+
+  /* Guide topic header on mobile — tighter layout */
+  .guide-content .page-wrapper .page-title {
+    font-size: var(--text-lg) !important;
+  }
+
+  /* Guide blueprint cards on mobile — reduce padding for more text space */
+  .guide-content .card {
+    padding: var(--space-3) !important;
+  }
+
+  /* Blueprint content area — reduce inner padding on mobile */
+  .guide-content .blueprint-content {
+    padding: var(--space-3) !important;
+  }
+
   /* ---------- Builder Page ---------- */
   .builder-layout {
     flex-direction: column !important;
@@ -2262,7 +2283,7 @@ textarea.input {
   }
 
   .study-content {
-    padding: var(--space-4) var(--space-4) !important;
+    padding: var(--space-3) var(--space-3) !important;
   }
 
   .deck-grid {
@@ -2270,15 +2291,79 @@ textarea.input {
   }
 
   .flashcard-viewer {
-    padding: var(--space-4) !important;
+    padding: var(--space-3) var(--space-2) !important;
+    justify-content: flex-start !important;
   }
 
   .flashcard {
     max-width: 100% !important;
+    min-height: 240px !important;
+  }
+
+  .flashcard-inner {
+    min-height: 240px !important;
+  }
+
+  .flashcard-face {
+    padding: var(--space-4) var(--space-3) !important;
   }
 
   .flashcard-text {
-    font-size: var(--text-lg) !important;
+    font-size: var(--text-md) !important;
+  }
+
+  .flashcard-label {
+    font-size: 10px !important;
+    margin-bottom: var(--space-2) !important;
+  }
+
+  .flashcard-controls {
+    margin-top: var(--space-4) !important;
+  }
+
+  /* SRS rating buttons — larger touch targets on mobile */
+  .srs-rating-buttons {
+    max-width: 100% !important;
+    gap: var(--space-1) !important;
+  }
+
+  .srs-rating-btn {
+    min-height: 52px !important;
+    padding: var(--space-2) var(--space-1) !important;
+    font-size: var(--text-sm) !important;
+  }
+
+  /* DeckEditor responsive on mobile */
+  #deck-editor {
+    padding: var(--space-4) var(--space-3) !important;
+  }
+
+  #deck-editor .card {
+    padding: var(--space-3) !important;
+  }
+
+  /* Card editor grid: stack front/back vertically on mobile */
+  .deck-card-fields {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* CardBrowser: hide table columns State/Interval for space */
+  #card-browser {
+    padding: var(--space-3) var(--space-3) !important;
+  }
+
+  #card-browser table th:nth-child(3),
+  #card-browser table td:nth-child(3),
+  #card-browser table th:nth-child(4),
+  #card-browser table td:nth-child(4) {
+    display: none !important;
+  }
+
+  /* Chat flashcard popup — ensure it doesn't go off screen */
+  #flashcard-popup {
+    max-width: calc(100vw - 32px) !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
   }
 
   /* ---------- Settings Page ---------- */

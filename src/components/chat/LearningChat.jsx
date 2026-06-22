@@ -6,7 +6,8 @@ import {
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import useAppStore from '../../stores/appStore'
-import { chatApi } from '../../utils/api'
+import { chatApi, guideContentApi } from '../../utils/api'
+import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 
 // ─── Session storage ──────────────────────────────────────────────────────────
 const SESSIONS_KEY = 'toolbox_learning_sessions'
@@ -84,25 +85,29 @@ const PERSONAS = {
     id: 'socratic',
     name: 'Socratic Tutor',
     icon: '💡',
-    context: 'You are an expert system design interview coach. Help the user study deeply through explanation, examples, analogies, and Socratic questioning. Correct misconceptions, surface edge cases, and highlight what separates good from great interview answers. Be concise but thorough. Format responses clearly with markdown.'
+    context: 'You are an expert system design interview coach. Help the user study deeply through explanation, examples, analogies, and Socratic questioning. Correct misconceptions, surface edge cases, and highlight what separates good from great interview answers. Be concise but thorough. Format responses clearly with markdown.',
+    steeringStyle: 'When the current topic is exhausted or there is a natural pause, smoothly transition by asking a thought-provoking Socratic question about the next uncovered section. For example: "Now that we understand X, what do you think would happen if we considered Y?" or "How would this change if we looked at it from the perspective of [next section]?" Only introduce ONE new section at a time.'
   },
   eli5: {
     id: 'eli5',
     name: 'Explain Like I\'m 5',
     icon: '🧸',
-    context: 'You are an expert tutor. Explain concepts using extremely simple language, every-day analogies (like Legos, pizza delivery, water pipes), and avoid jargon entirely. Break down complex system design topics so a 5-year-old could intuitively understand the core mechanics.'
+    context: 'You are an expert tutor. Explain concepts using extremely simple language, every-day analogies (like Legos, pizza delivery, water pipes), and avoid jargon entirely. Break down complex system design topics so a 5-year-old could intuitively understand the core mechanics.',
+    steeringStyle: 'When the current topic is exhausted, gently introduce the next uncovered section with a fun analogy or story. For example: "Great, you understand X! Now imagine you had a lemonade stand and needed to handle [next section concept]..." Only introduce ONE new section at a time. Keep it playful.'
   },
   gordon: {
     id: 'gordon',
     name: 'Strict',
     icon: '🔥',
-    context: 'You are a highly demanding, intense, and strict engineering manager. You speak directly, concisely, and with a sense of urgency. You do not tolerate fluff or buzzwords. Point out flaws in the user\'s reasoning immediately, demand precision, but remain deeply educational and ensure they actually learn the right way to build systems.'
+    context: 'You are a highly demanding, intense, and strict engineering manager. You speak directly, concisely, and with a sense of urgency. You do not tolerate fluff or buzzwords. Point out flaws in the user\'s reasoning immediately, demand precision, but remain deeply educational and ensure they actually learn the right way to build systems.',
+    steeringStyle: 'When the current topic is exhausted, firmly direct the user to the next uncovered section. For example: "Alright, you\'ve got a handle on X. But you haven\'t said a WORD about [next section]. Explain it. Now." Be direct and demanding but educational. Only move to ONE new section at a time.'
   },
   devil: {
     id: 'devil',
     name: "Devil's Advocate",
     icon: '👿',
-    context: 'You are a ruthless technical critic and debate simulator. Whatever the user proposes, you politely but aggressively disagree and poke holes in their logic, scalability, or fault-tolerance. Force the user to defend their architectural choices vigorously. This is for interview prep, so be rigorous.'
+    context: 'You are a ruthless technical critic and debate simulator. Whatever the user proposes, you politely but aggressively disagree and poke holes in their logic, scalability, or fault-tolerance. Force the user to defend their architectural choices vigorously. This is for interview prep, so be rigorous.',
+    steeringStyle: 'When the current topic is exhausted, challenge the user about their gaps: "You\'ve been suspiciously silent about [next section]. What happens when [failure scenario related to that section]? I bet your design falls apart." Provoke them into exploring the uncovered section. Only raise ONE new section at a time.'
   }
 }
 
@@ -385,6 +390,9 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   const [generatingMap, setGeneratingMap] = useState(false)
   const [personaId, setPersonaId] = useState('socratic')
 
+  // Section status for smart steering: { completedSections: string[], emptySections: string[] }
+  const [sectionStatus, setSectionStatus] = useState(null)
+
   // Flashcards state
   const [popupState, setPopupState] = useState(null)
   const [showReviewModal, setShowReviewModal] = useState(false)
@@ -414,21 +422,24 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   // Focus input on mount
   useEffect(() => { inputRef.current?.focus() }, [])
 
-  // Handle text selection for flashcard generation
-  const handleMouseUp = useCallback((e) => {
-    if (e.target.closest('#flashcard-popup') || e.target.closest('input') || e.target.closest('textarea') || e.target.closest('.flashcard-modal-ignore')) return
-    
+  // Handle text selection for flashcard generation (works on both desktop mouseup and mobile touch selection)
+  const checkSelection = useCallback((e) => {
+    if (e?.target?.closest?.('#flashcard-popup') || e?.target?.closest?.('input') || e?.target?.closest?.('textarea') || e?.target?.closest?.('.flashcard-modal-ignore')) return
+
     const selection = window.getSelection()
     const text = selection.toString().trim()
     
     if (text.length > 10) {
-      if (e.target.closest('.learning-chat-messages')) {
+      // Check if selection is within the chat messages area
+      const anchor = selection.anchorNode
+      const msgContainer = anchor?.parentElement?.closest?.('.learning-chat-messages')
+      if (msgContainer) {
         const range = selection.getRangeAt(0)
         const rect = range.getBoundingClientRect()
         setPopupState({
           text,
-          top: Math.max(10, rect.top - 40),
-          left: rect.left + rect.width / 2,
+          top: Math.max(10, rect.top - 48),
+          left: Math.min(Math.max(80, rect.left + rect.width / 2), window.innerWidth - 80),
         })
         return
       }
@@ -437,9 +448,23 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   }, [])
 
   useEffect(() => {
-    document.addEventListener('mouseup', handleMouseUp)
-    return () => document.removeEventListener('mouseup', handleMouseUp)
-  }, [handleMouseUp])
+    // Desktop: mouseup
+    document.addEventListener('mouseup', checkSelection)
+    
+    // Mobile: selectionchange (fires when user finishes selecting text via touch)
+    let selectionTimer = null
+    const handleSelectionChange = () => {
+      clearTimeout(selectionTimer)
+      selectionTimer = setTimeout(() => checkSelection(null), 300)
+    }
+    document.addEventListener('selectionchange', handleSelectionChange)
+    
+    return () => {
+      document.removeEventListener('mouseup', checkSelection)
+      document.removeEventListener('selectionchange', handleSelectionChange)
+      clearTimeout(selectionTimer)
+    }
+  }, [checkSelection])
 
   const handleGenerateAdHocFlashcard = async () => {
     if (!popupState?.text) return
@@ -449,7 +474,17 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     
     try {
       const topicName = activeTopic?.topic?.name || currentSession?.topicName
-      const res = await chatApi.generateFlashcards({ text: textToGen, topicName, model: selectedModel })
+
+      // Build session context from recent messages for more informed card generation
+      let sessionContext = ''
+      if (messages.length > 0) {
+        const recentMsgs = messages.slice(-4)
+        sessionContext = recentMsgs
+          .map(m => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.content.slice(0, 300)}`)
+          .join('\n')
+      }
+
+      const res = await chatApi.generateFlashcards({ text: textToGen, topicName, model: selectedModel, sessionContext })
       if (res.cards && res.cards.length > 0) {
         setGeneratedCards(res.cards)
         setShowReviewModal(true)
@@ -500,7 +535,21 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
       abortControllerRef.current = new AbortController()
       const signal = abortControllerRef.current.signal
-      const currentPersona = currentPersonaObj.context
+
+      // Build persona context with section steering awareness
+      let currentPersona = currentPersonaObj.context
+      if (sectionStatus && (sectionStatus.emptySections.length > 0 || sectionStatus.completedSections.length > 0)) {
+        const topicName = currentSession?.topicName || activeTopic?.topic?.name || 'this topic'
+        currentPersona += `\n\n[STUDY SESSION CONTEXT]\nThe student is studying: "${topicName}".`
+        if (sectionStatus.completedSections.length > 0) {
+          currentPersona += `\nSections already covered in their guide (they have notes on these): ${sectionStatus.completedSections.join(', ')}.`
+        }
+        if (sectionStatus.emptySections.length > 0) {
+          currentPersona += `\nSections NOT yet covered (empty, no notes): ${sectionStatus.emptySections.join(', ')}.`
+          currentPersona += `\n\n[STEERING INSTRUCTION]\n${currentPersonaObj.steeringStyle || 'When the current topic is exhausted, naturally guide the conversation toward the first uncovered section. Only introduce ONE new section at a time.'}`
+          currentPersona += `\nIMPORTANT: Do NOT dump all uncovered sections at once. Address them naturally, one at a time, as the conversation flows. Always respond to the user\'s immediate question first, then steer if appropriate.`
+        }
+      }
 
       const fullText = await chatApi.stream(
         { message: text, context: currentPersona, history: currentHistory, model: selectedModel },
@@ -528,7 +577,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       setIsLoading(false)
     }
      
-  }, [input, isLoading, messages, selectedModel, setMessages, personaId])
+  }, [input, isLoading, messages, selectedModel, setMessages, personaId, sectionStatus, activeTopic, currentSession])
 
   // Handle activeTopic changes (from to-do panel clicks)
   useEffect(() => {
@@ -565,6 +614,27 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
           } }))
         }
       }, 0)
+    }
+
+    // Fetch section status for smart persona steering
+    const pillarSections = BLUEPRINT_SECTIONS[activeTopic.pillar.id] || []
+    if (pillarSections.length > 0) {
+      guideContentApi.getForTopic(activeTopic.pillar.id, activeTopic.topic.id)
+        .then((data) => {
+          const completed = []
+          const empty = []
+          pillarSections.forEach((sec) => {
+            if (data?.[sec.id]?.content?.trim()) {
+              completed.push(sec.name)
+            } else {
+              empty.push(sec.name)
+            }
+          })
+          setSectionStatus({ completedSections: completed, emptySections: empty })
+        })
+        .catch(() => setSectionStatus(null))
+    } else {
+      setSectionStatus(null)
     }
 
     let active = true
@@ -756,25 +826,25 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
             zIndex: 100,
             background: 'var(--color-surface)',
             border: '1px solid var(--color-border)',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-            borderRadius: 'var(--radius-md)',
-            padding: '4px',
+            boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+            borderRadius: 'var(--radius-lg)',
+            padding: '6px',
             display: 'flex',
             gap: '4px'
           }}
         >
           <button
             className="btn btn-primary btn-sm"
-            style={{ fontSize: '11px', padding: '4px 8px' }}
+            style={{ fontSize: '12px', padding: '8px 12px', minHeight: 36, whiteSpace: 'nowrap' }}
             onClick={handleGenerateAdHocFlashcard}
             disabled={isGeneratingCards}
           >
             {isGeneratingCards ? (
-               <Sparkles size={12} style={{ marginRight: 4, animation: 'pulse 1.5s infinite' }} />
+               <Sparkles size={14} style={{ marginRight: 4, animation: 'pulse 1.5s infinite' }} />
             ) : (
-               <Layers size={12} style={{ marginRight: 4 }} />
+               <Layers size={14} style={{ marginRight: 4 }} />
             )}
-            {isGeneratingCards ? 'Generating...' : 'Generate Flashcard'}
+            {isGeneratingCards ? 'Generating...' : 'Make Flashcard'}
           </button>
         </div>
       )}

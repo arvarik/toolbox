@@ -373,7 +373,7 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
           </div>
         </div>
         {reviewMode && !flipped ? (
-          <div style={{ marginTop: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          <div style={{ marginTop: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', width: '100%' }}>
             <p style={{ textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', fontWeight: 500 }}>
               How confident are you in your answer?
             </p>
@@ -381,31 +381,32 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
               <button
                 className="btn btn-outline"
                 onClick={(e) => { e.stopPropagation(); setConfidence('low'); setFlipped(true) }}
-                style={{ padding: 'var(--space-3)' }}
+                style={{ padding: 'var(--space-3)', minHeight: 44 }}
               >
                 Low
               </button>
               <button
                 className="btn btn-outline"
                 onClick={(e) => { e.stopPropagation(); setConfidence('medium'); setFlipped(true) }}
-                style={{ padding: 'var(--space-3)', borderColor: 'var(--color-border)' }}
+                style={{ padding: 'var(--space-3)', borderColor: 'var(--color-border)', minHeight: 44 }}
               >
                 Medium
               </button>
               <button
                 className="btn btn-outline"
                 onClick={(e) => { e.stopPropagation(); setConfidence('high'); setFlipped(true) }}
-                style={{ padding: 'var(--space-3)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)' }}
+                style={{ padding: 'var(--space-3)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)', minHeight: 44 }}
               >
                 High
               </button>
             </div>
           </div>
         ) : !reviewMode && !flipped ? (
-          <div style={{ marginTop: 'var(--space-6)', display: 'flex', justifyContent: 'center' }}>
+          <div style={{ marginTop: 'var(--space-4)', display: 'flex', justifyContent: 'center', width: '100%' }}>
             <button
               className="btn btn-outline"
               onClick={(e) => { e.stopPropagation(); setFlipped(true) }}
+              style={{ minHeight: 44, padding: 'var(--space-3) var(--space-6)' }}
             >
               Show Answer
             </button>

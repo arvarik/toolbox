@@ -199,7 +199,7 @@ export default function BlueprintShell() {
     const overallPercent = totalSections > 0 ? Math.round((totalFilled / totalSections) * 100) : 0
 
     return (
-      <div className="page-wrapper" style={{ padding: 'var(--space-8)', maxWidth: 960, margin: '0 auto' }}>
+      <div className="page-wrapper" style={{ padding: isMobile ? 'var(--space-4) var(--space-3)' : 'var(--space-8)', maxWidth: 960, margin: '0 auto' }}>
         {/* Hero header */}
         <div style={{ marginBottom: 'var(--space-8)', textAlign: 'center' }}>
           <div style={{
@@ -370,7 +370,7 @@ export default function BlueprintShell() {
   // ── Pillar selected but no topic ──────────────────────────────────────────
   if (!topic) {
     return (
-      <div className="page-wrapper" style={{ padding: 'var(--space-8)' }}>
+      <div className="page-wrapper" style={{ padding: isMobile ? 'var(--space-4) var(--space-3)' : 'var(--space-8)' }}>
         <div style={{ marginBottom: 'var(--space-6)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
             <span
@@ -442,7 +442,7 @@ export default function BlueprintShell() {
 
   // ── Full blueprint view for selected topic ────────────────────────────────
   return (
-    <div className="page-wrapper" style={{ padding: 'var(--space-8)' }}>
+    <div className="page-wrapper" style={{ padding: isMobile ? 'var(--space-4) var(--space-3)' : 'var(--space-8)' }}>
       {/* Topic header */}
       <div style={{ marginBottom: 'var(--space-8)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
@@ -500,10 +500,10 @@ export default function BlueprintShell() {
               className="card"
               id={`blueprint-${section.id}`}
             >
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 'var(--space-4)' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: isMobile ? 'var(--space-2)' : 'var(--space-4)' }}>
                 <div
                   style={{
-                    width: 40, height: 40,
+                    width: isMobile ? 28 : 40, height: isMobile ? 28 : 40,
                     borderRadius: 'var(--radius-md)',
                     background: hasContent ? `${pillar.color}15` : 'var(--color-accent-subtle)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -511,7 +511,7 @@ export default function BlueprintShell() {
                     transition: 'background var(--duration-fast)',
                   }}
                 >
-                  <Icon size={18} style={{ color: hasContent ? pillar.color : 'var(--color-accent)' }} />
+                  <Icon size={isMobile ? 14 : 18} style={{ color: hasContent ? pillar.color : 'var(--color-accent)' }} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {/* Section header */}
