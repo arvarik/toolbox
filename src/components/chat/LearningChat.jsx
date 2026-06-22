@@ -393,6 +393,8 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   const sessionsRef = useRef(sessions)
   useEffect(() => { sessionsRef.current = sessions }, [sessions])
 
+  const activeTopicIdRef = useRef(activeTopic?.topic?.id)
+
   // Persist sessions whenever they change
   useEffect(() => { saveSessions(sessions) }, [sessions])
   useEffect(() => { if (currentId) saveCurrentId(currentId) }, [currentId])
@@ -487,21 +489,26 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       topicId: activeTopic.topic.id,
       topicName: activeTopic.topic.name,
     }
-    setTimeout(() => {
-      if (session && session.messages.length > 0) {
-        const s = makeSession(`Study: ${activeTopic.topic.name}`, topicCtx)
-        setSessions((prev) => ({ ...prev, [s.id]: s }))
-        setCurrentId(s.id)
-      } else if (session) {
-        setSessions((prev) => ({ ...prev, [currId]: {
-          ...session,
-          name: `Study: ${activeTopic.topic.name}`,
-          pillarId: topicCtx.pillarId,
-          topicId: topicCtx.topicId,
-          topicName: topicCtx.topicName,
-        } }))
-      }
-    }, 0)
+    
+    // Only recreate/rename session if the topic actually changed
+    if (activeTopicIdRef.current !== activeTopic.topic.id) {
+      activeTopicIdRef.current = activeTopic.topic.id
+      setTimeout(() => {
+        if (session && session.messages.length > 0) {
+          const s = makeSession(`Study: ${activeTopic.topic.name}`, topicCtx)
+          setSessions((prev) => ({ ...prev, [s.id]: s }))
+          setCurrentId(s.id)
+        } else if (session) {
+          setSessions((prev) => ({ ...prev, [currId]: {
+            ...session,
+            name: `Study: ${activeTopic.topic.name}`,
+            pillarId: topicCtx.pillarId,
+            topicId: topicCtx.topicId,
+            topicName: topicCtx.topicName,
+          } }))
+        }
+      }, 0)
+    }
 
     let active = true
     setTimeout(() => setLoadingStarters(true), 0)
@@ -616,6 +623,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
             onRename={renameSession}
             onDelete={deleteSession}
           />
+          <PersonaPicker activeId={personaId} onSelect={setPersonaId} />
           {messages.length > 0 && (
             <span style={{
               fontSize: '10px', color: 'var(--color-text-tertiary)',
@@ -771,9 +779,6 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
       {/* ── Input ── */}
       <div className="learning-chat-input-area" style={{ position: 'relative' }}>
-        <div style={{ position: 'absolute', top: '-40px', right: '0' }}>
-          <PersonaPicker activeId={personaId} onSelect={setPersonaId} />
-        </div>
         <div className="learning-chat-input-wrapper">
           {isLoading && (
             <button

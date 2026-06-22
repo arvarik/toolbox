@@ -801,13 +801,12 @@ Return the list of sections that were substantively covered.`
 
     logger.info(`[chat/commit] Identified ${identifiedSections.length} sections: ${identifiedSections.map((s) => s.id).join(', ')}`)
 
-    // ─── Step 2: Reconcile each section ──────────────────────────────────────
+    // ─── Step 2: Reconcile each section (in parallel) ─────────────────────────
     const reconcileModel = genAI.getGenerativeModel({ model: modelName })
-    const updates = []
 
-    for (const identified of identifiedSections) {
+    const reconcilePromises = identifiedSections.map(async (identified) => {
       const section = sections.find((s) => s.id === identified.id)
-      if (!section) continue
+      if (!section) return null
 
       // Fetch existing guide content for this section
       const existingRow = db.prepare(
@@ -868,22 +867,23 @@ Write the updated "${section.name}" section, seamlessly merging existing and new
       try {
         const reconcileResult = await reconcileModel.generateContent(reconcilePrompt)
         const newContent = reconcileResult.response.text()
-
-        updates.push({
+        logger.info(`[chat/commit] Reconciled section "${section.name}" (${isNew ? 'new' : 'merged'}, ${newContent.length} chars)`)
+        return {
           sectionId: identified.id,
           sectionName: section.name,
           reason: identified.reason,
           existingContent,
           newContent,
           isNew,
-        })
-
-        logger.info(`[chat/commit] Reconciled section "${section.name}" (${isNew ? 'new' : 'merged'}, ${newContent.length} chars)`)
+        }
       } catch (sectionErr) {
         logger.error(`[chat/commit] Failed to reconcile section "${section.name}":`, sectionErr.message)
-        // Continue with other sections — don't fail the whole commit
+        return null // Don't fail the whole commit
       }
-    }
+    })
+
+    const results = await Promise.all(reconcilePromises)
+    const updates = results.filter(Boolean)
 
     logger.info(`[chat/commit] Analysis complete. ${updates.length} section updates ready for preview.`)
     res.json({ updates })

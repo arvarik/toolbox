@@ -1,8 +1,6 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import remarkMath from 'remark-math'
-import rehypeKatex from 'rehype-katex'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Check, Copy } from 'lucide-react'
@@ -67,11 +65,14 @@ function CodeCopyButton({ text }) {
 export default function MarkdownRenderer({ content, className = '' }) {
   if (!content) return null
 
+  // Pre-process common markdown errors from AI
+  // Fix "* Pros:*" -> "* **Pros:**"
+  const processedContent = content.replace(/\* ([A-Za-z0-9 ]+):\*/g, '* **$1:**')
+
   return (
     <div className={`markdown-renderer ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        remarkPlugins={[remarkGfm]}
         components={{
           pre: (props) => {
             const rest = { ...props };
@@ -137,11 +138,10 @@ export default function MarkdownRenderer({ content, className = '' }) {
           },
           th: (props) => { const rest = { ...props }; delete rest.node; return <th style={{ borderBottom: '2px solid var(--color-border)', padding: '8px', textAlign: 'left' }} {...rest} /> },
           td: (props) => { const rest = { ...props }; delete rest.node; return <td style={{ borderBottom: '1px solid var(--color-border)', padding: '8px' }} {...rest} /> },
-          // Use <div> instead of <p> to prevent invalid nesting when code blocks appear inside paragraphs
-          p: (props) => { const rest = { ...props }; delete rest.node; return <div style={{ marginBottom: '0.75em', lineHeight: '1.7' }} {...rest} /> },
+          p: (props) => { const rest = { ...props }; delete rest.node; return <p style={{ marginBottom: '0.75em', lineHeight: '1.7' }} {...rest} /> },
         }}
       >
-        {content}
+        {processedContent}
       </ReactMarkdown>
     </div>
   )
