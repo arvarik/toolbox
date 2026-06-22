@@ -547,7 +547,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         if (sectionStatus.emptySections.length > 0) {
           currentPersona += `\nSections NOT yet covered (empty, no notes): ${sectionStatus.emptySections.join(', ')}.`
           currentPersona += `\n\n[STEERING INSTRUCTION]\n${currentPersonaObj.steeringStyle || 'When the current topic is exhausted, naturally guide the conversation toward the first uncovered section. Only introduce ONE new section at a time.'}`
-          currentPersona += `\nIMPORTANT: Do NOT dump all uncovered sections at once. Address them naturally, one at a time, as the conversation flows. Always respond to the user\'s immediate question first, then steer if appropriate.`
+          currentPersona += `\nIMPORTANT: Do NOT dump all uncovered sections at once. Address them naturally, one at a time, as the conversation flows. Always respond to the user's immediate question first, then steer if appropriate.`
         }
       }
 
@@ -634,6 +634,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         })
         .catch(() => setSectionStatus(null))
     } else {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSectionStatus(null)
     }
 
