@@ -246,7 +246,8 @@ router.post('/stream', async (req, res) => {
     const { GoogleGenerativeAI } = await import('@google/generative-ai')
     const genAI = new GoogleGenerativeAI(config.value)
 
-    // Tools definition
+    // Tools definition (submit_draft removed — critic pattern is incompatible
+    // with thinking-mode streaming due to function call turn adjacency rules)
     const tools = [{
       functionDeclarations: [
         {
@@ -269,17 +270,6 @@ router.post('/stream', async (req, res) => {
               query: { type: "STRING", description: "Topic to search for in the guide" }
             },
             required: ["query"]
-          }
-        },
-        {
-          name: "submit_draft",
-          description: "MANDATORY: You must NEVER give the final answer directly to the user. You MUST first use this tool to submit your proposed draft. A critic will review it and return feedback or approval. If approved, you can then output the final text.",
-          parameters: {
-            type: "OBJECT",
-            properties: {
-              draft_text: { type: "STRING", description: "Your proposed final answer to the user." }
-            },
-            required: ["draft_text"]
           }
         }
       ]
@@ -366,10 +356,6 @@ router.post('/stream', async (req, res) => {
       generationConfig: {
         temperature: 0.5,
         maxOutputTokens: 8192,
-        thinkingConfig: {
-          thinkingBudget: 1024,
-          includeThoughts: false
-        }
       },
     })
 
@@ -437,21 +423,6 @@ router.post('/stream', async (req, res) => {
                 toolResult = rows.slice(0, 3).map(r => r.content);
               }
               if (!toolResult.length) toolResult = "No guide content found.";
-            } else if (fnName === 'submit_draft') {
-              const draft = args.draft_text || '';
-              res.write(`data: ${JSON.stringify({ tool: 'Critic reviewing draft...' })}\n\n`);
-              
-              const criticModel = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' });
-              const criticPrompt = `You are a strict technical critic. Review this proposed answer to the user.\n\nDraft:\n${draft}\n\nProvide feedback on accuracy, hallucinations, and clarity. If it is high quality and accurate, output exactly "APPROVED". Otherwise, point out the flaws briefly.`;
-              
-              const criticResult = await criticModel.generateContent(criticPrompt);
-              const critique = criticResult.response.text().trim();
-              
-              if (critique === 'APPROVED') {
-                 toolResult = "APPROVED. You may now output exactly the draft text to the user.";
-              } else {
-                 toolResult = `REJECTED. Feedback: ${critique}\n\nPlease revise your draft and submit again using submit_draft, or if you think the critic is wrong, address it in your output.`;
-              }
             }
 
             functionResponses.push({
