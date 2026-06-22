@@ -639,10 +639,86 @@ router.get('/:deckId/cards/due', (req, res) => {
 })
 
 /**
+ * POST /api/decks/:deckId/cards/check-duplicates
+ * Check incoming cards against existing cards in the deck for duplicates.
+ * Uses trigram-based Jaccard similarity for fast text matching.
+ * Body: { cards: [{ front, back }] }
+ */
+router.post('/:deckId/cards/check-duplicates', (req, res) => {
+  const { cards } = req.body
+  if (!cards || !Array.isArray(cards)) {
+    return res.status(400).json({ message: 'cards array is required' })
+  }
+
+  const existingCards = db.prepare(
+    'SELECT id, front, back FROM flashcards WHERE deck_id = ?'
+  ).all(req.params.deckId)
+
+  // Generate trigrams from text for Jaccard similarity
+  const trigrams = (text) => {
+    const normalized = text.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim()
+    const tris = new Set()
+    for (let i = 0; i <= normalized.length - 3; i++) {
+      tris.add(normalized.substring(i, i + 3))
+    }
+    return tris
+  }
+
+  const jaccard = (setA, setB) => {
+    if (setA.size === 0 && setB.size === 0) return 1
+    let intersection = 0
+    for (const item of setA) {
+      if (setB.has(item)) intersection++
+    }
+    const union = setA.size + setB.size - intersection
+    return union === 0 ? 0 : intersection / union
+  }
+
+  // Pre-compute trigrams for existing cards
+  const existingTrigrams = existingCards.map(c => ({
+    card: c,
+    frontTri: trigrams(c.front),
+    backTri: trigrams(c.back),
+    combinedTri: trigrams(c.front + ' ' + c.back),
+  }))
+
+  const results = cards.map(incoming => {
+    const incomingFrontTri = trigrams(incoming.front)
+    const incomingCombinedTri = trigrams(incoming.front + ' ' + incoming.back)
+    
+    let bestMatch = null
+    let bestSimilarity = 0
+
+    for (const existing of existingTrigrams) {
+      // Check front-to-front similarity (catches rephrased questions)
+      const frontSim = jaccard(incomingFrontTri, existing.frontTri)
+      // Check combined similarity (catches full card duplication)
+      const combinedSim = jaccard(incomingCombinedTri, existing.combinedTri)
+      const maxSim = Math.max(frontSim, combinedSim)
+
+      if (maxSim > bestSimilarity) {
+        bestSimilarity = maxSim
+        bestMatch = existing.card
+      }
+    }
+
+    const isDuplicate = bestSimilarity > 0.55
+    return {
+      ...incoming,
+      isDuplicate,
+      similarity: Math.round(bestSimilarity * 100),
+      duplicateOf: isDuplicate ? { front: bestMatch.front, back: bestMatch.back } : null,
+    }
+  })
+
+  res.json({ results })
+})
+
+/**
  * POST /api/decks/:deckId/cards
  */
 router.post('/:deckId/cards', (req, res) => {
-  const { front, back, prerequisite_id } = req.body
+  const { front, back, prerequisite_id, source_pillar_id, source_topic_id, source_section_id, is_reverse, reverse_of_id } = req.body
   if (!front || !back) return res.status(400).json({ message: 'Front and back are required' })
 
   const id = uuid()
@@ -651,8 +727,14 @@ router.post('/:deckId/cards', (req, res) => {
   ).get(req.params.deckId)
 
   db.prepare(
-    'INSERT INTO flashcards (id, deck_id, front, back, position, prerequisite_id) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(id, req.params.deckId, front, back, (maxPos?.max || 0) + 1, prerequisite_id || null)
+    `INSERT INTO flashcards (id, deck_id, front, back, position, prerequisite_id, source_pillar_id, source_topic_id, source_section_id, is_reverse, reverse_of_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    id, req.params.deckId, front, back, (maxPos?.max || 0) + 1,
+    prerequisite_id || null,
+    source_pillar_id || null, source_topic_id || null, source_section_id || null,
+    is_reverse ? 1 : 0, reverse_of_id || null
+  )
 
   db.prepare("UPDATE decks SET updated_at = datetime('now') WHERE id = ?").run(req.params.deckId)
 

@@ -3166,6 +3166,10 @@ textarea.input {
   to { transform: rotate(360deg); }
 }
 
+.spin {
+  animation: spin 1s linear infinite;
+}
+
 /* ─── Session Picker ─────────────────────────────────────────────────────────── */
 
 .session-picker-btn:hover {

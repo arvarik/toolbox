@@ -164,6 +164,33 @@ function migrate() {
   } catch {
     // Column already exists
   }
+
+  // Guide ↔ Flashcard linking columns (additive — safe to re-run)
+  const guideLinkColumns = [
+    ['source_pillar_id', 'TEXT DEFAULT NULL'],
+    ['source_topic_id', 'TEXT DEFAULT NULL'],
+    ['source_section_id', 'TEXT DEFAULT NULL'],
+  ]
+  for (const [col, type] of guideLinkColumns) {
+    try {
+      db.exec(`ALTER TABLE flashcards ADD COLUMN ${col} ${type}`)
+    } catch {
+      // Column already exists
+    }
+  }
+
+  // Reverse card tracking columns (additive — safe to re-run)
+  const reverseColumns = [
+    ['is_reverse', 'INTEGER DEFAULT 0'],
+    ['reverse_of_id', 'TEXT DEFAULT NULL'],
+  ]
+  for (const [col, type] of reverseColumns) {
+    try {
+      db.exec(`ALTER TABLE flashcards ADD COLUMN ${col} ${type}`)
+    } catch {
+      // Column already exists
+    }
+  }
 }
 
 migrate()

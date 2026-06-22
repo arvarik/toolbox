@@ -501,38 +501,54 @@ router.post('/stream', async (req, res) => {
     res.write('data: [DONE]\n\n')
     res.end()
 
-    // ─── 4. Autonomous Memory Management (Antigravity Agent) ────────────────
+    // ─── 4. Autonomous Memory Management (Interactions API) ────────────────
     setTimeout(async () => {
       try {
         if (chatHistory.length > 0) {
           const { GoogleGenAI } = await import('@google/genai');
           const client = new GoogleGenAI({ apiKey: config.value });
           
-          const extractionPrompt = `You are the autonomous memory manager (antigravity agent) for this user.
+          const extractionPrompt = `You are the autonomous memory manager for this user.
 Analyze the following latest interaction. Extract ANY new, highly important episodic learning events (struggles, analogies that clicked, specific facts mastered).
 Only return events that are worth remembering long-term.
 
 Chat History:
 ${chatHistory.map(m => `${m.role}: ${m.parts[0].text}`).join('\n')}
 user: ${message}
-model: ${generatedText}
-
-Return JSON matching: { "events": [{ "memory_text": "string", "importance_score": 5 }] }`;
+model: ${generatedText}`;
           
-          const extractResult = await client.interactions.create({
-            agent: 'antigravity-preview-05-2026',
-            input: extractionPrompt,
-            environment: 'remote'
+          const extractResult = await client.models.generateContent({
+            model: requestedModel || 'gemini-3.5-flash',
+            contents: extractionPrompt,
+            config: {
+              responseMimeType: 'application/json',
+              responseSchema: {
+                type: 'object',
+                properties: {
+                  events: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        memory_text: { type: 'string', description: 'A concise description of the learning event' },
+                        importance_score: { type: 'number', description: 'Importance score from 1 to 10' }
+                      },
+                      required: ['memory_text', 'importance_score']
+                    }
+                  }
+                },
+                required: ['events']
+              }
+            }
           });
           
           let data;
           try {
-            const outText = extractResult.output_text;
-            const match = outText.match(/```(?:json)?\n([\s\S]*?)\n```/) || outText.match(/{[\s\S]*}/);
-            data = JSON.parse(match ? (match[1] || match[0]) : outText);
+            data = JSON.parse(extractResult.text);
           } catch(e) {
             logger.error('[Memory Manager] JSON Parse error', e.message);
           }
+
           
           if (data && data.events && data.events.length > 0) {
             for (const ev of data.events) {
@@ -557,13 +573,14 @@ Return JSON matching: { "events": [{ "memory_text": "string", "importance_score"
 /**
  * POST /api/chat/generate-flashcards
  * Generate flashcards from a given text and topic.
- * Body: { text, topicName, model, sessionContext }
+ * Body: { text, topicName, model, sessionContext, sections?, pillarId?, topicId? }
+ * When `sections` is provided, generates cards per-section with source tagging.
  */
 router.post('/generate-flashcards', async (req, res) => {
-  const { text, topicName, model: requestedModel, sessionContext } = req.body
+  const { text, topicName, model: requestedModel, sessionContext, sections, pillarId, topicId } = req.body
 
-  if (!text) {
-    return res.status(400).json({ message: 'Text is required to generate flashcards.' })
+  if (!text && (!sections || sections.length === 0)) {
+    return res.status(400).json({ message: 'Text or sections are required to generate flashcards.' })
   }
 
   const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
@@ -574,34 +591,30 @@ router.post('/generate-flashcards', async (req, res) => {
   }
 
   try {
-    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(config.value)
-    
-    // Using structured output schema for reliable JSON parsing
-    const model = genAI.getGenerativeModel({
-      model: requestedModel || 'gemini-3.5-flash',
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: SchemaType.ARRAY,
-          items: {
-            type: SchemaType.OBJECT,
-            properties: {
-              front: { type: SchemaType.STRING, description: "The front of the flashcard: a concise 1-2 line question, term, or concept prompt. Should be clear and specific." },
-              back: { type: SchemaType.STRING, description: "The back of the flashcard: a dense 2-3 line answer capturing the essential knowledge. Use precise technical language." }
-            },
-            required: ["front", "back"]
-          },
-          description: "An array of high-quality flashcards for active recall study."
-        }
-      }
-    })
+    const { GoogleGenAI } = await import('@google/genai')
+    const client = new GoogleGenAI({ apiKey: config.value })
+    const modelName = requestedModel || 'gemini-3.5-flash'
 
     // Build context section if available
     let contextBlock = ''
     if (sessionContext) {
       contextBlock = `\n\nFor additional context, this text comes from a study session about "${topicName || 'system design'}". Here is some surrounding conversation context to help you create more informed cards:\n--- SESSION CONTEXT ---\n${sessionContext}\n--- END CONTEXT ---\nUse this context ONLY to better understand the concepts — the flashcard content should primarily come from the source text below.\n`
     }
+
+    // Build source text — either section-aware or flat
+    let sourceBlock = ''
+    if (sections && sections.length > 0) {
+      sourceBlock = sections.map(s => 
+        `=== SECTION: "${s.sectionName}" (id: "${s.sectionId}") ===\n${s.content}`
+      ).join('\n\n---\n\n')
+    } else {
+      sourceBlock = text
+    }
+
+    const sectionAwareInstructions = sections && sections.length > 0
+      ? `\n7. TAG EACH CARD with the section it came from using sourceSectionId and sourceSectionName fields. Use the exact section id and name provided above.
+8. Generate cards from EACH section that has substantive content. Aim for 2-4 cards per section, but skip sections with insufficient depth.`
+      : ''
 
     const prompt = `You are an expert flashcard creator for system design study.
 
@@ -615,25 +628,137 @@ CARD FORMAT RULES (strictly follow):
 2. BACK (Answer): Maximum 2-3 dense lines. Capture the essential knowledge with precise, technical language. Include key thresholds, tradeoffs, or concrete examples where relevant. No fluff.
 3. Each card should test ONE specific concept — never bundle multiple ideas.
 4. Prioritize cards that test understanding of WHY and WHEN, not just WHAT.
-5. Do NOT generate more than 10 cards. If the text is short (1-3 sentences), generate 1-2 cards maximum.
-6. The content should primarily come from the source text. You may add minimal clarification to make answers cohesive, but do NOT invent information not present in the text.
+5. Do NOT generate more than 10 cards total. If the text is short (1-3 sentences), generate 1-2 cards maximum.
+6. The content should primarily come from the source text. You may add minimal clarification to make answers cohesive, but do NOT invent information not present in the text.${sectionAwareInstructions}
 
-Source text:
-${text}`
+Source material:
+${sourceBlock}`
 
-    const result = await model.generateContent(prompt)
+    // Build schema — with or without section tagging
+    const cardProperties = {
+      front: { type: 'string', description: 'The front of the flashcard: a concise 1-2 line question' },
+      back: { type: 'string', description: 'The back of the flashcard: a dense 2-3 line answer' },
+    }
+    const requiredFields = ['front', 'back']
+
+    if (sections && sections.length > 0) {
+      cardProperties.sourceSectionId = { type: 'string', description: 'The section id this card was generated from' }
+      cardProperties.sourceSectionName = { type: 'string', description: 'The section name this card was generated from' }
+      requiredFields.push('sourceSectionId', 'sourceSectionName')
+    }
+
+    const result = await client.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: cardProperties,
+            required: requiredFields,
+          },
+        },
+      },
+    })
+
     let generatedCards = []
     try {
-      generatedCards = JSON.parse(result.response.text())
+      generatedCards = JSON.parse(result.text)
     } catch {
-      // Fallback if structured output fails
       return res.status(500).json({ message: 'Failed to parse generated flashcards.' })
+    }
+
+    // Attach source metadata if available
+    if (pillarId || topicId) {
+      generatedCards = generatedCards.map(card => ({
+        ...card,
+        sourcePillarId: pillarId || null,
+        sourceTopicId: topicId || null,
+      }))
     }
 
     res.json({ cards: generatedCards })
   } catch (err) {
     logger.error('[chat/generate-flashcards] Error:', err.message)
     res.status(500).json({ message: 'Failed to generate flashcards.' })
+  }
+})
+
+/**
+ * POST /api/chat/generate-reverse-cards
+ * Generate reverse (bidirectional) flashcards from existing Q&A pairs.
+ * Body: { cards: [{ front, back }], model }
+ */
+router.post('/generate-reverse-cards', async (req, res) => {
+  const { cards, model: requestedModel } = req.body
+  if (!cards || !Array.isArray(cards) || cards.length === 0) {
+    return res.status(400).json({ message: 'Cards array is required.' })
+  }
+
+  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
+  if (!config?.value) {
+    return res.status(400).json({ message: 'Gemini API key not configured.' })
+  }
+
+  try {
+    const { GoogleGenAI } = await import('@google/genai')
+    const client = new GoogleGenAI({ apiKey: config.value })
+    const modelName = requestedModel || 'gemini-3.5-flash'
+
+    const cardList = cards.map((c, i) =>
+      `[Card ${i}]\nQ: ${c.front}\nA: ${c.back}`
+    ).join('\n\n')
+
+    const prompt = `You are an expert flashcard creator. Given the flashcards below, generate ONE reverse card for each that tests the SAME concept from a different angle or retrieval pathway.
+
+RULES:
+1. The reverse card must test the same knowledge but from a different direction.
+2. Do NOT simply swap front and back — the back (answer) is a paragraph, not a valid question.
+3. Instead, create a NEW question that approaches the same concept differently:
+   - If the original asks "What is X?", the reverse might ask "Which technique does Y?" or "When would you choose X over Z?"
+   - If the original asks "When to use X?", the reverse might ask "What are the tradeoffs of X?"
+4. Keep the same format: 1-2 line question, 2-3 line answer.
+5. The originalIndex field must be the [Card N] index number from the input.
+
+--- FLASHCARDS ---
+${cardList}
+--- END ---
+
+Generate one reverse card per input card.`
+
+    const result = await client.models.generateContent({
+      model: modelName,
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              front: { type: 'string', description: 'Reverse question' },
+              back: { type: 'string', description: 'Answer for the reverse question' },
+              originalIndex: { type: 'integer', description: 'Index of the original card this reverses' },
+            },
+            required: ['front', 'back', 'originalIndex'],
+          },
+        },
+      },
+    })
+
+    let reverseCards = []
+    try {
+      reverseCards = JSON.parse(result.text)
+    } catch {
+      return res.status(500).json({ message: 'Failed to parse reverse cards.' })
+    }
+
+    res.json({ reverseCards })
+  } catch (err) {
+    logger.error('[chat/generate-reverse-cards] Error:', err.message)
+    res.status(500).json({ message: 'Failed to generate reverse cards.' })
   }
 })
 
@@ -859,44 +984,100 @@ router.post('/commit', async (req, res) => {
   }
 
   try {
-    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(config.value)
+    const { GoogleGenAI } = await import('@google/genai')
+    const client = new GoogleGenAI({ apiKey: config.value })
     const modelName = requestedModel || 'gemini-3.5-flash'
 
-    // ─── Step 1: Identify which sections were discussed + extract relevant message indices ─
     logger.info(`[chat/commit] Analyzing session for topic "${topicName}" (${pillarId}/${topicId}). ${messages.length} messages.`)
 
-    // Number each message for precise excerpt extraction
+    // Number each message for reference
     const numberedMessages = messages.map((m, i) =>
       `[MSG ${i}][${m.role === 'ai' ? 'Tutor' : 'Student'}]: ${m.content}`
     )
     const conversationText = numberedMessages.join('\n\n')
 
-    const sectionList = sections.map((s) => `- "${s.id}": ${s.name}`).join('\n')
+    // Fetch existing content for ALL sections upfront
+    const existingContentMap = {}
+    for (const sec of sections) {
+      const row = db.prepare(
+        'SELECT content FROM guide_content WHERE pillar_id = ? AND topic_id = ? AND section_id = ?'
+      ).get(pillarId, topicId, sec.id)
+      existingContentMap[sec.id] = row?.content?.trim() || ''
+    }
 
-    const analysisModel = genAI.getGenerativeModel({
+    // Build existing content context for the prompt
+    const existingContentBlock = sections
+      .filter(s => existingContentMap[s.id])
+      .map(s => `### ${s.name} (id: "${s.id}"):\n${existingContentMap[s.id]}`)
+      .join('\n\n---\n\n')
+
+    const sectionList = sections.map(s => {
+      const status = existingContentMap[s.id] ? 'HAS EXISTING CONTENT — merge new learnings' : 'EMPTY — create from scratch'
+      return `- "${s.id}": ${s.name} [${status}]`
+    }).join('\n')
+
+    const prompt = `You are a technical editor analyzing a study session conversation and compiling guide content for a system design study guide.
+
+Topic: "${topicName}"
+
+TASK: Analyze the conversation below and produce updated guide content for EACH section that was substantively discussed. A section counts as "discussed" ONLY if the conversation contains real technical content, examples, tradeoffs, or explanations relevant to that section — not just a brief mention.
+
+AVAILABLE SECTIONS:
+${sectionList}
+
+${existingContentBlock ? `EXISTING GUIDE CONTENT (preserve all accurate existing knowledge and merge new learnings into it):\n${existingContentBlock}\n` : ''}CRITICAL RULES:
+1. Only include sections that were SUBSTANTIVELY discussed with real technical depth.
+2. For sections with existing content, your newContent must be the COMPLETE MERGED result: preserve all existing knowledge that is still accurate AND weave in new learnings from the conversation. Reorganize so it reads naturally as a unified reference.
+3. For empty sections, create content ONLY from what was discussed in the conversation. Do NOT pad with general knowledge.
+
+MUTUAL EXCLUSIVITY (HIGHEST PRIORITY):
+4. Sections must be MUTUALLY EXCLUSIVE in their content. Each fact, example, tradeoff, or explanation belongs in exactly ONE section — the best-fit section based on these ownership rules:
+   - "Description & Internal Workings" / "Concept & Mental Model" OWNS: what the thing IS, how it works internally, its data structures and algorithms.
+   - "Use Cases & Tradeoffs" / "Strategies & Algorithms" OWNS: WHEN to use it, alternatives comparison, decision criteria.
+   - "Scaling" OWNS: capacity math, throughput numbers, horizontal/vertical scaling mechanisms.
+   - "Availability & Reliability" OWNS: replication for HA, failover, durability guarantees.
+   - "Failure Modes & Blast Radius" OWNS: HOW it breaks, cascading failures, operational risks.
+   - "Cost Vectors at Scale" OWNS: economic tradeoffs, resource pricing, optimization levers.
+   - "Deployment & APIs" OWNS: configuration, client libraries, operational runbooks.
+   - "Tradeoffs & CAP Implications" OWNS: fundamental theoretical tensions and limits.
+   - "Interview Angles & Gotchas" OWNS: common mistakes, trick questions, nuanced distinctions.
+5. DECISION FRAMEWORK for borderline content: If a concept could fit two sections, ask "what is the PRIMARY teaching goal of this fact?" Place it in the section whose purpose best matches that goal.
+6. CROSS-REFERENCES ARE OK: A section MAY include a brief one-line pointer like "See Failure Modes for blast radius details" to provide flow and context, but must NOT duplicate the actual content.
+7. SELF-CHECK: Before finalizing, scan all sections you are returning. If any paragraph or bullet appears (even paraphrased) in more than one section, remove it from all but the most appropriate section.
+
+FORMAT RULES:
+8. Format as clean, dense markdown for a technical reference guide:
+   - Use ## for subsection headers when needed
+   - Use bullet points for lists of properties, tradeoffs, or examples
+   - Use backtick inline code for technical terms, thresholds, and config values
+   - Use **bold** for key terms on first use
+   - Be concise — this is a study reference, not an essay
+
+--- CONVERSATION ---
+${conversationText}
+--- END CONVERSATION ---
+
+Return the sections that were substantively discussed with their complete updated content.`
+
+    const result = await client.models.generateContent({
       model: modelName,
-      generationConfig: {
+      contents: prompt,
+      config: {
         responseMimeType: 'application/json',
         responseSchema: {
-          type: SchemaType.OBJECT,
+          type: 'object',
           properties: {
             sections: {
-              type: SchemaType.ARRAY,
+              type: 'array',
               items: {
-                type: SchemaType.OBJECT,
+                type: 'object',
                 properties: {
-                  id: { type: SchemaType.STRING, description: 'The section id from the provided list' },
-                  reason: { type: SchemaType.STRING, description: 'Brief reason why this section was covered in the conversation' },
-                  messageIndices: {
-                    type: SchemaType.ARRAY,
-                    items: { type: SchemaType.INTEGER },
-                    description: 'Array of message indices (the MSG N numbers) that are relevant to this section. Include both the student question and tutor answer messages.'
-                  }
+                  sectionId: { type: 'string', description: 'The section id from the provided list' },
+                  reason: { type: 'string', description: 'Brief reason why this section was covered in the conversation' },
+                  newContent: { type: 'string', description: 'The complete updated section content in markdown format' }
                 },
-                required: ['id', 'reason', 'messageIndices']
-              },
-              description: 'List of sections that were substantively discussed, with their relevant message indices'
+                required: ['sectionId', 'reason', 'newContent']
+              }
             }
           },
           required: ['sections']
@@ -904,251 +1085,41 @@ router.post('/commit', async (req, res) => {
       }
     })
 
-    const analysisPrompt = `You are analyzing a study session conversation about "${topicName}" in a system design guide.
-
-Your task: Determine which guide sections were **substantively discussed** and identify the SPECIFIC messages relevant to each section.
-
-Rules:
-1. A section counts as "discussed" ONLY if the conversation contains real technical content, examples, tradeoffs, or explanations that would meaningfully contribute to that section.
-2. Do NOT include a section just because it was briefly mentioned in passing — only include sections where the student actually LEARNED something.
-3. For each section, identify the specific message indices (the [MSG N] numbers) that contain the relevant discussion. Include BOTH student questions and tutor answers.
-4. Each message should ideally be assigned to AT MOST ONE section. If a message spans multiple sections, assign it to the MOST relevant one. This prevents content duplication across sections.
-
-Available sections for "${topicName}":
-${sectionList}
-
---- CONVERSATION ---
-${conversationText}
---- END CONVERSATION ---
-
-Return the list of sections that were substantively covered, with their relevant message indices.`
-
-    const analysisResult = await analysisModel.generateContent(analysisPrompt)
-    const analysisText = analysisResult.response.text()
     let identifiedSections
-
     try {
-      const parsed = JSON.parse(analysisText)
+      const parsed = JSON.parse(result.text)
       identifiedSections = parsed.sections || []
     } catch (parseErr) {
-      logger.error('[chat/commit] Failed to parse section analysis:', parseErr.message, analysisText)
+      logger.error('[chat/commit] Failed to parse response:', parseErr.message)
       return res.status(500).json({ message: 'Failed to analyze conversation sections.' })
     }
 
     // Validate section IDs against the actual section list
-    const validSectionIds = new Set(sections.map((s) => s.id))
-    identifiedSections = identifiedSections.filter((s) => validSectionIds.has(s.id))
+    const validSectionIds = new Set(sections.map(s => s.id))
+    identifiedSections = identifiedSections.filter(s => validSectionIds.has(s.sectionId))
 
     if (identifiedSections.length === 0) {
       logger.info('[chat/commit] No sections identified as discussed.')
       return res.json({ updates: [] })
     }
 
-    logger.info(`[chat/commit] Identified ${identifiedSections.length} sections: ${identifiedSections.map((s) => s.id).join(', ')}`)
-
-    // ─── Step 2: Reconcile each section with SCOPED excerpts (parallel with retries) ─
-    const reconcileModel = genAI.getGenerativeModel({ model: modelName })
-
-    // Build the list of all other section names for cross-section awareness
-    const allIdentifiedNames = identifiedSections.map((s) => {
-      const sec = sections.find((x) => x.id === s.id)
-      return sec ? sec.name : s.id
-    })
-
-    const reconcileTasks = identifiedSections.map((identified) => async () => {
-      const section = sections.find((s) => s.id === identified.id)
-      if (!section) return null
-
-      // Extract only the relevant messages for this section
-      const relevantIndices = (identified.messageIndices || []).filter(
-        (i) => i >= 0 && i < messages.length
-      )
-      let scopedExcerpts
-      if (relevantIndices.length > 0) {
-        scopedExcerpts = relevantIndices
-          .map((i) => `[${messages[i].role === 'ai' ? 'Tutor' : 'Student'}]: ${messages[i].content}`)
-          .join('\n\n')
-      } else {
-        // Fallback: use full conversation if no indices were extracted
-        scopedExcerpts = messages
-          .map((m) => `[${m.role === 'ai' ? 'Tutor' : 'Student'}]: ${m.content}`)
-          .join('\n\n')
+    // Map to the expected updates format
+    const updates = identifiedSections.map(identified => {
+      const section = sections.find(s => s.id === identified.sectionId)
+      const existingContent = existingContentMap[identified.sectionId] || ''
+      return {
+        sectionId: identified.sectionId,
+        sectionName: section?.name || identified.sectionId,
+        reason: identified.reason,
+        existingContent,
+        newContent: identified.newContent,
+        isNew: !existingContent,
       }
-
-      // Build list of OTHER sections being committed (for dedup awareness)
-      const otherSections = allIdentifiedNames
-        .filter((name) => name !== section.name)
-        .map((name) => `  - ${name}`)
-        .join('\n')
-
-      // Fetch existing guide content for this section
-      const existingRow = db.prepare(
-        'SELECT content FROM guide_content WHERE pillar_id = ? AND topic_id = ? AND section_id = ?'
-      ).get(pillarId, topicId, identified.id)
-
-      const existingContent = existingRow?.content || ''
-      const isNew = !existingContent.trim()
-
-      let reconcilePrompt
-      if (isNew) {
-        // No existing content — create from scratch using only scoped excerpts
-        reconcilePrompt = `You are a technical writing assistant compiling a system design study guide.
-
-Topic: "${topicName}"
-Section: "${section.name}"
-
-CRITICAL RULES:
-1. ONLY include information that was ACTUALLY DISCUSSED in the conversation excerpts below. Do NOT add general knowledge or information not present in the conversation.
-2. This section is specifically about "${section.name}". Do NOT include content that belongs in these OTHER sections being committed from the same session:
-${otherSections || '  (none)'}
-3. If a concept was discussed that clearly belongs in another section above, do NOT include it here.
-
-Format as clean, dense markdown for a technical reference guide:
-- Use ## for subsection headers when needed
-- Use bullet points for lists of properties, tradeoffs, or examples
-- Use backtick inline code for technical terms, thresholds, and config values
-- Use **bold** for key terms on first use
-- Be concise — this is a study reference, not an essay
-
---- RELEVANT CONVERSATION EXCERPTS ---
-${scopedExcerpts}
---- END EXCERPTS ---
-
-Write the "${section.name}" section content based ONLY on what was discussed above:`
-      } else {
-        // Existing content — reconcile/merge
-        reconcilePrompt = `You are a technical writing assistant maintaining a system design study guide.
-
-Topic: "${topicName}"
-Section: "${section.name}"
-
-The student has completed a new study session. Your task is to **merge** new learnings into the existing section content.
-
-CRITICAL RULES:
-1. ONLY add information that was ACTUALLY DISCUSSED in the conversation excerpts below. Do NOT add general knowledge or pad with information not from this session.
-2. PRESERVE all existing knowledge that is still accurate.
-3. NEVER duplicate information — if the session covers something already in the guide, keep the better/more detailed version.
-4. This section is specifically about "${section.name}". Do NOT include content that belongs in these OTHER sections being committed from the same session:
-${otherSections || '  (none)'}
-5. Reorganize and re-flow so it reads naturally as a unified reference.
-6. Maintain the same markdown formatting style.
-
---- EXISTING GUIDE CONTENT ---
-${existingContent}
---- END EXISTING CONTENT ---
-
---- NEW SESSION CONVERSATION EXCERPTS ---
-${scopedExcerpts}
---- END EXCERPTS ---
-
-Write the updated "${section.name}" section, merging existing and new content. Add ONLY new information that was discussed in the excerpts:`
-      }
-
-      try {
-        const newContent = await retryWithBackoff(
-          async () => {
-            const result = await reconcileModel.generateContent(reconcilePrompt)
-            return result.response.text()
-          },
-          3,    // max retries
-          1500, // base delay 1.5s
-          `commit/${section.name}`
-        )
-        logger.info(`[chat/commit] Reconciled section "${section.name}" (${isNew ? 'new' : 'merged'}, ${newContent.length} chars)`)
-        return {
-          sectionId: identified.id,
-          sectionName: section.name,
-          reason: identified.reason,
-          existingContent,
-          newContent,
-          isNew,
-        }
-      } catch (sectionErr) {
-        logger.error(`[chat/commit] Failed to reconcile section "${section.name}" after retries:`, sectionErr.message)
-        return null // Don't fail the whole commit
-      }
-    })
-
-    // Run with concurrency limit of 3 to avoid rate limiting
-    const results = await runWithConcurrency(reconcileTasks, 3)
-    let updates = results.filter(Boolean)
-
-    // ─── Step 3: Cross-section deduplication pass ────────────────────────────
-    if (updates.length > 1) {
-      logger.info(`[chat/commit] Running dedup pass across ${updates.length} sections...`)
-      try {
-        const dedupModel = genAI.getGenerativeModel({
-          model: modelName,
-          generationConfig: {
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: SchemaType.OBJECT,
-              properties: {
-                sections: {
-                  type: SchemaType.ARRAY,
-                  items: {
-                    type: SchemaType.OBJECT,
-                    properties: {
-                      sectionId: { type: SchemaType.STRING, description: 'The section id' },
-                      dedupedContent: { type: SchemaType.STRING, description: 'The cleaned content with cross-section duplicates removed' }
-                    },
-                    required: ['sectionId', 'dedupedContent']
-                  }
-                }
-              },
-              required: ['sections']
-            }
-          }
-        })
-
-        const sectionSummaries = updates.map((u) =>
-          `### Section: "${u.sectionName}" (id: ${u.sectionId})\n${u.newContent}`
-        ).join('\n\n---\n\n')
-
-        const dedupPrompt = `You are a technical editor reviewing multiple sections of a system design study guide that were generated from the same study session.
-
-Your task: Remove DUPLICATED content that appears in multiple sections. Each piece of information should appear in exactly ONE section — the most appropriate one.
-
-Rules:
-1. If the same concept, example, or explanation appears in multiple sections, KEEP it only in the most relevant section and REMOVE it from the others.
-2. Do NOT add any new content. Only remove duplicates.
-3. Do NOT change the structure or formatting of the content. Only remove duplicated paragraphs/bullets.
-4. If content is slightly rephrased between sections but covers the same idea, that still counts as a duplicate — remove the less appropriate instance.
-5. PRESERVE all unique content in each section.
-
-Here are the sections to review:
-
-${sectionSummaries}
-
-Return all sections with duplicates removed. Each section's dedupedContent should be the full cleaned content (not a diff).`
-
-        const dedupResult = await retryWithBackoff(
-          async () => {
-            const result = await dedupModel.generateContent(dedupPrompt)
-            return result.response.text()
-          },
-          2,    // max retries
-          2000, // base delay
-          'commit/dedup'
-        )
-
-        const dedupParsed = JSON.parse(dedupResult)
-        if (dedupParsed.sections && Array.isArray(dedupParsed.sections)) {
-          const dedupMap = new Map(dedupParsed.sections.map((s) => [s.sectionId, s.dedupedContent]))
-          updates = updates.map((u) => ({
-            ...u,
-            newContent: dedupMap.get(u.sectionId) || u.newContent,
-          }))
-          logger.info('[chat/commit] Dedup pass complete.')
-        }
-      } catch (dedupErr) {
-        // Dedup is best-effort — don't fail the commit if it errors
-        logger.warn(`[chat/commit] Dedup pass failed (non-fatal): ${dedupErr.message}`)
-      }
-    }
+    }).filter(u => u.newContent && u.newContent.trim())
 
     logger.info(`[chat/commit] Analysis complete. ${updates.length} section updates ready for preview.`)
     res.json({ updates })
+
   } catch (err) {
     logger.error('[chat/commit] Error:', err.message)
     res.status(500).json({ message: 'Failed to analyze session. Please try again.' })

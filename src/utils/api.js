@@ -91,6 +91,8 @@ export const flashcardsApi = {
     request(`/decks/${deckId}/cards/${cardId}`, { method: 'DELETE' }),
   review: (deckId, cardId, quality, confidence) =>
     request(`/decks/${deckId}/cards/${cardId}/review`, { method: 'POST', body: { quality, confidence } }),
+  checkDuplicates: (deckId, cards) =>
+    request(`/decks/${deckId}/cards/check-duplicates`, { method: 'POST', body: { cards } }),
 }
 
 /* ---- Study Sessions ---- */
@@ -217,10 +219,17 @@ export const chatApi = {
 
   /**
    * Generate flashcards from a given text.
-   * @param {Object} data - { text, topicName, model }
-   * @returns {Promise<{ cards: Array<{ front, back }> }>}
+   * @param {Object} data - { text, topicName, model, sessionContext, sections?, pillarId?, topicId? }
+   * @returns {Promise<{ cards: Array<{ front, back, sourceSectionId?, sourceSectionName? }> }>}
    */
   generateFlashcards: (data) => request('/chat/generate-flashcards', { method: 'POST', body: data }),
+
+  /**
+   * Generate reverse (bidirectional) flashcards from existing Q&A pairs.
+   * @param {Object} data - { cards: [{ front, back }], model }
+   * @returns {Promise<{ reverseCards: Array<{ front, back, originalIndex }> }>}
+   */
+  generateReverseCards: (data) => request('/chat/generate-reverse-cards', { method: 'POST', body: data }),
 }
 
 /* ---- Guide Content ---- */

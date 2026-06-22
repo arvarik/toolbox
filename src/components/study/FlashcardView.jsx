@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
-import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock, Keyboard } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock, Keyboard, BookOpen } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { flashcardsApi, chatApi } from '../../utils/api'
+import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 import StudySessionSummary from './StudySessionSummary'
 import useAppStore from '../../stores/appStore'
 
@@ -22,6 +24,7 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
   const [interceptorInput, setInterceptorInput] = useState('')
   const [interceptorLoading, setInterceptorLoading] = useState(false)
   const [interceptorFeedback, setInterceptorFeedback] = useState(null)
+  const [guideLink, setGuideLink] = useState(null) // { url, sectionName }
 
   const startTimeRef = useRef(0)
   const ratingsRef = useRef({})
@@ -113,6 +116,21 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
       ratingsRef.current[quality] = (ratingsRef.current[quality] || 0) + 1
       if (quality >= 3) correctCountRef.current += 1
       if (onCardReviewed) onCardReviewed(currentCard.id, quality)
+
+      // Show "Review in Guide" link when rated Again and card has source metadata
+      if (quality === 1 && currentCard.source_pillar_id && currentCard.source_topic_id) {
+        const sectionId = currentCard.source_section_id
+        // Resolve section name from constants
+        const pillarSections = BLUEPRINT_SECTIONS[currentCard.source_pillar_id] || []
+        const sectionDef = pillarSections.find(s => s.id === sectionId)
+        const sectionName = sectionDef?.name || 'this section'
+        const url = `/guide/${currentCard.source_pillar_id}/${currentCard.source_topic_id}${sectionId ? `#blueprint-${sectionId}` : ''}`
+        setGuideLink({ url, sectionName })
+        // Auto-clear after 4 seconds
+        setTimeout(() => setGuideLink(null), 4000)
+      } else {
+        setGuideLink(null)
+      }
 
       // Anki dynamic queue re-insertion logic
       const isStillLearning = updatedCardData.state === 1 || updatedCardData.state === 3
@@ -533,6 +551,46 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
               <span style={{ fontSize: '10px', opacity: 0.7 }}>{btn.desc}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Review in Guide link — appears after rating "Again" on cards with source metadata */}
+      {guideLink && reviewMode && (
+        <div style={{
+          width: '100%',
+          maxWidth: 560,
+          marginTop: 'var(--space-3)',
+          animation: 'fadeIn var(--duration-normal) ease-out',
+        }}>
+          <Link
+            to={guideLink.url}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 'var(--space-2)',
+              padding: 'var(--space-2) var(--space-4)',
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(96, 165, 250, 0.08)',
+              border: '1px solid rgba(96, 165, 250, 0.2)',
+              color: 'var(--color-info)',
+              fontSize: 'var(--text-xs)',
+              fontWeight: 600,
+              textDecoration: 'none',
+              transition: 'all 0.2s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = 'rgba(96, 165, 250, 0.15)'
+              e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.4)'
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'rgba(96, 165, 250, 0.08)'
+              e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.2)'
+            }}
+          >
+            <BookOpen size={13} />
+            Review: {guideLink.sectionName}
+          </Link>
         </div>
       )}
 

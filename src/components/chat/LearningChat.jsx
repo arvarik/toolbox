@@ -855,6 +855,8 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         onClose={() => setShowReviewModal(false)}
         cards={generatedCards}
         topicName={activeTopic?.topic?.name || currentSession?.topicName}
+        pillarId={activeTopic?.pillar?.id || currentSession?.pillarId}
+        topicId={activeTopic?.topic?.id || currentSession?.topicId}
         onSaveSuccess={() => {
           // Toast is handled inside the modal
         }}

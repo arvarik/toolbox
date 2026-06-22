@@ -31,7 +31,14 @@ const mapDeckFromApi = (d) => ({
     ease_factor: c.ease_factor, interval: c.interval,
     repetitions: c.repetitions, next_review: c.next_review,
     state: c.state || 0, learning_step: c.learning_step || 0,
-    srs_previews: c.srs_previews
+    srs_previews: c.srs_previews,
+    // Guide linking metadata
+    source_pillar_id: c.source_pillar_id || null,
+    source_topic_id: c.source_topic_id || null,
+    source_section_id: c.source_section_id || null,
+    // Reverse card tracking
+    is_reverse: c.is_reverse || 0,
+    reverse_of_id: c.reverse_of_id || null,
   })) : []
 })
 
@@ -110,6 +117,9 @@ export default function StudyPage() {
           id: c.id, front: c.front, back: c.back,
           ease_factor: c.ease_factor, interval: c.interval,
           repetitions: c.repetitions, next_review: c.next_review,
+          source_pillar_id: c.source_pillar_id || null,
+          source_topic_id: c.source_topic_id || null,
+          source_section_id: c.source_section_id || null,
         })),
       })
     } catch {

@@ -160,15 +160,29 @@ export default function BlueprintShell() {
   }
 
   const handleGenerateFlashcards = async () => {
-    const allText = Object.values(sectionContent).filter(c => c && c.content).map(c => c.content).join('\n\n')
-    if (!allText.trim()) {
+    // Build section-aware entries for tagged card generation
+    const sectionEntries = sections
+      .filter(s => sectionContent[s.id]?.content?.trim())
+      .map(s => ({
+        sectionId: s.id,
+        sectionName: s.name,
+        content: sectionContent[s.id].content,
+      }))
+
+    if (sectionEntries.length === 0) {
       addToast({ type: 'error', message: 'No content available to generate flashcards from.' })
       return
     }
     
     setIsGeneratingCards(true)
     try {
-      const res = await chatApi.generateFlashcards({ text: allText, topicName: topic?.name, model: selectedModel })
+      const res = await chatApi.generateFlashcards({
+        sections: sectionEntries,
+        topicName: topic?.name,
+        model: selectedModel,
+        pillarId,
+        topicId,
+      })
       if (res.cards && res.cards.length > 0) {
         setGeneratedCards(res.cards)
         setShowReviewModal(true)
@@ -483,6 +497,8 @@ export default function BlueprintShell() {
         onClose={() => setShowReviewModal(false)}
         cards={generatedCards}
         topicName={topic.name}
+        pillarId={pillarId}
+        topicId={topicId}
       />
 
       {/* Blueprint sections */}
