@@ -7,6 +7,57 @@ import { generateEmbedding, cosineSimilarity } from '../utils/embeddings.js'
 
 const router = Router()
 
+// ─── Retry and concurrency helpers ────────────────────────────────────────────
+
+/**
+ * Retry an async function with exponential backoff.
+ * @param {Function} fn - Async function to retry
+ * @param {number} maxRetries - Maximum number of retry attempts (default 3)
+ * @param {number} baseDelayMs - Initial delay in ms (default 1000)
+ * @param {string} label - Label for logging
+ * @returns {Promise<*>} - Result of fn()
+ */
+async function retryWithBackoff(fn, maxRetries = 3, baseDelayMs = 1000, label = '') {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const isRateLimit = err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('quota')
+      const isRetryable = isRateLimit || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('UNAVAILABLE')
+
+      if (attempt === maxRetries || !isRetryable) {
+        throw err
+      }
+
+      const delay = baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 500
+      logger.warn(`[retry] ${label} attempt ${attempt}/${maxRetries} failed (${err.message}). Retrying in ${Math.round(delay)}ms...`)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+  }
+}
+
+/**
+ * Run an array of async tasks with bounded concurrency.
+ * @param {Array<Function>} tasks - Array of () => Promise<T>
+ * @param {number} concurrency - Max concurrent tasks (default 3)
+ * @returns {Promise<Array<T>>} - Results in original order
+ */
+async function runWithConcurrency(tasks, concurrency = 3) {
+  const results = new Array(tasks.length)
+  let nextIndex = 0
+
+  async function worker() {
+    while (nextIndex < tasks.length) {
+      const idx = nextIndex++
+      results[idx] = await tasks[idx]()
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker())
+  await Promise.all(workers)
+  return results
+}
+
 /**
  * GET /api/chat/starters
  * Generate dynamic chat starters based on a specific topic's guide content, blueprint, and user profile.
@@ -801,10 +852,10 @@ Return the list of sections that were substantively covered.`
 
     logger.info(`[chat/commit] Identified ${identifiedSections.length} sections: ${identifiedSections.map((s) => s.id).join(', ')}`)
 
-    // ─── Step 2: Reconcile each section (in parallel) ─────────────────────────
+    // ─── Step 2: Reconcile each section (parallel with retries) ───────────────
     const reconcileModel = genAI.getGenerativeModel({ model: modelName })
 
-    const reconcilePromises = identifiedSections.map(async (identified) => {
+    const reconcileTasks = identifiedSections.map((identified) => async () => {
       const section = sections.find((s) => s.id === identified.id)
       if (!section) return null
 
@@ -865,8 +916,15 @@ Write the updated "${section.name}" section, seamlessly merging existing and new
       }
 
       try {
-        const reconcileResult = await reconcileModel.generateContent(reconcilePrompt)
-        const newContent = reconcileResult.response.text()
+        const newContent = await retryWithBackoff(
+          async () => {
+            const result = await reconcileModel.generateContent(reconcilePrompt)
+            return result.response.text()
+          },
+          3,    // max retries
+          1500, // base delay 1.5s
+          `commit/${section.name}`
+        )
         logger.info(`[chat/commit] Reconciled section "${section.name}" (${isNew ? 'new' : 'merged'}, ${newContent.length} chars)`)
         return {
           sectionId: identified.id,
@@ -877,12 +935,13 @@ Write the updated "${section.name}" section, seamlessly merging existing and new
           isNew,
         }
       } catch (sectionErr) {
-        logger.error(`[chat/commit] Failed to reconcile section "${section.name}":`, sectionErr.message)
+        logger.error(`[chat/commit] Failed to reconcile section "${section.name}" after retries:`, sectionErr.message)
         return null // Don't fail the whole commit
       }
     })
 
-    const results = await Promise.all(reconcilePromises)
+    // Run with concurrency limit of 3 to avoid rate limiting
+    const results = await runWithConcurrency(reconcileTasks, 3)
     const updates = results.filter(Boolean)
 
     logger.info(`[chat/commit] Analysis complete. ${updates.length} section updates ready for preview.`)
