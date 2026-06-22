@@ -238,7 +238,7 @@ router.post('/stream', async (req, res) => {
   res.flushHeaders()
 
   let isAborted = false;
-  req.on('close', () => {
+  res.on('close', () => {
     isAborted = true;
   });
 
