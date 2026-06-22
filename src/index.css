@@ -2884,9 +2884,9 @@ textarea.input {
   color: var(--color-text-primary);
   font-size: var(--text-sm);
   font-family: var(--font-sans);
-  resize: none;
+  resize: vertical;
   min-height: 24px;
-  max-height: 140px;
+  max-height: 320px;
   overflow-y: auto;
   line-height: var(--leading-relaxed);
   padding: var(--space-1) 0;

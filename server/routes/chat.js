@@ -385,11 +385,16 @@ router.post('/stream', async (req, res) => {
       for await (const chunk of result.stream) {
         if (isAborted) break;
 
-        if (chunk.functionCalls && chunk.functionCalls.length > 0) {
+        // Note: In @google/generative-ai SDK, functionCalls is a method, not a property.
+        const chunkFunctionCalls = typeof chunk.functionCalls === 'function'
+          ? chunk.functionCalls()
+          : chunk.functionCalls;
+
+        if (chunkFunctionCalls && chunkFunctionCalls.length > 0) {
           isFunctionCall = true;
           const functionResponses = [];
           
-          for (const call of chunk.functionCalls) {
+          for (const call of chunkFunctionCalls) {
             const fnName = call.name;
             const args = call.args;
             

@@ -39,3 +39,35 @@
 .markdown-renderer h3 code {
   font-size: 0.9em;
 }
+
+/* Restore list styles stripped by the global CSS reset */
+.markdown-renderer ul,
+.markdown-renderer ol {
+  list-style: disc;
+  padding-left: 1.5em;
+  margin: 0.5em 0;
+}
+
+.markdown-renderer ol {
+  list-style: decimal;
+}
+
+.markdown-renderer li {
+  margin: 0.25em 0;
+  line-height: 1.6;
+}
+
+.markdown-renderer li::marker {
+  color: var(--color-text-tertiary);
+}
+
+/* Nested lists */
+.markdown-renderer ul ul,
+.markdown-renderer ol ul {
+  list-style: circle;
+}
+
+.markdown-renderer ul ul ul,
+.markdown-renderer ol ol ul {
+  list-style: square;
+}

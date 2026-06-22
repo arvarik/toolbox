@@ -776,9 +776,15 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
             className="learning-chat-input"
             placeholder="Ask a question, explore a concept, request examples..."
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value)
+              // Auto-grow: reset height then set to scrollHeight
+              const el = e.target
+              el.style.height = 'auto'
+              el.style.height = Math.min(el.scrollHeight, 320) + 'px'
+            }}
             onKeyDown={handleKeyDown}
-            rows={1}
+            rows={2}
             id="learning-chat-input"
           />
           <button
@@ -791,7 +797,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
           </button>
         </div>
         <div style={{ textAlign: 'center', fontSize: '10px', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>
-          Enter to send · Shift+Enter for new line · Sessions saved automatically
+          Enter to send · Shift+Enter for new line · Drag bottom-right to resize · Sessions saved automatically
         </div>
       </div>
     </div>
