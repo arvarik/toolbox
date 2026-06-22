@@ -214,6 +214,13 @@ export const chatApi = {
    * @returns {Promise<{ ok: boolean, savedCount: number }>}
    */
   commitSave: (data) => request('/chat/commit/save', { method: 'POST', body: data }),
+
+  /**
+   * Generate flashcards from a given text.
+   * @param {Object} data - { text, topicName, model }
+   * @returns {Promise<{ cards: Array<{ front, back }> }>}
+   */
+  generateFlashcards: (data) => request('/chat/generate-flashcards', { method: 'POST', body: data }),
 }
 
 /* ---- Guide Content ---- */

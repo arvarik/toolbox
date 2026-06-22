@@ -555,6 +555,73 @@ Return JSON matching: { "events": [{ "memory_text": "string", "importance_score"
 })
 
 /**
+ * POST /api/chat/generate-flashcards
+ * Generate flashcards from a given text and topic.
+ * Body: { text, topicName, model }
+ */
+router.post('/generate-flashcards', async (req, res) => {
+  const { text, topicName, model: requestedModel } = req.body
+
+  if (!text) {
+    return res.status(400).json({ message: 'Text is required to generate flashcards.' })
+  }
+
+  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
+  if (!config?.value) {
+    return res.status(400).json({
+      message: 'Gemini API key not configured. Please add your key in Settings.',
+    })
+  }
+
+  try {
+    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai')
+    const genAI = new GoogleGenerativeAI(config.value)
+    
+    // Using structured output schema for reliable JSON parsing
+    const model = genAI.getGenerativeModel({
+      model: requestedModel || 'gemini-3.5-flash',
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: SchemaType.ARRAY,
+          items: {
+            type: SchemaType.OBJECT,
+            properties: {
+              front: { type: SchemaType.STRING, description: "The front of the flashcard (the question or term)" },
+              back: { type: SchemaType.STRING, description: "The back of the flashcard (the answer or definition)" }
+            },
+            required: ["front", "back"]
+          },
+          description: "An array of flashcards generated from the text."
+        }
+      }
+    })
+
+    const prompt = `You are an expert system design tutor.
+Please extract high-yield flashcards from the following text${topicName ? ` related to the topic of "${topicName}"` : ''}.
+Keep the front of the cards concise and clear. The back should be highly informative but easy to review.
+Do not generate more than 15 flashcards. If the text is short, generate 1 to 3 cards.
+
+Text:
+${text}`
+
+    const result = await model.generateContent(prompt)
+    let generatedCards = []
+    try {
+      generatedCards = JSON.parse(result.response.text())
+    } catch {
+      // Fallback if structured output fails
+      return res.status(500).json({ message: 'Failed to parse generated flashcards.' })
+    }
+
+    res.json({ cards: generatedCards })
+  } catch (err) {
+    logger.error('[chat/generate-flashcards] Error:', err.message)
+    res.status(500).json({ message: 'Failed to generate flashcards.' })
+  }
+})
+
+/**
  * POST /api/chat/summarize
  * Summarize selected chat excerpts into clean guide notes for a specific blueprint section.
  * Body: { excerpts, pillarId, topicId, sectionId, sectionName, topicName, model }

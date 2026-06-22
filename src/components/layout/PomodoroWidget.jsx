@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Timer as TimerIcon, Play, Pause } from 'lucide-react'
 import useTimerStore from '../../stores/useTimerStore'
 import useAppStore from '../../stores/appStore'
@@ -11,6 +11,12 @@ export default function PomodoroWidget() {
     timeLeft, status, plantState, focusLost, 
     start, pause, resume, mode
   } = useTimerStore()
+
+  useEffect(() => {
+    const handler = () => setIsModalOpen(true)
+    window.addEventListener('toggle-pomodoro', handler)
+    return () => window.removeEventListener('toggle-pomodoro', handler)
+  }, [])
 
   const formatTime = (ms) => {
     const totalSec = Math.floor(ms / 1000)
@@ -83,7 +89,7 @@ export default function PomodoroWidget() {
 
         {/* Shortcut or Controls */}
         {!collapsed && !isActive && (
-          <span className="sidebar-shortcut">⌘7</span>
+          <span className="sidebar-shortcut hide-on-mobile">⌘7</span>
         )}
         
         {!collapsed && isActive && (

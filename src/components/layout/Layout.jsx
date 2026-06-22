@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import MobileHeader from './MobileHeader'
-import BottomNav from './BottomNav'
 import MobileDrawer from './MobileDrawer'
 import ChatPanel from '../shared/ChatPanel'
 import ToastContainer from '../shared/ToastContainer'
@@ -105,7 +104,6 @@ export default function Layout() {
           </ErrorBoundary>
         </div>
       </main>
-      {isMobile && <BottomNav />}
       {isMobile && <MobileDrawer open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {showMobileChatPanel && (
         <ChatPanel

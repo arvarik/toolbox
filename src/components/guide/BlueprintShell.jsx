@@ -7,8 +7,9 @@ import {
   Edit3, Save, X, Trash2, BookOpen, Sparkles,
 } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
+import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
-import { guideContentApi } from '../../utils/api'
+import { guideContentApi, chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
 
 const EMPTY_ARRAY = []
@@ -62,6 +63,19 @@ export default function BlueprintShell() {
   const [editingSection, setEditingSection] = useState(null) // sectionId or null
   const [editDraft, setEditDraft] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768)
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
+
+  // Flashcards state
+  const selectedModel = useAppStore((s) => s.model)
+  const [showReviewModal, setShowReviewModal] = useState(false)
+  const [generatedCards, setGeneratedCards] = useState([])
+  const [isGeneratingCards, setIsGeneratingCards] = useState(false)
 
   // Reset when topic changes
   if (topicId !== prevTopicId) {
@@ -142,6 +156,29 @@ export default function BlueprintShell() {
       addToast({ type: 'info', message: 'Section cleared' })
     } catch (err) {
       addToast({ type: 'error', message: err.message || 'Failed to clear' })
+    }
+  }
+
+  const handleGenerateFlashcards = async () => {
+    const allText = Object.values(sectionContent).filter(c => c && c.content).map(c => c.content).join('\n\n')
+    if (!allText.trim()) {
+      addToast({ type: 'error', message: 'No content available to generate flashcards from.' })
+      return
+    }
+    
+    setIsGeneratingCards(true)
+    try {
+      const res = await chatApi.generateFlashcards({ text: allText, topicName: topic?.name, model: selectedModel })
+      if (res.cards && res.cards.length > 0) {
+        setGeneratedCards(res.cards)
+        setShowReviewModal(true)
+      } else {
+        addToast({ type: 'info', message: 'No flashcards generated.' })
+      }
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to generate flashcards' })
+    } finally {
+      setIsGeneratingCards(false)
     }
   }
 
@@ -422,8 +459,17 @@ export default function BlueprintShell() {
             Study blueprint — deep dive into every dimension of this component.
           </p>
           <button
-            className="btn btn-ghost btn-sm"
-            style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', whiteSpace: 'nowrap' }}
+            className="btn btn-secondary btn-sm"
+            style={{ fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}
+            onClick={handleGenerateFlashcards}
+            disabled={isGeneratingCards}
+          >
+            {isGeneratingCards ? <Sparkles size={12} style={{ animation: 'pulse 1.5s infinite' }} /> : <Layers size={12} />}
+            {isGeneratingCards ? 'Generating...' : 'Generate Flashcards'}
+          </button>
+          <button
+            className="btn btn-primary btn-sm"
+            style={{ fontSize: 'var(--text-xs)', color: 'var(--color-bg-primary)', whiteSpace: 'nowrap' }}
             onClick={() => navigate('/chat')}
           >
             <Sparkles size={12} />
@@ -431,6 +477,13 @@ export default function BlueprintShell() {
           </button>
         </div>
       </div>
+
+      <FlashcardReviewModal
+        open={showReviewModal}
+        onClose={() => setShowReviewModal(false)}
+        cards={generatedCards}
+        topicName={topic.name}
+      />
 
       {/* Blueprint sections */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
@@ -519,8 +572,8 @@ export default function BlueprintShell() {
                     )}
                   </div>
 
-                  {/* Edit mode textarea */}
-                  {isEditing && (
+                  {/* Edit mode textarea (Desktop) */}
+                  {!isMobile && isEditing && (
                     <div style={{ marginTop: 'var(--space-2)' }}>
                       <textarea
                         value={editDraft}
@@ -553,10 +606,10 @@ export default function BlueprintShell() {
                         <button
                           className="btn btn-primary btn-sm"
                           onClick={() => saveEdit(section.id)}
-                          disabled={isSaving}
+                          disabled={isSaving || !editDraft.trim()}
                         >
-                          <Save size={12} />
-                          {isSaving ? 'Saving...' : 'Save'}
+                          {isSaving ? <RefreshCw size={12} className="spin" /> : <Save size={12} />}
+                          Save Notes
                         </button>
                       </div>
                     </div>
@@ -618,6 +671,49 @@ export default function BlueprintShell() {
                   )}
                 </div>
               </div>
+
+              {/* Edit mode textarea (Mobile - Full Width) */}
+              {isMobile && isEditing && (
+                <div style={{ marginTop: 'var(--space-3)' }}>
+                  <textarea
+                    value={editDraft}
+                    onChange={(e) => setEditDraft(e.target.value)}
+                    rows={12}
+                    placeholder="Write markdown notes for this section..."
+                    style={{
+                      width: '100%',
+                      padding: 'var(--space-3)',
+                      background: 'var(--color-bg-secondary)',
+                      border: '1px solid var(--color-accent)',
+                      borderRadius: 'var(--radius-md)',
+                      color: 'var(--color-text-primary)',
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: 'var(--text-xs)',
+                      lineHeight: 1.6,
+                      resize: 'vertical',
+                      outline: 'none',
+                    }}
+                  />
+                  <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)', justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={cancelEdit}
+                      disabled={isSaving}
+                    >
+                      <X size={12} />
+                      Cancel
+                    </button>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => saveEdit(section.id)}
+                      disabled={isSaving || !editDraft.trim()}
+                    >
+                      {isSaving ? <RefreshCw size={12} className="spin" /> : <Save size={12} />}
+                      Save Notes
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )
         })}

@@ -53,6 +53,18 @@ export default function useKeyboardShortcuts() {
           e.preventDefault()
           navigate('/study')
           break
+        case '5':
+          e.preventDefault()
+          navigate('/feynman')
+          break
+        case '6':
+          e.preventDefault()
+          navigate('/interleaved')
+          break
+        case '7':
+          e.preventDefault()
+          window.dispatchEvent(new CustomEvent('toggle-pomodoro'))
+          break
         case ',':
           e.preventDefault()
           navigate('/settings')

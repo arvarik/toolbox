@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import {
   Send, Sparkles, Copy, Check, Trash2, GitCommit,
-  Plus, ChevronDown, Edit2, X, RotateCcw, Square, Map
+  Plus, ChevronDown, Edit2, X, RotateCcw, Square, Map, Layers
 } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
+import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import useAppStore from '../../stores/appStore'
 import { chatApi } from '../../utils/api'
 
@@ -143,7 +144,7 @@ function PersonaPicker({ activeId, onSelect }) {
 
       {open && (
         <div style={{
-          position: 'absolute', bottom: 'calc(100% + 8px)', right: 0,
+          position: 'absolute', top: 'calc(100% + 8px)', right: 0,
           background: 'var(--color-surface)',
           border: '1px solid var(--color-border)',
           borderRadius: 'var(--radius-lg)',
@@ -384,6 +385,12 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   const [generatingMap, setGeneratingMap] = useState(false)
   const [personaId, setPersonaId] = useState('socratic')
 
+  // Flashcards state
+  const [popupState, setPopupState] = useState(null)
+  const [showReviewModal, setShowReviewModal] = useState(false)
+  const [generatedCards, setGeneratedCards] = useState([])
+  const [isGeneratingCards, setIsGeneratingCards] = useState(false)
+
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const abortControllerRef = useRef(null)
@@ -406,6 +413,55 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
   // Focus input on mount
   useEffect(() => { inputRef.current?.focus() }, [])
+
+  // Handle text selection for flashcard generation
+  const handleMouseUp = useCallback((e) => {
+    if (e.target.closest('#flashcard-popup') || e.target.closest('input') || e.target.closest('textarea') || e.target.closest('.flashcard-modal-ignore')) return
+    
+    const selection = window.getSelection()
+    const text = selection.toString().trim()
+    
+    if (text.length > 10) {
+      if (e.target.closest('.learning-chat-messages')) {
+        const range = selection.getRangeAt(0)
+        const rect = range.getBoundingClientRect()
+        setPopupState({
+          text,
+          top: Math.max(10, rect.top - 40),
+          left: rect.left + rect.width / 2,
+        })
+        return
+      }
+    }
+    setPopupState(null)
+  }, [])
+
+  useEffect(() => {
+    document.addEventListener('mouseup', handleMouseUp)
+    return () => document.removeEventListener('mouseup', handleMouseUp)
+  }, [handleMouseUp])
+
+  const handleGenerateAdHocFlashcard = async () => {
+    if (!popupState?.text) return
+    setIsGeneratingCards(true)
+    const textToGen = popupState.text
+    setPopupState(null)
+    
+    try {
+      const topicName = activeTopic?.topic?.name || currentSession?.topicName
+      const res = await chatApi.generateFlashcards({ text: textToGen, topicName, model: selectedModel })
+      if (res.cards && res.cards.length > 0) {
+        setGeneratedCards(res.cards)
+        setShowReviewModal(true)
+      } else {
+        addToast({ type: 'info', message: 'No flashcards could be generated from that selection.' })
+      }
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to generate flashcard.' })
+    } finally {
+      setIsGeneratingCards(false)
+    }
+  }
 
   // Update messages for current session
   const setMessages = useCallback((updaterOrMessages) => {
@@ -430,7 +486,8 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     if (!text || isLoading) return
 
     const currentHistory = overrideHistory || messages
-    const userMessage = { role: 'user', content: text }
+    const currentPersonaObj = PERSONAS[personaId]
+    const userMessage = { role: 'user', content: text, model: selectedModel, persona: currentPersonaObj }
     const newMessages = [...currentHistory, userMessage]
     setMessages(newMessages)
     if (typeof customText !== 'string') setInput('')
@@ -438,19 +495,19 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     setErrorMsg(null)
 
     try {
-      const aiPlaceholder = { role: 'ai', content: '' }
+      const aiPlaceholder = { role: 'ai', content: '', model: selectedModel, persona: currentPersonaObj }
       setMessages([...newMessages, aiPlaceholder])
 
       abortControllerRef.current = new AbortController()
       const signal = abortControllerRef.current.signal
-      const currentPersona = PERSONAS[personaId].context
+      const currentPersona = currentPersonaObj.context
 
       const fullText = await chatApi.stream(
         { message: text, context: currentPersona, history: currentHistory, model: selectedModel },
         (partialText) => {
           setMessages((prev) => {
             const updated = [...prev]
-            updated[updated.length - 1] = { role: 'ai', content: partialText }
+            updated[updated.length - 1] = { role: 'ai', content: partialText, model: selectedModel, persona: currentPersonaObj }
             return updated
           })
         },
@@ -460,7 +517,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
       setMessages((prev) => {
         const updated = [...prev]
-        updated[updated.length - 1] = { role: 'ai', content: fullText }
+        updated[updated.length - 1] = { role: 'ai', content: fullText, model: selectedModel, persona: currentPersonaObj }
         return updated
       })
     } catch (err) {
@@ -686,6 +743,52 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         </div>
       </div>
 
+      {/* ── Popups and Modals ── */}
+      {popupState && (
+        <div
+          id="flashcard-popup"
+          className="flashcard-modal-ignore"
+          style={{
+            position: 'fixed',
+            top: popupState.top,
+            left: popupState.left,
+            transform: 'translateX(-50%)',
+            zIndex: 100,
+            background: 'var(--color-surface)',
+            border: '1px solid var(--color-border)',
+            boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+            borderRadius: 'var(--radius-md)',
+            padding: '4px',
+            display: 'flex',
+            gap: '4px'
+          }}
+        >
+          <button
+            className="btn btn-primary btn-sm"
+            style={{ fontSize: '11px', padding: '4px 8px' }}
+            onClick={handleGenerateAdHocFlashcard}
+            disabled={isGeneratingCards}
+          >
+            {isGeneratingCards ? (
+               <Sparkles size={12} style={{ marginRight: 4, animation: 'pulse 1.5s infinite' }} />
+            ) : (
+               <Layers size={12} style={{ marginRight: 4 }} />
+            )}
+            {isGeneratingCards ? 'Generating...' : 'Generate Flashcard'}
+          </button>
+        </div>
+      )}
+
+      <FlashcardReviewModal
+        open={showReviewModal}
+        onClose={() => setShowReviewModal(false)}
+        cards={generatedCards}
+        topicName={activeTopic?.topic?.name || currentSession?.topicName}
+        onSaveSuccess={() => {
+          // Toast is handled inside the modal
+        }}
+      />
+
       {/* ── Messages ── */}
       <div className="learning-chat-messages" id="learning-chat-messages">
         {messages.length === 0 && (
@@ -733,9 +836,16 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         {messages.map((msg, i) => (
           <div key={i} className={`learning-message ${msg.role}`} data-role={msg.role}>
             <div className={`learning-message-avatar ${msg.role}`}>
-              {msg.role === 'ai' ? '✦' : 'U'}
+              {msg.role === 'ai' ? (msg.persona?.icon || '✦') : 'U'}
             </div>
             <div className="learning-message-body">
+              {msg.role === 'ai' && msg.model && (
+                <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', marginBottom: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ fontWeight: 600 }}>{msg.persona?.name || 'AI'}</span>
+                  <span style={{ opacity: 0.6 }}>•</span>
+                  <span style={{ background: 'var(--color-bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>{msg.model}</span>
+                </div>
+              )}
               <div className="learning-message-text"><MdContent text={msg.content} /></div>
               {msg.role === 'ai' && msg.content && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-1)' }}>
@@ -829,7 +939,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
             <Send size={15} />
           </button>
         </div>
-        <div style={{ textAlign: 'center', fontSize: '10px', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>
+        <div className="learning-chat-help-text" style={{ textAlign: 'center', fontSize: '10px', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>
           Enter to send · Shift+Enter for new line · Drag bottom-right to resize · Sessions saved automatically
         </div>
       </div>

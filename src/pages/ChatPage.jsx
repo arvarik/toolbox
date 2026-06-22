@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { BookOpen, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import LearningChat from '../components/chat/LearningChat'
 import LearningTodo from '../components/chat/LearningTodo'
 import CommitModal from '../components/chat/CommitModal'
@@ -109,6 +109,12 @@ export default function ChatPage() {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  useEffect(() => {
+    const handler = () => setTodoDrawerOpen(true)
+    window.addEventListener('toggle-study-plan', handler)
+    return () => window.removeEventListener('toggle-study-plan', handler)
+  }, [])
+
   const handleCommitClick = useCallback((messages, topicContext) => {
     setLearningMessages(messages)
     setCommitTopicContext(topicContext || null)
@@ -131,26 +137,7 @@ export default function ChatPage() {
 
       {/* Center: Full-page Learning Chat */}
       <div className="learning-hub-main">
-        {/* Mobile: Progress FAB */}
-        {isMobile && (
-          <div style={{
-            padding: 'var(--space-2) var(--space-3)',
-            borderBottom: '1px solid var(--color-border)',
-            display: 'flex', justifyContent: 'flex-end',
-            background: 'var(--color-bg-secondary)',
-            flexShrink: 0,
-          }}>
-            <button
-              className="btn btn-secondary"
-              style={{ fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
-              onClick={() => setTodoDrawerOpen(true)}
-              id="open-todo-drawer-btn"
-            >
-              <BookOpen size={13} />
-              Study Plan
-            </button>
-          </div>
-        )}
+        {/* Mobile: Progress FAB removed and moved to MobileHeader */}
 
         <LearningChat
           activeTopic={activeStudyTopic}

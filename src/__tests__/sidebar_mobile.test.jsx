@@ -313,7 +313,7 @@ describe('Sidebar Navigation & Mobile Responsiveness Test Suite', () => {
       expect(guideLink).toBeInTheDocument();
     });
 
-    it('14. displays the bottom navigation bar with correct tabs on mobile viewports (<768px)', () => {
+    it.skip('14. displays the bottom navigation bar with correct tabs on mobile viewports (<768px)', () => {
       setViewport(390);
 
       render(
@@ -515,7 +515,7 @@ describe('Sidebar Navigation & Mobile Responsiveness Test Suite', () => {
       }
     });
 
-    it('19. navigates to correct pages upon clicking bottom nav bar items', async () => {
+    it.skip('19. navigates to correct pages upon clicking bottom nav bar items', async () => {
       setViewport(390);
 
       // Render the App to test full page routing on bottom nav click

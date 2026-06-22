@@ -1,17 +1,21 @@
-import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle } from 'lucide-react'
+import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, MessageSquare } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import PomodoroWidget from './PomodoroWidget'
+import useAppStore from '../../stores/appStore'
 
 const navItems = [
+  { to: '/chat', icon: MessageSquare, label: 'Chat' },
   { to: '/guide', icon: BookOpen, label: 'Guide' },
   { to: '/builder', icon: PenTool, label: 'Builder' },
   { to: '/study', icon: GraduationCap, label: 'Flashcards' },
   { to: '/feynman', icon: BrainCircuit, label: 'Feynman' },
   { to: '/interleaved', icon: Shuffle, label: 'Interleaved' },
-  { to: '/settings', icon: Settings, label: 'Settings' },
 ]
 
 export default function MobileDrawer({ open, onClose }) {
+  const model = useAppStore((s) => s.model)
+  const setModel = useAppStore((s) => s.setModel)
+
   if (!open) return null
 
   return (
@@ -55,8 +59,43 @@ export default function MobileDrawer({ open, onClose }) {
             )
           })}
           
-          <div style={{ marginTop: 'var(--space-4)', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--color-border)' }}>
+          <div style={{ marginTop: 'auto', paddingTop: 'var(--space-4)', borderTop: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+            
+            <div style={{ padding: '0 var(--space-4)' }}>
+              <div className="sidebar-section-label" style={{ marginBottom: '4px', fontSize: '11px', textTransform: 'uppercase', color: 'var(--color-text-tertiary)', fontWeight: 600 }}>Model</div>
+              <select 
+                value={model} 
+                onChange={(e) => setModel(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'var(--color-surface)',
+                  color: 'var(--color-text-secondary)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)',
+                  padding: '6px 8px',
+                  fontSize: '13px',
+                  outline: 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
+                <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (High)</option>
+              </select>
+            </div>
+
             <PomodoroWidget />
+
+            <NavLink
+              to="/settings"
+              onClick={onClose}
+              className={({ isActive }) =>
+                `mobile-drawer-link${isActive ? ' active' : ''}`
+              }
+              id="drawer-nav-settings"
+            >
+              <Settings size={18} />
+              <span>Settings</span>
+            </NavLink>
           </div>
         </nav>
       </div>
