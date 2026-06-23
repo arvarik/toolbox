@@ -2856,6 +2856,66 @@ textarea.input {
   .hide-on-mobile {
     display: none !important;
   }
+
+  /* ── Mobile Chat Header ── */
+  .learning-chat-header {
+    flex-wrap: wrap;
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-2);
+  }
+
+  /* Left side: pickers row */
+  .learning-chat-header > div:first-child {
+    gap: var(--space-1) !important;
+    min-width: 0;
+    flex: 1 1 0%;
+    overflow: hidden;
+  }
+
+  /* Session picker button: constrain width on mobile */
+  .session-picker-btn {
+    max-width: 140px !important;
+    font-size: 11px !important;
+    padding: 3px 8px !important;
+  }
+
+  /* Persona picker: icon-only on mobile */
+  .persona-picker-btn {
+    padding: 4px 8px !important;
+    gap: 0 !important;
+  }
+
+  /* Right side: action buttons row */
+  .learning-chat-header > div:last-child {
+    gap: var(--space-1) !important;
+    flex-shrink: 0;
+  }
+
+  /* Commit to Guide button: compact on mobile (text hidden via hide-on-mobile) */
+  #commit-to-guide-btn {
+    padding: 5px 8px !important;
+  }
+
+  /* Messages area: tighter padding on mobile */
+  .learning-chat-messages {
+    padding: var(--space-3) var(--space-3);
+    gap: var(--space-3);
+  }
+
+  /* Input area: tighter padding on mobile */
+  .learning-chat-input-area {
+    padding: var(--space-3) var(--space-3) var(--space-4);
+  }
+
+  /* User message bubbles: wider on mobile */
+  .learning-message.user .learning-message-text {
+    max-width: 90%;
+  }
+
+  /* Constrain dropdown menus to not overflow viewport */
+  .learning-chat-header [style*="position: absolute"] {
+    max-width: calc(100vw - 2 * var(--space-3)) !important;
+  }
 }
 
 .learning-starter-btn {

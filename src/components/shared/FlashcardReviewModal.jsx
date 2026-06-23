@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { X, Edit3, Trash2, Save, Layers, Loader2, RefreshCw, AlertTriangle, ArrowRightLeft } from 'lucide-react'
+import { X, Edit3, Trash2, Save, Layers, Loader2, AlertTriangle, ArrowRightLeft } from 'lucide-react'
 import { decksApi, flashcardsApi, chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
 

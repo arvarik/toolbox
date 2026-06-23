@@ -128,6 +128,7 @@ function PersonaPicker({ activeId, onSelect }) {
     <div ref={dropRef} style={{ position: 'relative' }}>
       <button
         onClick={() => setOpen((v) => !v)}
+        className="persona-picker-btn"
         style={{
           display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
           background: 'var(--color-bg-secondary)',
@@ -141,10 +142,10 @@ function PersonaPicker({ activeId, onSelect }) {
         title="Change AI Persona"
       >
         <span>{current?.icon}</span>
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span className="hide-on-mobile" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {current?.name}
         </span>
-        <ChevronDown size={12} style={{ flexShrink: 0, opacity: 0.6 }} />
+        <ChevronDown size={12} className="hide-on-mobile" style={{ flexShrink: 0, opacity: 0.6 }} />
       </button>
 
       {open && (
@@ -741,8 +742,8 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       {/* ── Header ── */}
       <div className="learning-chat-header">
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flex: 1, minWidth: 0 }}>
-          <span className="ai-dot" />
-          <Sparkles size={14} style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
+          <span className="ai-dot hide-on-mobile" />
+          <Sparkles size={14} className="hide-on-mobile" style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
           <SessionPicker
             sessions={sessions}
             currentId={currentId}
@@ -753,7 +754,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
           />
           <PersonaPicker activeId={personaId} onSelect={setPersonaId} />
           {messages.length > 0 && (
-            <span style={{
+            <span className="hide-on-mobile" style={{
               fontSize: '10px', color: 'var(--color-text-tertiary)',
               background: 'var(--color-bg-tertiary)', padding: '1px 7px',
               borderRadius: 'var(--radius-full)', flexShrink: 0,
@@ -766,7 +767,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
           {messages.length >= 4 && (
              <button
-               className="btn btn-ghost"
+               className="btn btn-ghost hide-on-mobile"
                style={{ fontSize: 'var(--text-xs)', padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
                onClick={handleGenerateConceptMap}
                disabled={generatingMap}
@@ -797,7 +798,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
               id="commit-to-guide-btn"
             >
               <GitCommit size={13} />
-              Commit to Guide
+              <span className="hide-on-mobile">Commit to Guide</span>
             </button>
           )}
           {messages.length > 0 && (
@@ -808,7 +809,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
               title="Clear this session's messages"
             >
               <X size={12} />
-              Clear
+              <span className="hide-on-mobile">Clear</span>
             </button>
           )}
         </div>

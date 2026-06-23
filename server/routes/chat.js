@@ -7,56 +7,7 @@ import { generateEmbedding, cosineSimilarity } from '../utils/embeddings.js'
 
 const router = Router()
 
-// ─── Retry and concurrency helpers ────────────────────────────────────────────
 
-/**
- * Retry an async function with exponential backoff.
- * @param {Function} fn - Async function to retry
- * @param {number} maxRetries - Maximum number of retry attempts (default 3)
- * @param {number} baseDelayMs - Initial delay in ms (default 1000)
- * @param {string} label - Label for logging
- * @returns {Promise<*>} - Result of fn()
- */
-async function retryWithBackoff(fn, maxRetries = 3, baseDelayMs = 1000, label = '') {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn()
-    } catch (err) {
-      const isRateLimit = err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED') || err.message?.includes('quota')
-      const isRetryable = isRateLimit || err.message?.includes('500') || err.message?.includes('503') || err.message?.includes('UNAVAILABLE')
-
-      if (attempt === maxRetries || !isRetryable) {
-        throw err
-      }
-
-      const delay = baseDelayMs * Math.pow(2, attempt - 1) + Math.random() * 500
-      logger.warn(`[retry] ${label} attempt ${attempt}/${maxRetries} failed (${err.message}). Retrying in ${Math.round(delay)}ms...`)
-      await new Promise((resolve) => setTimeout(resolve, delay))
-    }
-  }
-}
-
-/**
- * Run an array of async tasks with bounded concurrency.
- * @param {Array<Function>} tasks - Array of () => Promise<T>
- * @param {number} concurrency - Max concurrent tasks (default 3)
- * @returns {Promise<Array<T>>} - Results in original order
- */
-async function runWithConcurrency(tasks, concurrency = 3) {
-  const results = new Array(tasks.length)
-  let nextIndex = 0
-
-  async function worker() {
-    while (nextIndex < tasks.length) {
-      const idx = nextIndex++
-      results[idx] = await tasks[idx]()
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker())
-  await Promise.all(workers)
-  return results
-}
 
 /**
  * GET /api/chat/starters
@@ -384,7 +335,11 @@ router.post('/stream', async (req, res) => {
       const cacheManager = new GoogleAICacheManager(config.value);
       const cache = await cacheManager.create({
         model: 'models/' + (requestedModel || 'gemini-3.5-flash'),
-        contents: [{ role: 'user', parts: [{ text: systemContext }] }],
+        systemInstruction: systemContext,
+        contents: [
+          { role: 'user', parts: [{ text: 'Understood. I am ready to help the student.' }] },
+          { role: 'model', parts: [{ text: 'Ready.' }] }
+        ],
         ttlSeconds: 600
       });
       model = genAI.getGenerativeModelFromCachedContent(cache, { tools: tools });
