@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { GitCommit, Check, Loader2, X, Sparkles, Eye, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import { chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
+import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 
 /**
  * CommitModal — Intelligent session-to-guide commit.
@@ -32,55 +33,97 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
   const [expandedSections, setExpandedSections] = useState(new Set()) // Which previews are expanded
   const [savedCount, setSavedCount] = useState(0)
 
-  // Auto-analyze when the modal opens
-  useEffect(() => {
-    if (!open || !topicContext?.pillarId) return
+  const analysisCallIdRef = useRef(0)
 
-    let cancelled = false
-
-    const analyze = async () => {
-      setPhase('analyzing')
+  const analyze = async (targetSectionIds = []) => {
+    const callId = ++analysisCallIdRef.current
+    setPhase('analyzing')
+    if (targetSectionIds.length === 0) {
       setErrorMsg('')
       setUpdates([])
       setEnabledSections(new Set())
       setExpandedSections(new Set())
       setSavedCount(0)
+    }
 
-      try {
-        const result = await chatApi.commitAnalyze({
-          messages: messages.map((m) => ({ role: m.role, content: m.content })),
-          pillarId: topicContext.pillarId,
-          topicId: topicContext.topicId,
-          topicName: topicContext.topicName,
-          model: selectedModel,
-        })
+    try {
+      const payload = {
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        pillarId: topicContext.pillarId,
+        topicId: topicContext.topicId,
+        topicName: topicContext.topicName,
+        model: selectedModel,
+      }
+      if (targetSectionIds.length > 0) {
+        payload.targetSectionIds = targetSectionIds
+      }
 
-        if (cancelled) return
+      const result = await chatApi.commitAnalyze(payload)
 
-        if (!result.updates || result.updates.length === 0) {
+      if (callId !== analysisCallIdRef.current) return
+
+      if (!result.updates || result.updates.length === 0) {
+        if (targetSectionIds.length === 0) {
+          setUpdates([])
+          setPhase('preview')
+        } else {
           setPhase('error')
-          setErrorMsg('No guide sections were identified from this conversation. Try having a more in-depth discussion about specific topics before committing.')
-          return
+          setErrorMsg('Failed to generate content for the selected sections.')
         }
+        return
+      }
 
+      if (targetSectionIds.length > 0) {
+        // Merge new updates into existing updates
+        setUpdates(prev => {
+          const next = [...prev]
+          for (const u of result.updates) {
+            const idx = next.findIndex(x => x.sectionId === u.sectionId)
+            if (idx >= 0) next[idx] = u
+            else next.push(u)
+          }
+          return next
+        })
+        // Keep the targeted ones enabled, plus any previously enabled ones
+        setEnabledSections(prev => {
+          const next = new Set(prev)
+          targetSectionIds.forEach(id => next.add(id))
+          return next
+        })
+        // Expand the newly targeted ones
+        setExpandedSections(prev => {
+          const next = new Set(prev)
+          targetSectionIds.forEach(id => next.add(id))
+          return next
+        })
+      } else {
         setUpdates(result.updates)
-        // Enable all sections by default
         setEnabledSections(new Set(result.updates.map((u) => u.sectionId)))
-        // Expand the first section
         if (result.updates.length > 0) {
           setExpandedSections(new Set([result.updates[0].sectionId]))
         }
-        setPhase('preview')
-      } catch (err) {
-        if (!cancelled) {
-          setPhase('error')
-          setErrorMsg(err.message || 'Failed to analyze session.')
-        }
       }
+      setPhase('preview')
+    } catch (err) {
+      if (callId !== analysisCallIdRef.current) return
+      setPhase('error')
+      setErrorMsg(err.message || 'Failed to analyze session.')
     }
+  }
 
-    analyze()
-    return () => { cancelled = true }
+  // Auto-analyze when the modal opens
+  useEffect(() => {
+    if (!open || !topicContext?.pillarId) return
+
+    const timer = setTimeout(() => {
+      analyze()
+    }, 0)
+
+    const currentCallId = analysisCallIdRef.current
+    return () => {
+      clearTimeout(timer)
+      analysisCallIdRef.current = currentCallId + 1
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, topicContext?.pillarId, topicContext?.topicId])
 
@@ -130,6 +173,10 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
   }
 
   const enabledCount = enabledSections.size
+  const allSections = BLUEPRINT_SECTIONS[topicContext?.pillarId] || []
+  const updateMap = new Map(updates.map(u => [u.sectionId, u]))
+  const identifiedIds = new Set(updates.map(u => u.sectionId))
+  const requiresReanalysis = Array.from(enabledSections).some(id => !identifiedIds.has(id))
 
   return (
     <div
@@ -283,14 +330,14 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
                   className="btn btn-ghost"
                   style={{ fontSize: '11px', padding: '3px 8px' }}
                   onClick={() => {
-                    if (enabledCount === updates.length) {
+                    if (enabledCount === allSections.length) {
                       setEnabledSections(new Set())
                     } else {
-                      setEnabledSections(new Set(updates.map((u) => u.sectionId)))
+                      setEnabledSections(new Set(allSections.map((s) => s.id)))
                     }
                   }}
                 >
-                  {enabledCount === updates.length ? 'Deselect All' : 'Select All'}
+                  {enabledCount === allSections.length ? 'Deselect All' : 'Select All'}
                 </button>
               </div>
             </div>
@@ -298,13 +345,15 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
             {/* Section cards */}
             <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4) var(--space-6)' }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                {updates.map((update) => {
-                  const isEnabled = enabledSections.has(update.sectionId)
-                  const isExpanded = expandedSections.has(update.sectionId)
+                {allSections.map((sec) => {
+                  const update = updateMap.get(sec.id)
+                  const isEnabled = enabledSections.has(sec.id)
+                  const isExpanded = expandedSections.has(sec.id)
+                  const isIdentified = !!update
 
                   return (
                     <div
-                      key={update.sectionId}
+                      key={sec.id}
                       style={{
                         borderRadius: 'var(--radius-lg)',
                         border: `1px solid ${isEnabled ? 'var(--color-accent)' : 'var(--color-border)'}`,
@@ -319,13 +368,13 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
                         style={{
                           display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
                           padding: 'var(--space-3) var(--space-4)',
-                          cursor: 'pointer',
+                          cursor: isIdentified ? 'pointer' : 'default',
                         }}
-                        onClick={() => toggleExpand(update.sectionId)}
+                        onClick={() => { if (isIdentified) toggleExpand(sec.id) }}
                       >
                         {/* Checkbox */}
                         <div
-                          onClick={(e) => { e.stopPropagation(); toggleSection(update.sectionId) }}
+                          onClick={(e) => { e.stopPropagation(); toggleSection(sec.id) }}
                           style={{
                             width: 20, height: 20, flexShrink: 0,
                             border: `2px solid ${isEnabled ? 'var(--color-accent)' : 'var(--color-border)'}`,
@@ -345,35 +394,48 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
                             color: 'var(--color-text-primary)',
                             display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
                           }}>
-                            {update.sectionName}
-                            <span style={{
-                              fontSize: '10px', fontWeight: 600,
-                              padding: '1px 6px', borderRadius: 'var(--radius-full)',
-                              background: update.isNew ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)',
-                              color: update.isNew ? '#22c55e' : '#3b82f6',
-                            }}>
-                              {update.isNew ? 'NEW' : 'MERGE'}
-                            </span>
+                            {sec.name}
+                            {isIdentified ? (
+                              <span style={{
+                                fontSize: '10px', fontWeight: 600,
+                                padding: '1px 6px', borderRadius: 'var(--radius-full)',
+                                background: update.isNew ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)',
+                                color: update.isNew ? '#22c55e' : '#3b82f6',
+                              }}>
+                                {update.isNew ? 'NEW' : 'MERGE'}
+                              </span>
+                            ) : (
+                              <span style={{
+                                fontSize: '10px', fontWeight: 600,
+                                padding: '1px 6px', borderRadius: 'var(--radius-full)',
+                                background: 'rgba(156,163,175,0.15)',
+                                color: '#9ca3af',
+                              }}>
+                                MISSING
+                              </span>
+                            )}
                           </div>
                           <div style={{
                             fontSize: '11px', color: 'var(--color-text-tertiary)',
                             marginTop: 2,
                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                           }}>
-                            {update.reason}
+                            {isIdentified ? update.reason : 'Select to force analysis of this section'}
                           </div>
                         </div>
 
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexShrink: 0 }}>
-                          <Eye size={12} style={{ color: 'var(--color-text-tertiary)' }} />
-                          {isExpanded
-                            ? <ChevronDown size={14} style={{ color: 'var(--color-text-tertiary)' }} />
-                            : <ChevronRight size={14} style={{ color: 'var(--color-text-tertiary)' }} />}
-                        </div>
+                        {isIdentified && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexShrink: 0 }}>
+                            <Eye size={12} style={{ color: 'var(--color-text-tertiary)' }} />
+                            {isExpanded
+                              ? <ChevronDown size={14} style={{ color: 'var(--color-text-tertiary)' }} />
+                              : <ChevronRight size={14} style={{ color: 'var(--color-text-tertiary)' }} />}
+                          </div>
+                        )}
                       </div>
 
                       {/* Expanded preview */}
-                      {isExpanded && (
+                      {isExpanded && isIdentified && (
                         <div style={{
                           borderTop: '1px solid var(--color-border)',
                           padding: 'var(--space-4)',
@@ -408,18 +470,29 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
               <button className="btn btn-secondary" onClick={onClose} disabled={phase === 'saving'}>
                 Cancel
               </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSave}
-                disabled={phase === 'saving' || enabledCount === 0}
-                id="confirm-commit-btn"
-              >
-                {phase === 'saving' ? (
-                  <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Saving…</>
-                ) : (
-                  <><GitCommit size={14} /> Commit {enabledCount} Section{enabledCount !== 1 ? 's' : ''}</>
-                )}
-              </button>
+              {requiresReanalysis ? (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => analyze(Array.from(enabledSections))}
+                  disabled={phase === 'saving' || enabledCount === 0}
+                  id="confirm-commit-btn"
+                >
+                  <Sparkles size={14} /> Re-Analyze Selected
+                </button>
+              ) : (
+                <button
+                  className="btn btn-primary"
+                  onClick={handleSave}
+                  disabled={phase === 'saving' || enabledCount === 0}
+                  id="confirm-commit-btn"
+                >
+                  {phase === 'saving' ? (
+                    <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Saving…</>
+                  ) : (
+                    <><GitCommit size={14} /> Commit {enabledCount} Section{enabledCount !== 1 ? 's' : ''}</>
+                  )}
+                </button>
+              )}
             </div>
           </>
         )}

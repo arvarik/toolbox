@@ -921,7 +921,7 @@ ${historyText}`
  * Returns: { updates: [{ sectionId, sectionName, existingContent, newContent, isNew }] }
  */
 router.post('/commit', async (req, res) => {
-  const { messages = [], pillarId, topicId, topicName, model: requestedModel } = req.body
+  const { messages = [], pillarId, topicId, topicName, model: requestedModel, targetSectionIds = [] } = req.body
 
   if (!messages.length || !pillarId || !topicId) {
     return res.status(400).json({ message: 'messages, pillarId, and topicId are required' })
@@ -934,9 +934,13 @@ router.post('/commit', async (req, res) => {
     })
   }
 
-  const sections = BLUEPRINT_SECTIONS[pillarId]
+  let sections = BLUEPRINT_SECTIONS[pillarId]
   if (!sections || sections.length === 0) {
     return res.status(400).json({ message: `No blueprint sections found for pillar "${pillarId}"` })
+  }
+
+  if (targetSectionIds.length > 0) {
+    sections = sections.filter(s => targetSectionIds.includes(s.id))
   }
 
   try {
@@ -972,17 +976,25 @@ router.post('/commit', async (req, res) => {
       return `- "${s.id}": ${s.name} [${status}]`
     }).join('\n')
 
+    let taskDescription = 'TASK: Analyze the conversation below and produce updated guide content for EACH section that was substantively discussed. A section counts as "discussed" ONLY if the conversation contains real technical content, examples, tradeoffs, or explanations relevant to that section — not just a brief mention.'
+    let inclusionRule = '1. Only include sections that were SUBSTANTIVELY discussed with real technical depth.'
+
+    if (targetSectionIds.length > 0) {
+      taskDescription = `TASK: Analyze the conversation below and produce updated guide content SPECIFICALLY for the following selected sections: ${targetSectionIds.join(', ')}. Even if the discussion was brief, extract any relevant information into these sections.`
+      inclusionRule = '1. You MUST generate content for ALL the requested sections based on whatever was discussed, even if it is brief.'
+    }
+
     const prompt = `You are a technical editor analyzing a study session conversation and compiling guide content for a system design study guide.
 
 Topic: "${topicName}"
 
-TASK: Analyze the conversation below and produce updated guide content for EACH section that was substantively discussed. A section counts as "discussed" ONLY if the conversation contains real technical content, examples, tradeoffs, or explanations relevant to that section — not just a brief mention.
+${taskDescription}
 
 AVAILABLE SECTIONS:
 ${sectionList}
 
 ${existingContentBlock ? `EXISTING GUIDE CONTENT (preserve all accurate existing knowledge and merge new learnings into it):\n${existingContentBlock}\n` : ''}CRITICAL RULES:
-1. Only include sections that were SUBSTANTIVELY discussed with real technical depth.
+${inclusionRule}
 2. For sections with existing content, your newContent must be the COMPLETE MERGED result: preserve all existing knowledge that is still accurate AND weave in new learnings from the conversation. Reorganize so it reads naturally as a unified reference.
 3. For empty sections, create content ONLY from what was discussed in the conversation. Do NOT pad with general knowledge.
 
@@ -1013,7 +1025,7 @@ FORMAT RULES:
 ${conversationText}
 --- END CONVERSATION ---
 
-Return the sections that were substantively discussed with their complete updated content.`
+Return the targeted sections with their complete updated content.`
 
     const result = await client.models.generateContent({
       model: modelName,
