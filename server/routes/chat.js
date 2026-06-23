@@ -444,10 +444,7 @@ router.post('/stream', async (req, res) => {
           const text = chunk.text()
           if (text) {
             generatedText += text;
-            const lines = text.split('\n')
-            for (const line of lines) {
-              res.write(`data: ${JSON.stringify({ text: line })}\n\n`)
-            }
+            res.write(`data: ${JSON.stringify({ text })}\n\n`)
           }
         }
       }

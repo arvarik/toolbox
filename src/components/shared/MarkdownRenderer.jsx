@@ -65,9 +65,28 @@ function CodeCopyButton({ text }) {
 export default function MarkdownRenderer({ content, className = '' }) {
   if (!content) return null
 
-  // Pre-process common markdown errors from AI
-  // Fix "* Pros:*" -> "* **Pros:**"
-  const processedContent = content.replace(/\* ([A-Za-z0-9 ]+):\*/g, '* **$1:**')
+  // ─── Pre-process common markdown errors from AI ─────────────────────────
+  let processedContent = content
+
+  // 1. Fix "* Pros:*" → "* **Pros:**" (bare word with trailing colon-asterisk)
+  processedContent = processedContent.replace(/\* ([A-Za-z0-9 ]+):\*/g, '* **$1:**')
+
+  // 2. Fix orphaned bold markers: "The Fix:**" → "**The Fix:**"
+  //    Matches lines where bold-close (**) appears without a prior bold-open on the same segment
+  processedContent = processedContent.replace(
+    /(?:^|(?<=\n))(\s*[-*]?\s*)([A-Za-z][A-Za-z0-9 ']+):\*\*/gm,
+    '$1**$2:**'
+  )
+
+  // 3. Fix stray single asterisks that break italics (e.g., "some text * more text")
+  //    Only fix isolated asterisks surrounded by spaces (not part of bold/italic/list)
+  processedContent = processedContent.replace(/ \* (?=[A-Z])/g, ' — ')
+
+  // 4. Fix bold markers that got split across lines (e.g., "**\nSome text:**")
+  processedContent = processedContent.replace(/\*\*\n([A-Za-z])/g, '**$1')
+
+  // 5. Ensure headings preceded by content have proper spacing
+  processedContent = processedContent.replace(/([^\n])\n(#{1,4} )/g, '$1\n\n$2')
 
   return (
     <div className={`markdown-renderer ${className}`}>
@@ -126,7 +145,10 @@ export default function MarkdownRenderer({ content, className = '' }) {
             )
           },
           strong: (props) => { const rest = { ...props }; delete rest.node; return <strong data-testid="markdown-bold" style={{ fontWeight: 600 }} {...rest} /> },
+          h1: (props) => { const rest = { ...props }; delete rest.node; return <h1 data-testid="markdown-h1" style={{ marginTop: '1.5em', marginBottom: '0.75em', fontSize: '1.5em', fontWeight: 700, borderBottom: '1px solid var(--color-border, #333)', paddingBottom: '0.3em' }} {...rest} /> },
+          h2: (props) => { const rest = { ...props }; delete rest.node; return <h2 data-testid="markdown-h2" style={{ marginTop: '1.5em', marginBottom: '0.5em', fontSize: '1.3em', fontWeight: 600 }} {...rest} /> },
           h3: (props) => { const rest = { ...props }; delete rest.node; return <h3 data-testid="markdown-h3" style={{ marginTop: '1.5em', marginBottom: '0.5em', fontSize: '1.2em' }} {...rest} /> },
+          h4: (props) => { const rest = { ...props }; delete rest.node; return <h4 data-testid="markdown-h4" style={{ marginTop: '1.2em', marginBottom: '0.4em', fontSize: '1.05em', fontWeight: 600 }} {...rest} /> },
           table: (props) => {
             const rest = { ...props };
             delete rest.node;
@@ -139,6 +161,29 @@ export default function MarkdownRenderer({ content, className = '' }) {
           th: (props) => { const rest = { ...props }; delete rest.node; return <th style={{ borderBottom: '2px solid var(--color-border)', padding: '8px', textAlign: 'left' }} {...rest} /> },
           td: (props) => { const rest = { ...props }; delete rest.node; return <td style={{ borderBottom: '1px solid var(--color-border)', padding: '8px' }} {...rest} /> },
           p: (props) => { const rest = { ...props }; delete rest.node; return <p style={{ marginBottom: '0.75em', lineHeight: '1.7' }} {...rest} /> },
+          blockquote: (props) => {
+            const rest = { ...props };
+            delete rest.node;
+            return (
+              <blockquote style={{
+                borderLeft: '3px solid var(--color-accent, #6366f1)',
+                paddingLeft: '1em',
+                margin: '1em 0',
+                color: 'var(--color-text-secondary)',
+                fontStyle: 'italic',
+              }} {...rest} />
+            )
+          },
+          hr: (props) => {
+            const rest = { ...props };
+            delete rest.node;
+            return <hr style={{ border: 'none', borderTop: '1px solid var(--color-border, #333)', margin: '1.5em 0' }} {...rest} />
+          },
+          li: (props) => {
+            const rest = { ...props };
+            delete rest.node;
+            return <li style={{ marginBottom: '0.3em', lineHeight: '1.7' }} {...rest} />
+          },
         }}
       >
         {processedContent}

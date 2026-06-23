@@ -690,21 +690,22 @@ export default function BlueprintShell() {
 
               {/* Edit mode textarea (Mobile - Full Width) */}
               {isMobile && isEditing && (
-                <div style={{ marginTop: 'var(--space-3)' }}>
+                <div style={{ marginTop: 'var(--space-3)', marginLeft: '-2px', marginRight: '-2px' }}>
                   <textarea
                     value={editDraft}
                     onChange={(e) => setEditDraft(e.target.value)}
-                    rows={12}
+                    rows={14}
                     placeholder="Write markdown notes for this section..."
                     style={{
                       width: '100%',
+                      boxSizing: 'border-box',
                       padding: 'var(--space-3)',
                       background: 'var(--color-bg-secondary)',
                       border: '1px solid var(--color-accent)',
                       borderRadius: 'var(--radius-md)',
                       color: 'var(--color-text-primary)',
                       fontFamily: 'var(--font-mono)',
-                      fontSize: 'var(--text-xs)',
+                      fontSize: '14px',
                       lineHeight: 1.6,
                       resize: 'vertical',
                       outline: 'none',

@@ -167,7 +167,7 @@ export const chatApi = {
             onChunk(fullText)
           }
           if (parsed.text !== undefined) {
-            fullText += parsed.text + '\n'
+            fullText += parsed.text
             onChunk(fullText)
           }
         } catch (e) {

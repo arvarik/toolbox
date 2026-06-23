@@ -2209,9 +2209,9 @@ textarea.input {
     padding: var(--space-4) !important;
   }
 
-  /* Guide page-wrapper on mobile — reduce horizontal padding for wider text */
+  /* Guide page-wrapper on mobile — minimize horizontal padding for wider text */
   .guide-content .page-wrapper {
-    padding: var(--space-4) var(--space-3) !important;
+    padding: var(--space-3) var(--space-2) !important;
     max-width: 100% !important;
   }
 
@@ -2222,12 +2222,20 @@ textarea.input {
 
   /* Guide blueprint cards on mobile — reduce padding for more text space */
   .guide-content .card {
-    padding: var(--space-3) !important;
+    padding: var(--space-2) var(--space-2) !important;
+    border-radius: var(--radius-md) !important;
   }
 
   /* Blueprint content area — reduce inner padding on mobile */
   .guide-content .blueprint-content {
-    padding: var(--space-3) !important;
+    padding: var(--space-2) !important;
+  }
+
+  /* Guide section textarea — maximize width on mobile */
+  .guide-content textarea {
+    box-sizing: border-box !important;
+    font-size: var(--text-sm) !important;
+    padding: var(--space-2) !important;
   }
 
   /* ---------- Builder Page ---------- */

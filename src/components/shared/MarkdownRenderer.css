@@ -36,8 +36,40 @@
 /* Fix up the inline code block style inside headers or other styled elements */
 .markdown-renderer h1 code,
 .markdown-renderer h2 code,
-.markdown-renderer h3 code {
+.markdown-renderer h3 code,
+.markdown-renderer h4 code {
   font-size: 0.9em;
+}
+
+/* Heading styles */
+.markdown-renderer h1 {
+  font-size: 1.5em;
+  font-weight: 700;
+  margin-top: 1.5em;
+  margin-bottom: 0.75em;
+  border-bottom: 1px solid var(--color-border, #333);
+  padding-bottom: 0.3em;
+}
+
+.markdown-renderer h2 {
+  font-size: 1.3em;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.markdown-renderer h3 {
+  font-size: 1.2em;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+
+.markdown-renderer h4 {
+  font-size: 1.05em;
+  font-weight: 600;
+  margin-top: 1.2em;
+  margin-bottom: 0.4em;
 }
 
 /* Restore list styles stripped by the global CSS reset */
@@ -70,4 +102,34 @@
 .markdown-renderer ul ul ul,
 .markdown-renderer ol ol ul {
   list-style: square;
+}
+
+/* Blockquotes */
+.markdown-renderer blockquote {
+  border-left: 3px solid var(--color-accent, #6366f1);
+  padding-left: 1em;
+  margin: 1em 0;
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+
+.markdown-renderer blockquote p {
+  margin-bottom: 0.5em;
+}
+
+/* Horizontal rule */
+.markdown-renderer hr {
+  border: none;
+  border-top: 1px solid var(--color-border, #333);
+  margin: 1.5em 0;
+}
+
+/* Strong and emphasis */
+.markdown-renderer strong {
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.markdown-renderer em {
+  font-style: italic;
 }
