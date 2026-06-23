@@ -594,7 +594,11 @@ ${sourceBlock}`
     const requiredFields = ['front', 'back']
 
     if (sections && sections.length > 0) {
-      cardProperties.sourceSectionId = { type: 'string', description: 'The section id this card was generated from' }
+      cardProperties.sourceSectionId = { 
+        type: 'string', 
+        description: 'The section id this card was generated from',
+        enum: sections.map(s => s.sectionId)
+      }
       cardProperties.sourceSectionName = { type: 'string', description: 'The section name this card was generated from' }
       requiredFields.push('sourceSectionId', 'sourceSectionName')
     }
@@ -1024,7 +1028,11 @@ Return the sections that were substantively discussed with their complete update
               items: {
                 type: 'object',
                 properties: {
-                  sectionId: { type: 'string', description: 'The section id from the provided list' },
+                  sectionId: { 
+                    type: 'string', 
+                    description: 'The section id from the provided list',
+                    enum: sections.map(s => s.id)
+                  },
                   reason: { type: 'string', description: 'Brief reason why this section was covered in the conversation' },
                   newContent: { type: 'string', description: 'The complete updated section content in markdown format' }
                 },
