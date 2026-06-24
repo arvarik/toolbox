@@ -229,15 +229,42 @@ export default function StudyPage() {
     }
   }
 
-  const handleDeleteDeck = async (deck) => {
-    setDecks((prev) => prev.filter((d) => d.id !== deck.id))
+  const handleDeleteDeck = (deck) => {
+    // 1. Optimistic UI Update
+    setDecks(prev => prev.filter(d => d.id !== deck.id))
     setDeleteModal(null)
-    try {
-      await decksApi.delete(deck.id)
-      addToast({ type: 'info', message: `"${deck.name}" deleted` })
-    } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Failed to delete deck' })
+    const wasSelected = selectedDeck && selectedDeck.id === deck.id
+    if (wasSelected) {
+      setSelectedDeck(null)
     }
+
+    // 2. Schedule API deletion
+    const actionId = `delete-deck-${deck.id}`
+    useAppStore.getState().scheduleAction(actionId, async () => {
+      try {
+        await decksApi.delete(deck.id)
+      } catch (err) {
+        useAppStore.getState().addToast({ type: 'error', message: err.message || 'Failed to delete deck' })
+        refreshDecks() // Restore UI consistency if background delete fails
+      }
+    }, 5000)
+
+    // 3. Show Undo Toast
+    addToast({
+      type: 'info',
+      message: `"${deck.name}" deleted`,
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          if (useAppStore.getState().cancelAction(actionId)) {
+            setDecks(prev => [...prev, deck])
+            if (wasSelected) {
+              setSelectedDeck(deck)
+            }
+          }
+        }
+      }
+    })
   }
 
   const handleSaveDeckSettings = async (deckId, settingsData) => {
@@ -266,15 +293,44 @@ export default function StudyPage() {
     }
   }
 
-  const handleDeleteBrowserCard = async (cardId) => {
-    try {
-      await flashcardsApi.delete(selectedDeck.id, cardId)
-      const fullDeck = await decksApi.get(selectedDeck.id)
-      setSelectedDeck(mapDeckFromApi(fullDeck))
-      addToast({ type: 'info', message: 'Card deleted' })
-    } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Failed to delete card' })
-    }
+  const handleDeleteBrowserCard = (cardId) => {
+    const cardToRestore = selectedDeck.cards.find(c => c.id === cardId)
+    // 1. Optimistic UI update
+    setSelectedDeck(prev => ({
+      ...prev,
+      cards: prev.cards.filter(c => c.id !== cardId)
+    }))
+
+    // 2. Schedule API deletion
+    const actionId = `delete-card-${cardId}`
+    useAppStore.getState().scheduleAction(actionId, async () => {
+      try {
+        await flashcardsApi.delete(selectedDeck.id, cardId)
+      } catch (err) {
+        useAppStore.getState().addToast({ type: 'error', message: err.message || 'Failed to delete card' })
+        // Restore UI on error by refetching
+        const fullDeck = await decksApi.get(selectedDeck.id)
+        setSelectedDeck(mapDeckFromApi(fullDeck))
+      }
+    }, 5000)
+
+    // 3. Show Undo Toast
+    addToast({
+      type: 'info',
+      message: 'Card deleted',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          if (useAppStore.getState().cancelAction(actionId)) {
+            // Restore locally
+            setSelectedDeck(prev => {
+              const newCards = [...prev.cards, cardToRestore].sort((a, b) => a.position - b.position)
+              return { ...prev, cards: newCards }
+            })
+          }
+        }
+      }
+    })
   }
 
   const handleAddBrowserCard = async () => {

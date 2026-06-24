@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
 import {
   Send, Sparkles, Copy, Check, Trash2, GitCommit,
-  Plus, ChevronDown, Edit2, X, RotateCcw, Square, Map, Layers
+  Plus, ChevronDown, Edit2, X, RotateCcw, Square, Map, Layers, MoreHorizontal
 } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
@@ -529,6 +529,38 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     }
   }
 
+  const handleGenerateSessionFlashcards = async () => {
+    if (messages.length === 0 || isGeneratingCards) return
+    setIsGeneratingCards(true)
+    
+    try {
+      const topicName = activeTopic?.topic?.name || currentSession?.topicName
+      
+      const fullSessionText = messages
+        .filter(m => m.content.trim().length > 0)
+        .map(m => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.content}`)
+        .join('\n\n')
+
+      const res = await chatApi.generateFlashcards({ 
+        text: fullSessionText, 
+        topicName, 
+        model: selectedModel, 
+        sessionContext: '' // The text itself is the session context
+      })
+      
+      if (res.cards && res.cards.length > 0) {
+        setGeneratedCards(res.cards)
+        setShowReviewModal(true)
+      } else {
+        addToast({ type: 'info', message: 'No flashcards could be generated from this session.' })
+      }
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to generate flashcards.' })
+    } finally {
+      setIsGeneratingCards(false)
+    }
+  }
+
   // Update messages for current session
   const setMessages = useCallback((updaterOrMessages) => {
     setSessions((prev) => {
@@ -760,10 +792,18 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     })
   }, [currentId])
 
-  const clearCurrentSession = useCallback(() => {
-    setMessages([])
-    setErrorMsg(null)
-  }, [setMessages])
+  const [showActionsMenu, setShowActionsMenu] = useState(false)
+  const actionsMenuRef = useRef(null)
+
+  useEffect(() => {
+    const handler = (e) => {
+      if (actionsMenuRef.current && !actionsMenuRef.current.contains(e.target)) {
+        setShowActionsMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
 
   const aiMessages = messages.filter((m) => m.role === 'ai' && m.content.trim().length > 0)
 
@@ -796,16 +836,65 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
           {messages.length >= 4 && (
-             <button
-               className="btn btn-ghost hide-on-mobile"
-               style={{ fontSize: 'var(--text-xs)', padding: '5px 12px', display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
-               onClick={handleGenerateConceptMap}
-               disabled={generatingMap}
-               title="Generate a visual Concept Map of this session"
-             >
-               <Map size={13} style={{ animation: generatingMap ? 'spin 2s linear infinite' : 'none' }} />
-               {generatingMap ? 'Generating Map...' : 'Generate Map'}
-             </button>
+            <div style={{ position: 'relative' }} ref={actionsMenuRef}>
+              <button
+                className="btn btn-ghost btn-icon"
+                onClick={() => setShowActionsMenu(p => !p)}
+                title="More Actions"
+                aria-label="More Actions"
+              >
+                <MoreHorizontal size={16} />
+              </button>
+              {showActionsMenu && (
+                <div style={{
+                  position: 'absolute', top: '100%', right: 0, marginTop: '4px',
+                  background: 'var(--color-surface)',
+                  border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-md)',
+                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+                  minWidth: 180, zIndex: 100,
+                  display: 'flex', flexDirection: 'column',
+                  overflow: 'hidden'
+                }}>
+                  <button
+                    className="dropdown-item"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '8px',
+                      padding: '10px 16px', border: 'none', background: 'none',
+                      cursor: 'pointer', textAlign: 'left',
+                      color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)',
+                      opacity: generatingMap ? 0.5 : 1
+                    }}
+                    onClick={() => {
+                      setShowActionsMenu(false)
+                      handleGenerateConceptMap()
+                    }}
+                    disabled={generatingMap}
+                  >
+                    <Map size={14} style={{ animation: generatingMap ? 'spin 2s linear infinite' : 'none' }} />
+                    {generatingMap ? 'Generating Map...' : 'Generate Map'}
+                  </button>
+                  <button
+                    className="dropdown-item"
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '8px',
+                      padding: '10px 16px', border: 'none', background: 'none',
+                      cursor: 'pointer', textAlign: 'left',
+                      color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)',
+                      opacity: isGeneratingCards ? 0.5 : 1
+                    }}
+                    onClick={() => {
+                      setShowActionsMenu(false)
+                      handleGenerateSessionFlashcards()
+                    }}
+                    disabled={isGeneratingCards}
+                  >
+                    <Layers size={14} style={{ animation: isGeneratingCards ? 'spin 2s linear infinite' : 'none' }} />
+                    {isGeneratingCards ? 'Generating Cards...' : 'Generate Flashcards'}
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           {aiMessages.length > 0 && (
             <button
@@ -829,17 +918,6 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
             >
               <GitCommit size={13} />
               <span className="hide-on-mobile">Commit to Guide</span>
-            </button>
-          )}
-          {messages.length > 0 && (
-            <button
-              onClick={clearCurrentSession}
-              className="btn btn-ghost btn-sm"
-              style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', display: 'flex', alignItems: 'center', gap: 4 }}
-              title="Clear this session's messages"
-            >
-              <X size={12} />
-              <span className="hide-on-mobile">Clear</span>
             </button>
           )}
         </div>

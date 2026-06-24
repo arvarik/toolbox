@@ -121,6 +121,36 @@ const useAppStore = create((set) => ({
     // Auto-reset after animation duration (e.g. 1500ms)
     setTimeout(() => set({ ahaMomentActive: false }), 2000)
   },
+
+  // Delayed execution queue (Undo feature)
+  pendingActions: {},
+  scheduleAction: (id, executeFn, delay = 5000) => {
+    const timer = setTimeout(() => {
+      executeFn()
+      set(s => {
+        const next = { ...s.pendingActions }
+        delete next[id]
+        return { pendingActions: next }
+      })
+    }, delay)
+    set(s => ({
+      pendingActions: { ...s.pendingActions, [id]: timer }
+    }))
+  },
+  cancelAction: (id) => {
+    let cancelled = false
+    set(s => {
+      if (s.pendingActions[id]) {
+        clearTimeout(s.pendingActions[id])
+        const next = { ...s.pendingActions }
+        delete next[id]
+        cancelled = true
+        return { pendingActions: next }
+      }
+      return s
+    })
+    return cancelled
+  },
 }))
 
 export default useAppStore

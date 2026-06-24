@@ -20,6 +20,18 @@ function Toast({ toast, onDismiss }) {
     <div className={`toast toast-${toast.type}`}>
       <Icon className="toast-icon" size={18} />
       <span style={{ flex: 1 }}>{toast.message}</span>
+      {toast.action && (
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ marginRight: 8, padding: '2px 8px', minHeight: 'unset', height: 24, fontSize: '0.8rem' }}
+          onClick={() => {
+            toast.action.onClick()
+            onDismiss(toast.id)
+          }}
+        >
+          {toast.action.label}
+        </button>
+      )}
       <button
         className="btn btn-ghost btn-icon"
         onClick={() => onDismiss(toast.id)}

@@ -63,9 +63,14 @@ describe('LearningChat Component Tests', () => {
     const strictOption = screen.getByText('Strict')
     fireEvent.click(strictOption)
     
-    // Clear the session to get the starter prompts back
-    const clearBtn = screen.getByTitle("Clear this session's messages")
-    fireEvent.click(clearBtn)
+    // Create a new session to get the starter prompts back (since clear button is removed)
+    const sessionPickerBtn = screen.getByRole('button', { name: /No session|Session/i }) // Usually has the session name or 'No session'
+    // actually, it has id="session-picker-btn"
+    const sessionBtn = document.getElementById('session-picker-btn')
+    fireEvent.click(sessionBtn)
+    
+    const newSessionBtn = screen.getByText('New Session')
+    fireEvent.click(newSessionBtn)
     
     // Click another starter prompt
     const starter2 = screen.getByText('Walk me through the tradeoffs of SQL vs NoSQL for a social feed at scale')
@@ -97,11 +102,16 @@ describe('LearningChat Component Tests', () => {
 
     render(<LearningChat />)
     
-    // The "Generate Map" button should be visible immediately
-    const generateBtn = await screen.findByTitle('Generate a visual Concept Map of this session')
-    expect(generateBtn).toBeInTheDocument()
+    // The "More Actions" button should be visible immediately
+    const moreActionsBtn = await screen.findByTitle('More Actions')
+    expect(moreActionsBtn).toBeInTheDocument()
     
-    // Click it
+    // Click it to open the dropdown
+    fireEvent.click(moreActionsBtn)
+    
+    // Now find and click the Generate Map button
+    const generateBtn = await screen.findByText(/Generate Map/)
+    expect(generateBtn).toBeInTheDocument()
     fireEvent.click(generateBtn)
     
     await waitFor(() => {

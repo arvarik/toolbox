@@ -71,6 +71,8 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
     checkDuplicates()
   }, [open, initialCards, topicName])
 
+  const isMobile = useIsMobile()
+
   if (!open) return null
 
   const removeCard = (index) => {
@@ -218,7 +220,6 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
     }
   }
 
-  const isMobile = useIsMobile()
   const duplicateCount = Object.keys(duplicateMap).length
   const includedCount = cards.filter((_, i) => !excludedIndexes.has(i)).length
 

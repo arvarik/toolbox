@@ -140,18 +140,39 @@ export default function BlueprintShell() {
     }
   }
 
-  const clearSection = async (sectionId) => {
-    try {
-      await guideContentApi.clear(pillarId, topicId, sectionId)
-      setSectionContent((prev) => {
-        const next = { ...prev }
-        delete next[sectionId]
-        return next
-      })
-      addToast({ type: 'info', message: 'Section cleared' })
-    } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Failed to clear' })
-    }
+  const clearSection = (sectionId) => {
+    const oldContent = sectionContent[sectionId]
+    
+    // 1. Optimistic UI Update
+    setSectionContent((prev) => {
+      const next = { ...prev }
+      delete next[sectionId]
+      return next
+    })
+
+    // 2. Schedule API clear
+    const actionId = `clear-section-${pillarId}-${topicId}-${sectionId}`
+    useAppStore.getState().scheduleAction(actionId, async () => {
+      try {
+        await guideContentApi.clear(pillarId, topicId, sectionId)
+      } catch (err) {
+        useAppStore.getState().addToast({ type: 'error', message: err.message || 'Failed to clear' })
+      }
+    }, 5000)
+
+    // 3. Show Undo Toast
+    addToast({ 
+      type: 'info', 
+      message: 'Section cleared',
+      action: {
+        label: 'Undo',
+        onClick: () => {
+          if (useAppStore.getState().cancelAction(actionId)) {
+            setSectionContent(prev => ({ ...prev, [sectionId]: oldContent }))
+          }
+        }
+      }
+    })
   }
 
   const handleGenerateFlashcards = async () => {
