@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
 import {
   Send, Sparkles, Copy, Check, Trash2, GitCommit,
-  Plus, ChevronDown, Edit2, X, RotateCcw, Square, Map, Layers, MoreHorizontal
+  Plus, ChevronDown, Edit2, RotateCcw, Square, Map, Layers, MoreHorizontal
 } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
@@ -835,7 +835,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
-          {messages.length >= 4 && (
+          {messages.length > 0 && (
             <div style={{ position: 'relative' }} ref={actionsMenuRef}>
               <button
                 className="btn btn-ghost btn-icon"

@@ -64,7 +64,6 @@ describe('LearningChat Component Tests', () => {
     fireEvent.click(strictOption)
     
     // Create a new session to get the starter prompts back (since clear button is removed)
-    const sessionPickerBtn = screen.getByRole('button', { name: /No session|Session/i }) // Usually has the session name or 'No session'
     // actually, it has id="session-picker-btn"
     const sessionBtn = document.getElementById('session-picker-btn')
     fireEvent.click(sessionBtn)
