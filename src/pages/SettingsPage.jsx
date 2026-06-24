@@ -14,6 +14,7 @@ const AVAILABLE_MODELS = [
 export default function SettingsPage() {
   const { apiKeyConfigured, setApiKeyConfigured, addToast, theme, toggleTheme, model, setModel } = useAppStore()
   const [apiKey, setApiKey] = useState('')
+  const isMac = typeof window !== 'undefined' && navigator.userAgent.includes('Mac')
   const [showKey, setShowKey] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [keyStatus, setKeyStatus] = useState(apiKeyConfigured ? 'connected' : 'disconnected')
@@ -106,7 +107,7 @@ export default function SettingsPage() {
         </p>
       </div>
 
-      <div className="settings-content" style={{ padding: 'var(--space-6) var(--space-8)' }}>
+      <div className="settings-content">
         {/* API Key Section */}
         <div className="settings-section">
           <h2 className="settings-section-title">Gemini API Key</h2>
@@ -270,7 +271,7 @@ export default function SettingsPage() {
             {theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
           </button>
           <p className="settings-help" style={{ marginTop: 'var(--space-2)' }}>
-            You can also toggle with <kbd style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', background: 'var(--color-bg-hover)', padding: '1px 4px', borderRadius: '3px', border: '1px solid var(--color-border)' }}>⌘D</kbd>
+            You can also toggle with <kbd style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', background: 'var(--color-bg-hover)', padding: '1px 4px', borderRadius: '3px', border: '1px solid var(--color-border)' }}>{isMac ? '⌘' : 'Ctrl+'}D</kbd>
           </p>
         </div>
 
@@ -321,7 +322,7 @@ export default function SettingsPage() {
             Export or import your flashcard decks and whiteboard designs.
           </p>
 
-          <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
+          <div className="data-management-buttons" style={{ display: 'flex', gap: 'var(--space-3)' }}>
             <button className="btn btn-secondary" onClick={handleExportGuide}>
               <Download size={14} />
               Export Guide (.md)
@@ -351,15 +352,15 @@ export default function SettingsPage() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', marginTop: 'var(--space-3)' }}>
             {[
-              ['⌘1', 'Navigate to Guide'],
-              ['⌘2', 'Navigate to Builder'],
-              ['⌘3', 'Navigate to Flashcards'],
-              ['⌘,', 'Navigate to Settings'],
-              ['⌘K', 'Toggle AI Chat'],
-              ['⌘B', 'Toggle Sidebar'],
-              ['⌘D', 'Toggle Dark/Light Mode'],
-              ['⌘S', 'Save Board (in Builder)'],
-              ['⌘/', 'Search Topics'],
+              ['1', 'Navigate to Guide'],
+              ['2', 'Navigate to Builder'],
+              ['3', 'Navigate to Flashcards'],
+              [',', 'Navigate to Settings'],
+              ['K', 'Toggle AI Chat'],
+              ['B', 'Toggle Sidebar'],
+              ['D', 'Toggle Dark/Light Mode'],
+              ['S', 'Save Board (in Builder)'],
+              ['/', 'Search Topics'],
             ].map(([key, desc]) => (
               <div
                 key={key}
@@ -381,7 +382,7 @@ export default function SettingsPage() {
                   border: '1px solid var(--color-border)',
                   color: 'var(--color-text-tertiary)',
                 }}>
-                  {key}
+                  {isMac ? `⌘${key}` : `Ctrl+${key}`}
                 </kbd>
               </div>
             ))}

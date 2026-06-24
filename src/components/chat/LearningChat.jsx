@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
 import {
   Send, Sparkles, Copy, Check, Trash2, GitCommit,
   Plus, ChevronDown, Edit2, X, RotateCcw, Square, Map, Layers
@@ -66,10 +66,10 @@ function CopyButton({ text }) {
   )
 }
 
-function MdContent({ text }) {
+const MdContent = memo(function MdContent({ text }) {
   if (!text) return null
   return <MarkdownRenderer content={text} />
-}
+})
 
 const STARTER_PROMPTS = [
   'Explain consistent hashing with a concrete example and when I should use it',
@@ -401,6 +401,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   const [isGeneratingCards, setIsGeneratingCards] = useState(false)
 
   const messagesEndRef = useRef(null)
+  const messagesContainerRef = useRef(null)
   const inputRef = useRef(null)
   const abortControllerRef = useRef(null)
 
@@ -419,6 +420,35 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // Keep scroll pinned to bottom on container resize (e.g. input auto-grow, window resize)
+  useEffect(() => {
+    const container = messagesContainerRef.current
+    if (!container) return
+
+    let lastScrollHeight = container.scrollHeight
+    let lastClientHeight = container.clientHeight
+
+    const handleResize = () => {
+      const scrollOffset = lastScrollHeight - container.scrollTop - lastClientHeight
+      const wasAtBottom = scrollOffset < 30
+
+      if (wasAtBottom) {
+        container.style.scrollBehavior = 'auto'
+        container.scrollTop = container.scrollHeight - container.clientHeight
+        container.offsetHeight // Force layout reflow
+        container.style.scrollBehavior = 'smooth'
+      }
+
+      lastScrollHeight = container.scrollHeight
+      lastClientHeight = container.clientHeight
+    }
+
+    const observer = new ResizeObserver(handleResize)
+    observer.observe(container)
+
+    return () => observer.disconnect()
+  }, [])
 
   // Focus input on mount
   useEffect(() => { inputRef.current?.focus() }, [])
@@ -864,7 +894,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       />
 
       {/* ── Messages ── */}
-      <div className="learning-chat-messages" id="learning-chat-messages">
+      <div className="learning-chat-messages" id="learning-chat-messages" ref={messagesContainerRef}>
         {messages.length === 0 && (
           <div className="learning-chat-empty">
             <div style={{ textAlign: 'center', marginBottom: 'var(--space-6)' }}>

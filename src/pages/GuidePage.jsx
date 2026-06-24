@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { MessageSquare } from 'lucide-react'
 import PillarNav from '../components/guide/PillarNav'
 import BlueprintShell from '../components/guide/BlueprintShell'
 import ChatPanel from '../components/shared/ChatPanel'
 import useAppStore from '../stores/appStore'
+import useIsMobile from '../hooks/useIsMobile'
 
 /**
  * GuidePage — The authoritative library of system design knowledge.
@@ -21,15 +22,7 @@ export default function GuidePage() {
   const chatOpen = useAppStore((s) => s.chatOpen.guide)
   const toggleChat = useAppStore((s) => s.toggleChat)
 
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth < 768 : false
-  )
-
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768)
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+  const isMobile = useIsMobile()
 
   // ── Library layout — always show PillarNav + BlueprintShell ────────────────
   return (

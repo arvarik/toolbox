@@ -10,11 +10,12 @@ import SearchDialog from '../shared/SearchDialog'
 import useAppStore from '../../stores/appStore'
 import useTimerStore from '../../stores/useTimerStore'
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts'
+import useIsMobile from '../../hooks/useIsMobile'
 import { configApi } from '../../utils/api'
 
 export default function Layout() {
   const location = useLocation()
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+  const isMobile = useIsMobile()
   const [menuOpen, setMenuOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
   const setApiKeyConfigured = useAppStore((s) => s.setApiKeyConfigured)
@@ -64,13 +65,7 @@ export default function Layout() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+
 
   useEffect(() => {
     configApi.get().then((data) => {

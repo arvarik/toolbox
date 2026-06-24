@@ -11,6 +11,7 @@ import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
 import { guideContentApi, chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
+import useIsMobile from '../../hooks/useIsMobile'
 
 const EMPTY_ARRAY = []
 
@@ -63,13 +64,7 @@ export default function BlueprintShell() {
   const [editingSection, setEditingSection] = useState(null) // sectionId or null
   const [editDraft, setEditDraft] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
-
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768)
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+  const isMobile = useIsMobile()
 
   // Flashcards state
   const selectedModel = useAppStore((s) => s.model)

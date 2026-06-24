@@ -1849,6 +1849,13 @@ textarea.input {
 }
 
 /* ============================================
+   Settings Responsiveness
+   ============================================ */
+.settings-content {
+  padding: var(--space-6) var(--space-8);
+}
+
+/* ============================================
    Mobile Responsiveness Media Queries
    ============================================ */
 @media (max-width: 767px) {
@@ -1862,12 +1869,14 @@ textarea.input {
     top: 0;
     left: 0;
     width: 100%;
-    height: 56px;
+    height: calc(56px + env(safe-area-inset-top, 0px));
+    padding-top: env(safe-area-inset-top, 0px);
     z-index: 100;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 0 var(--space-4);
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border);
     backdrop-filter: blur(12px);
@@ -2392,6 +2401,25 @@ textarea.input {
     width: 100%;
   }
 
+  /* Data management buttons: stack vertically on mobile */
+  .data-management-buttons {
+    flex-wrap: wrap !important;
+  }
+
+  .data-management-buttons > .btn {
+    flex: 1 1 calc(50% - var(--space-2));
+    min-width: 140px;
+  }
+
+  /* ---------- Feynman Page ---------- */
+  #feynman-page {
+    padding: var(--space-3) !important;
+  }
+
+  #feynman-page .card {
+    padding: var(--space-4) !important;
+  }
+
   /* ---------- Toast on Mobile ---------- */
   .toast-container {
     right: var(--space-3) !important;
@@ -2791,7 +2819,7 @@ textarea.input {
   overflow: hidden;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .learning-hub-layout {
     grid-template-columns: 1fr;
   }
@@ -2812,6 +2840,8 @@ textarea.input {
   height: 100%;
   overflow: hidden;
   background: var(--color-surface);
+  container-type: inline-size;
+  container-name: chat;
 }
 
 .learning-chat-header {
@@ -2852,22 +2882,30 @@ textarea.input {
 }
 
 @media (max-width: 640px) {
+  .hide-on-mobile {
+    display: none !important;
+  }
+}
+
+/* Container query for compact chat layout (container width <= 680px) */
+@container chat (max-width: 680px) {
+  .hide-on-mobile {
+    display: none !important;
+  }
+
   .learning-starter-prompts {
     grid-template-columns: 1fr;
     max-height: 200px;
     overflow-y: auto;
     padding-right: 4px;
   }
+
   .learning-chat-help-text {
     display: none;
   }
-  .hide-on-mobile {
-    display: none !important;
-  }
 
-  /* ── Mobile Chat Header ── */
+  /* ── Compact Chat Header ── */
   .learning-chat-header {
-    flex-wrap: wrap;
     padding: var(--space-2) var(--space-3);
     gap: var(--space-2);
   }
@@ -2877,17 +2915,17 @@ textarea.input {
     gap: var(--space-1) !important;
     min-width: 0;
     flex: 1 1 0%;
-    overflow: hidden;
+    overflow: visible;
   }
 
-  /* Session picker button: constrain width on mobile */
+  /* Session picker button: constrain width */
   .session-picker-btn {
     max-width: 140px !important;
     font-size: 11px !important;
     padding: 3px 8px !important;
   }
 
-  /* Persona picker: icon-only on mobile */
+  /* Persona picker: icon-only */
   .persona-picker-btn {
     padding: 4px 8px !important;
     gap: 0 !important;
@@ -2899,30 +2937,50 @@ textarea.input {
     flex-shrink: 0;
   }
 
-  /* Commit to Guide button: compact on mobile (text hidden via hide-on-mobile) */
+  /* Commit to Guide button: compact */
   #commit-to-guide-btn {
     padding: 5px 8px !important;
   }
 
-  /* Messages area: tighter padding on mobile */
+  /* Messages area: tighter padding */
   .learning-chat-messages {
     padding: var(--space-3) var(--space-3);
     gap: var(--space-3);
   }
 
-  /* Input area: tighter padding on mobile */
+  /* Input area: tighter padding */
   .learning-chat-input-area {
     padding: var(--space-3) var(--space-3) var(--space-4);
   }
 
-  /* User message bubbles: wider on mobile */
+  /* User message bubbles: wider */
   .learning-message.user .learning-message-text {
     max-width: 90%;
   }
 
-  /* Constrain dropdown menus to not overflow viewport */
+  /* Constrain dropdown menus to not overflow container */
   .learning-chat-header [style*="position: absolute"] {
-    max-width: calc(100vw - 2 * var(--space-3)) !important;
+    max-width: calc(100cqw - 2 * var(--space-3)) !important;
+    left: 0 !important;
+    right: auto !important;
+  }
+}
+
+/* Extra narrow container (e.g. <= 480px): wrap the header items */
+@container chat (max-width: 480px) {
+  .learning-chat-header {
+    flex-wrap: wrap;
+  }
+
+  .learning-chat-header > div:first-child {
+    flex: 1 1 100%;
+    justify-content: flex-start;
+  }
+
+  .learning-chat-header > div:last-child {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    margin-top: var(--space-1);
   }
 }
 

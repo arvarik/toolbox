@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   MessageSquare,
@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import PomodoroWidget from './PomodoroWidget'
+import useIsMobile from '../../hooks/useIsMobile'
 
 const navItems = [
   {
@@ -39,15 +40,7 @@ export default function Sidebar() {
   const setModel = useAppStore((s) => s.setModel)
   const location = useLocation()
 
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+  const isMobile = useIsMobile()
 
   return (
     <aside className={`sidebar${collapsed ? ' collapsed' : ''}${isMobile ? ' hidden-mobile' : ''}`} id="app-sidebar">

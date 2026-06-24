@@ -12,6 +12,7 @@ import { decksApi, flashcardsApi, studySessionsApi } from '../utils/api'
 import DeckOptionsModal from '../components/study/DeckOptionsModal'
 import CardBrowser from '../components/study/CardBrowser'
 import StatsDashboard from '../components/study/StatsDashboard'
+import useIsMobile from '../hooks/useIsMobile'
 
 const mapDeckFromApi = (d) => ({
   id: d.id,
@@ -47,15 +48,7 @@ export default function StudyPage() {
   const addToast = useAppStore((s) => s.addToast)
 
   const [view, setView] = useState('list') // 'list' | 'study' | 'review' | 'edit' | 'new'
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+  const isMobile = useIsMobile()
 
   const [decks, setDecks] = useState([])
   const [isLoading, setIsLoading] = useState(true)

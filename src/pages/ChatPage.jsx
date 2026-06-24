@@ -3,6 +3,7 @@ import { X } from 'lucide-react'
 import LearningChat from '../components/chat/LearningChat'
 import LearningTodo from '../components/chat/LearningTodo'
 import CommitModal from '../components/chat/CommitModal'
+import useIsMobile from '../hooks/useIsMobile'
 
 /**
  * Bottom-sheet drawer for mobile — slides up from the bottom edge.
@@ -88,9 +89,7 @@ function MobileDrawer({ open, onClose, children }) {
  * The Guide page (/guide) is the authoritative library for reference.
  */
 export default function ChatPage() {
-  const [isMobile, setIsMobile] = useState(() =>
-    typeof window !== 'undefined' ? window.innerWidth < 768 : false
-  )
+  const isMobile = useIsMobile()
 
   // Mobile drawer state (LearningTodo)
   const [todoDrawerOpen, setTodoDrawerOpen] = useState(false)
@@ -102,12 +101,6 @@ export default function ChatPage() {
 
   // Active topic for LearningChat to fetch starters
   const [activeStudyTopic, setActiveStudyTopic] = useState(null)
-
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768)
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
 
   useEffect(() => {
     const handler = () => setTodoDrawerOpen(true)

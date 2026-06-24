@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { X, Edit3, Trash2, Save, Layers, Loader2, AlertTriangle, ArrowRightLeft } from 'lucide-react'
 import { decksApi, flashcardsApi, chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
+import useIsMobile from '../../hooks/useIsMobile'
 
 export default function FlashcardReviewModal({ open, onClose, cards: initialCards, topicName, pillarId, topicId, onSaveSuccess }) {
   const addToast = useAppStore((s) => s.addToast)
@@ -217,7 +218,7 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
     }
   }
 
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768
+  const isMobile = useIsMobile()
   const duplicateCount = Object.keys(duplicateMap).length
   const includedCount = cards.filter((_, i) => !excludedIndexes.has(i)).length
 

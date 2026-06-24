@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ChevronRight, ChevronDown } from 'lucide-react'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
 import { guideContentApi } from '../../utils/api'
+import useIsMobile from '../../hooks/useIsMobile'
 
 /**
  * Left sidebar navigation listing the 7 pillars with collapsible topic lists.
@@ -14,7 +15,7 @@ export default function PillarNav() {
   const [expanded, setExpanded] = useState(
     pillarId ? { [pillarId]: true } : { compute: true }
   )
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+  const isMobile = useIsMobile()
 
   // Progress data from the backend
   const [progress, setProgress] = useState({})
@@ -23,14 +24,6 @@ export default function PillarNav() {
     guideContentApi.progress()
       .then((data) => setProgress(data || {}))
       .catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
   }, [])
 
   const toggleExpand = (id) => {

@@ -9,6 +9,7 @@ import BoardList from '../components/builder/BoardList'
 import TemplateGallery from '../components/builder/TemplateGallery'
 import ChatPanel from '../components/shared/ChatPanel'
 import useAppStore from '../stores/appStore'
+import useIsMobile from '../hooks/useIsMobile'
 import { boardsApi } from '../utils/api'
 
 const defaultBoards = [
@@ -31,17 +32,9 @@ export default function BuilderPage() {
   const [activeTool, setActiveTool] = useState('select')
   const [zoomLevel, setZoomLevel] = useState(100)
   const [showTemplates, setShowTemplates] = useState(false)
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
+  const isMobile = useIsMobile()
   const autoSaveTimer = useRef(null)
   const lastSavedData = useRef(null)
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
 
   useEffect(() => {
     boardsApi.list().then((list) => {

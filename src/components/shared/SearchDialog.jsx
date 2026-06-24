@@ -143,7 +143,7 @@ export default function SearchDialog({ open, onClose }) {
           <button
             className="btn btn-ghost btn-icon"
             onClick={onClose}
-            style={{ width: 28, height: 28, flexShrink: 0 }}
+            style={{ width: 44, height: 44, flexShrink: 0 }}
             aria-label="Close search"
           >
             <X size={14} />

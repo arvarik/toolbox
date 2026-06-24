@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Send, X, Sparkles, Copy, Check, RotateCcw, Square } from 'lucide-react'
 import MarkdownRenderer from './MarkdownRenderer'
 import useAppStore from '../../stores/appStore'
+import useIsMobile from '../../hooks/useIsMobile'
 import { chatApi } from '../../utils/api'
 
 // Safe storage wrapper to prevent SSR or restricted environment crashes
@@ -125,15 +126,7 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
   const canvasNodes = useAppStore((s) => s.nodes) || []
   const canvasEdges = useAppStore((s) => s.edges) || []
 
-  const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false)
-
-  useEffect(() => {
-    const handleResize = () => {
-      setIsMobile(window.innerWidth < 768)
-    }
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+  const isMobile = useIsMobile()
 
   // Load width state from safeStorage
   const [width, setWidth] = useState(() => {
