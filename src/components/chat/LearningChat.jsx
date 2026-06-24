@@ -359,23 +359,9 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   const addToast = useAppStore((s) => s.addToast)
 
   // Sessions state
-  const [sessions, setSessions] = useState(() => {
-    const all = loadSessions()
-    // Bootstrap: if no sessions exist, create the first one
-    if (Object.keys(all).length === 0) {
-      const first = makeSession()
-      return { [first.id]: first }
-    }
-    return all
-  })
-
-  const [currentId, setCurrentId] = useState(() => {
-    const saved = loadCurrentId()
-    if (saved && sessions[saved]) return saved
-    // Fall back to most recent session
-    const ids = Object.keys(sessions).sort((a, b) => new Date(sessions[b]?.createdAt) - new Date(sessions[a]?.createdAt))
-    return ids[0] || null
-  })
+  const [sessions, setSessions] = useState({})
+  const [currentId, setCurrentId] = useState(null)
+  const [isLoaded, setIsLoaded] = useState(false)
 
   // Derive current session
   const currentSession = sessions[currentId] || null
@@ -412,8 +398,71 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
   const activeTopicIdRef = useRef(activeTopic?.topic?.id)
 
+  // Load from API & Migrate local data if needed
+  useEffect(() => {
+    async function initSessions() {
+      try {
+        const backendSessions = await chatApi.getSessions()
+        const localSessions = loadSessions()
+        
+        let needsMigration = false
+        const toMigrate = {}
+        for (const [id, s] of Object.entries(localSessions)) {
+          if (!backendSessions[id]) {
+            needsMigration = true
+            toMigrate[id] = s
+          }
+        }
+        
+        let finalSessions = backendSessions
+        if (needsMigration) {
+          await chatApi.migrateBulk(toMigrate)
+          finalSessions = await chatApi.getSessions() // Refetch
+        }
+        
+        // Bootstrap if empty
+        if (Object.keys(finalSessions).length === 0) {
+          const first = makeSession()
+          finalSessions = { [first.id]: first }
+          await chatApi.saveSession(first)
+        }
+        
+        setSessions(finalSessions)
+        
+        // Set current ID
+        const saved = loadCurrentId()
+        if (saved && finalSessions[saved]) {
+          setCurrentId(saved)
+        } else {
+          const ids = Object.keys(finalSessions).sort((a, b) => new Date(finalSessions[b]?.createdAt) - new Date(finalSessions[a]?.createdAt))
+          setCurrentId(ids[0])
+        }
+        setIsLoaded(true)
+      } catch (err) {
+        console.error('Failed to load chat sessions', err)
+        addToast({ title: 'Error loading sessions', type: 'error' })
+        setIsLoaded(true)
+      }
+    }
+    initSessions()
+  }, [addToast])
+
   // Persist sessions whenever they change
-  useEffect(() => { saveSessions(sessions) }, [sessions])
+  useEffect(() => {
+    if (!isLoaded) return
+    saveSessions(sessions) // fast local cache update
+    
+    // Debounce save to backend
+    const timer = setTimeout(() => {
+      const currId = currentIdRef.current
+      if (currId && sessions[currId]) {
+        chatApi.saveSession(sessions[currId]).catch(err => console.error('Failed to sync session', err))
+      }
+    }, 1500)
+    
+    return () => clearTimeout(timer)
+  }, [sessions, isLoaded])
+
   useEffect(() => { if (currentId) saveCurrentId(currentId) }, [currentId])
 
   // Scroll to bottom when messages change
@@ -759,6 +808,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     setCurrentId(s.id)
     setInput('')
     setErrorMsg(null)
+    chatApi.saveSession(s).catch(() => {})
     addToast({ type: 'info', message: `Started "${s.name}"` })
   }, [addToast])
 
@@ -769,10 +819,15 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   }, [])
 
   const renameSession = useCallback((id, name) => {
-    setSessions((prev) => prev[id] ? { ...prev, [id]: { ...prev[id], name } } : prev)
+    setSessions((prev) => {
+      const nextSession = prev[id] ? { ...prev[id], name } : null
+      if (nextSession) chatApi.saveSession(nextSession).catch(() => {})
+      return prev[id] ? { ...prev, [id]: nextSession } : prev
+    })
   }, [])
 
   const deleteSession = useCallback((id) => {
+    chatApi.deleteSession(id).catch(err => console.error('Failed to delete session', err))
     setSessions((prev) => {
       const next = { ...prev }
       delete next[id]
@@ -786,11 +841,13 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
           const fresh = makeSession()
           next[fresh.id] = fresh
           setCurrentId(fresh.id)
+          chatApi.saveSession(fresh).catch(() => {})
         }
       }
       return next
     })
   }, [currentId])
+
 
   const [showActionsMenu, setShowActionsMenu] = useState(false)
   const actionsMenuRef = useRef(null)

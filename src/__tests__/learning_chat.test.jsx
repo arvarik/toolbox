@@ -5,17 +5,33 @@ import LearningChat from '../components/chat/LearningChat'
 import useAppStore from '../stores/appStore'
 import { chatApi } from '../utils/api'
 
-vi.mock('../utils/api', () => ({
-  chatApi: {
-    send: vi.fn(() => Promise.resolve({ response: 'AI response content' })),
-    stream: vi.fn(async (data, onChunk) => {
-      const text = `AI response in ${data.context.substring(0, 20)}...`
-      if (onChunk) onChunk(text)
-      return text
-    }),
-    generateConceptMap: vi.fn(() => Promise.resolve({ response: 'graph TD\nA-->B' })),
+vi.mock('../utils/api', () => {
+  let mockSessions = {}
+  return {
+    chatApi: {
+      send: vi.fn(() => Promise.resolve({ response: 'AI response content' })),
+      stream: vi.fn(async (data, onChunk) => {
+        const text = `AI response in ${data.context.substring(0, 20)}...`
+        if (onChunk) onChunk(text)
+        return text
+      }),
+      generateConceptMap: vi.fn(() => Promise.resolve({ response: 'graph TD\nA-->B' })),
+      getSessions: vi.fn(() => Promise.resolve(mockSessions)),
+      saveSession: vi.fn((s) => {
+        mockSessions[s.id] = s
+        return Promise.resolve({})
+      }),
+      deleteSession: vi.fn((id) => {
+        delete mockSessions[id]
+        return Promise.resolve({})
+      }),
+      migrateBulk: vi.fn((sessions) => {
+        mockSessions = { ...mockSessions, ...sessions }
+        return Promise.resolve({})
+      }),
+    }
   }
-}))
+})
 
 describe('LearningChat Component Tests', () => {
   beforeEach(() => {

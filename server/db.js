@@ -102,6 +102,18 @@ function migrate() {
       updated_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (pillar_id, topic_id)
     );
+
+    -- Chat Sessions
+    CREATE TABLE IF NOT EXISTS chat_sessions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      messages TEXT DEFAULT '[]',
+      pillar_id TEXT DEFAULT NULL,
+      topic_id TEXT DEFAULT NULL,
+      topic_name TEXT DEFAULT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
   `)
 
   logger.info('[db] Migrations complete')

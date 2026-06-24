@@ -3311,3 +3311,10 @@ textarea.input {
 
 /* ─── Mobile "Study Plan" button strip ───────────────────────────────────────── */
 /* Make sure the drawer is above the main layout but below modals */
+
+/* ---------- Mobile Overrides ---------- */
+@media (max-width: 768px) {
+  .learning-chat-input {
+    font-size: 16px; /* Prevents iOS auto-zoom on focus */
+  }
+}

@@ -1142,4 +1142,117 @@ router.post('/commit/save', async (req, res) => {
   }
 })
 
+/**
+ * GET /api/chat/sessions
+ * Fetch all chat sessions
+ */
+router.get('/sessions', (req, res) => {
+  try {
+    const rows = db.prepare("SELECT * FROM chat_sessions ORDER BY updated_at DESC").all()
+    const sessions = {}
+    rows.forEach(r => {
+      sessions[r.id] = {
+        id: r.id,
+        name: r.name,
+        createdAt: r.created_at,
+        messages: JSON.parse(r.messages || '[]'),
+        pillarId: r.pillar_id,
+        topicId: r.topic_id,
+        topicName: r.topic_name
+      }
+    })
+    res.json(sessions)
+  } catch (err) {
+    logger.error('[chat/sessions] Error:', err.message)
+    res.status(500).json({ message: 'Failed to fetch sessions.' })
+  }
+})
+
+/**
+ * POST /api/chat/sessions
+ * Save or update a single chat session
+ */
+router.post('/sessions', (req, res) => {
+  const { session } = req.body
+  if (!session || !session.id) return res.status(400).json({message: 'Session required'})
+  
+  try {
+    db.prepare(`
+      INSERT INTO chat_sessions (id, name, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        messages = excluded.messages,
+        pillar_id = excluded.pillar_id,
+        topic_id = excluded.topic_id,
+        topic_name = excluded.topic_name,
+        updated_at = datetime('now')
+    `).run(
+      session.id, 
+      session.name || 'Session', 
+      JSON.stringify(session.messages || []),
+      session.pillarId || null,
+      session.topicId || null,
+      session.topicName || null,
+      session.createdAt || new Date().toISOString()
+    )
+    res.json({ success: true })
+  } catch (err) {
+    logger.error('[chat/sessions] POST Error:', err.message)
+    res.status(500).json({ message: 'Failed to save session.' })
+  }
+})
+
+/**
+ * POST /api/chat/sessions/bulk
+ * Batch save sessions (used for migration)
+ */
+router.post('/sessions/bulk', (req, res) => {
+  const { sessions } = req.body
+  if (!sessions || typeof sessions !== 'object') return res.status(400).json({message: 'Sessions object required'})
+  
+  try {
+    const insert = db.prepare(`
+      INSERT INTO chat_sessions (id, name, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        messages = excluded.messages,
+        pillar_id = excluded.pillar_id,
+        topic_id = excluded.topic_id,
+        topic_name = excluded.topic_name,
+        updated_at = datetime('now')
+    `)
+    const transaction = db.transaction((sessObj) => {
+      for (const id in sessObj) {
+        const s = sessObj[id]
+        insert.run(
+          s.id, s.name || 'Session', JSON.stringify(s.messages || []),
+          s.pillarId || null, s.topicId || null, s.topicName || null,
+          s.createdAt || new Date().toISOString()
+        )
+      }
+    })
+    transaction(sessions)
+    res.json({ success: true })
+  } catch (err) {
+    logger.error('[chat/sessions/bulk] Error:', err.message)
+    res.status(500).json({ message: 'Failed to save sessions in bulk.' })
+  }
+})
+
+/**
+ * DELETE /api/chat/sessions/:id
+ * Delete a session
+ */
+router.delete('/sessions/:id', (req, res) => {
+  try {
+    db.prepare("DELETE FROM chat_sessions WHERE id = ?").run(req.params.id)
+    res.json({ success: true })
+  } catch (err) {
+    logger.error('[chat/sessions] DELETE Error:', err.message)
+    res.status(500).json({ message: 'Failed to delete session.' })
+  }
+})
+
 export default router

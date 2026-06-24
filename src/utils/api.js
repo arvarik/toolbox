@@ -230,6 +230,12 @@ export const chatApi = {
    * @returns {Promise<{ reverseCards: Array<{ front, back, originalIndex }> }>}
    */
   generateReverseCards: (data) => request('/chat/generate-reverse-cards', { method: 'POST', body: data }),
+
+  // Session Management
+  getSessions: () => request('/chat/sessions'),
+  saveSession: (session) => request('/chat/sessions', { method: 'POST', body: { session } }),
+  deleteSession: (id) => request(`/chat/sessions/${id}`, { method: 'DELETE' }),
+  migrateBulk: (sessions) => request('/chat/sessions/bulk', { method: 'POST', body: { sessions } }),
 }
 
 /* ---- Guide Content ---- */
