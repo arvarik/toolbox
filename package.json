@@ -1,7 +1,7 @@
 {
   "name": "toolbox",
   "private": true,
-  "version": "1.2.5",
+  "version": "1.2.8",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\"",
