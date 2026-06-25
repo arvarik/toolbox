@@ -313,7 +313,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       const sendBtn = screen.getByRole('button', { name: 'Send message' })
       fireEvent.click(sendBtn)
 
-      expect(screen.getByTestId('bounced-dots')).toBeInTheDocument()
+      expect(screen.getByTestId('chat-loading')).toBeInTheDocument()
 
       resolvePromise({ response: 'Finished loading' })
       await waitFor(() => {
@@ -616,14 +616,14 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       )
 
       // Click compute pillar card
-      const computeCard = screen.getAllByText('Compute').find(el => el.closest('.card-interactive')).closest('.card-interactive')
+      const computeCard = screen.getAllByText('Compute').find(el => el.closest('.blueprint-pillar-card')).closest('.blueprint-pillar-card')
       fireEvent.click(computeCard)
 
       // Select traffic gateways topic
       await waitFor(() => {
         expect(screen.getAllByText('Traffic Gateways & Proxies').length).toBeGreaterThan(0)
       })
-      const trafficGatewaysCard = screen.getAllByText('Traffic Gateways & Proxies').find(el => el.closest('.card-interactive')).closest('.card-interactive')
+      const trafficGatewaysCard = screen.getAllByText('Traffic Gateways & Proxies').find(el => el.closest('.blueprint-pillar-card')).closest('.blueprint-pillar-card')
       fireEvent.click(trafficGatewaysCard)
 
       // Toggle accordion sections

@@ -143,7 +143,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       ).toBeInTheDocument()
 
       // Find the card for Compute and click it
-      const computeCard = screen.getAllByText('Compute').find(el => el.closest('.card-interactive'))
+      const computeCard = screen.getAllByText('Compute').find(el => el.closest('.blueprint-pillar-card'))
       expect(computeCard).toBeInTheDocument()
 
       fireEvent.click(computeCard)
