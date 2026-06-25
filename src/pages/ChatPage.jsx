@@ -2,8 +2,8 @@ import { useState, useEffect, useCallback } from 'react'
 import { X } from 'lucide-react'
 import LearningChat from '../components/chat/LearningChat'
 import LearningTodo from '../components/chat/LearningTodo'
-import CommitModal from '../components/chat/CommitModal'
 import useIsMobile from '../hooks/useIsMobile'
+import useCommitStore from '../stores/useCommitStore'
 
 /**
  * Bottom-sheet drawer for mobile — slides up from the bottom edge.
@@ -94,10 +94,8 @@ export default function ChatPage() {
   // Mobile drawer state (LearningTodo)
   const [todoDrawerOpen, setTodoDrawerOpen] = useState(false)
 
-  // Commit modal state
-  const [commitOpen, setCommitOpen] = useState(false)
-  const [learningMessages, setLearningMessages] = useState([])
-  const [commitTopicContext, setCommitTopicContext] = useState(null) // { pillarId, topicId, topicName }
+  // Commit modal global state action
+  const startAnalysis = useCommitStore((s) => s.startAnalysis)
 
   // Active topic for LearningChat to fetch starters
   const [activeStudyTopic, setActiveStudyTopic] = useState(null)
@@ -109,10 +107,8 @@ export default function ChatPage() {
   }, [])
 
   const handleCommitClick = useCallback((messages, topicContext) => {
-    setLearningMessages(messages)
-    setCommitTopicContext(topicContext || null)
-    setCommitOpen(true)
-  }, [])
+    startAnalysis(messages, topicContext || null)
+  }, [startAnalysis])
 
   const handleStudyTopic = useCallback((pillar, topic) => {
     // Close the drawer first on mobile so user sees the chat
@@ -144,15 +140,7 @@ export default function ChatPage() {
           <LearningTodo onStudyTopic={handleStudyTopic} />
         </MobileDrawer>
       )}
-
-      {/* Commit Modal */}
-      <CommitModal
-        open={commitOpen}
-        onClose={() => setCommitOpen(false)}
-        messages={learningMessages}
-        topicContext={commitTopicContext}
-        onCommitSuccess={() => {}}
-      />
     </div>
   )
 }
+

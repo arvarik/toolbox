@@ -10,6 +10,8 @@ import FeynmanPage from './pages/FeynmanPage'
 import InterleavedPage from './pages/InterleavedPage'
 import { processSyncQueue } from './utils/db'
 import AhaMoment from './components/shared/AhaMoment'
+import CommitModal from './components/chat/CommitModal'
+import TaskWorkingBar from './components/shared/TaskWorkingBar'
 
 export default function App() {
   useEffect(() => {
@@ -45,6 +47,8 @@ export default function App() {
         </Route>
       </Routes>
       <AhaMoment />
+      <CommitModal />
+      <TaskWorkingBar />
     </>
   )
 }

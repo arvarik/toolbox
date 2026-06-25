@@ -19,11 +19,17 @@ export default function LearningTodo({ onStudyTopic }) {
   const [expandedPillars, setExpandedPillars] = useState({})
   const navigate = useNavigate()
 
-  useEffect(() => {
+  const fetchProgress = () => {
     guideContentApi.progress()
       .then((data) => setProgress(data || {}))
       .catch(() => setProgress({}))
       .finally(() => setIsLoading(false))
+  }
+
+  useEffect(() => {
+    fetchProgress()
+    window.addEventListener('guide-progress-updated', fetchProgress)
+    return () => window.removeEventListener('guide-progress-updated', fetchProgress)
   }, [])
 
   const togglePillar = (pillarId) => {

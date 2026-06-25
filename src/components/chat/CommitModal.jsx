@@ -1,50 +1,46 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect } from 'react'
 import { GitCommit, Check, Loader2, X, Sparkles, Eye, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import { chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
+import useCommitStore from '../../stores/useCommitStore'
 import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 
 /**
  * CommitModal — Intelligent session-to-guide commit.
- *
- * Flow:
- * 1. Opens → immediately starts analyzing the conversation with Gemini
- * 2. Gemini identifies which guide sections were discussed
- * 3. For each section, reconciles session content with existing guide content
- * 4. Shows a preview with toggles per section
- * 5. User confirms → batch saves all enabled sections
- *
- * @param {boolean} open
- * @param {Function} onClose
- * @param {Array} messages - Full message history from LearningChat
- * @param {Object} topicContext - { pillarId, topicId, topicName }
- * @param {Function} onCommitSuccess - Called after a successful commit
+ * 
+ * Modified to use global useCommitStore so background processes can run 
+ * when minimized into the TaskWorkingBar.
  */
-export default function CommitModal({ open, onClose, messages = [], topicContext, onCommitSuccess }) {
+export default function CommitModal() {
   const selectedModel = useAppStore((s) => s.model)
   const addToast = useAppStore((s) => s.addToast)
-
-  // Phase: 'analyzing' | 'preview' | 'saving' | 'done' | 'error'
-  const [phase, setPhase] = useState('analyzing')
-  const [errorMsg, setErrorMsg] = useState('')
-  const [updates, setUpdates] = useState([]) // Array of section updates from the API
-  const [enabledSections, setEnabledSections] = useState(new Set()) // Which sections to commit
-  const [expandedSections, setExpandedSections] = useState(new Set()) // Which previews are expanded
-  const [savedCount, setSavedCount] = useState(0)
-
-  const analysisCallIdRef = useRef(0)
+  
+  const { 
+    isOpen, 
+    phase, 
+    errorMsg, 
+    updates, 
+    enabledSections, 
+    expandedSections, 
+    savedCount,
+    messages,
+    topicContext,
+    closeCompletely,
+    setMinimized,
+    setPhase,
+    setError,
+    setUpdatesResult,
+    mergeUpdatesResult,
+    setEnabledSections,
+    setExpandedSections,
+    setSavedCount
+  } = useCommitStore()
 
   const analyze = async (targetSectionIds = []) => {
-    const callId = ++analysisCallIdRef.current
+    const callId = Date.now()
+    useCommitStore.setState({ currentCallId: callId })
     setPhase('analyzing')
-    if (targetSectionIds.length === 0) {
-      setErrorMsg('')
-      setUpdates([])
-      setEnabledSections(new Set())
-      setExpandedSections(new Set())
-      setSavedCount(0)
-    }
 
     try {
       const payload = {
@@ -60,74 +56,46 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
 
       const result = await chatApi.commitAnalyze(payload)
 
-      if (callId !== analysisCallIdRef.current) return
+      if (callId !== useCommitStore.getState().currentCallId) return
 
       if (!result.updates || result.updates.length === 0) {
         if (targetSectionIds.length === 0) {
-          setUpdates([])
-          setPhase('preview')
+          setUpdatesResult([], new Set(), new Set())
         } else {
-          setPhase('error')
-          setErrorMsg('Failed to generate content for the selected sections.')
+          setError('Failed to generate content for the selected sections.')
         }
         return
       }
 
       if (targetSectionIds.length > 0) {
-        // Merge new updates into existing updates
-        setUpdates(prev => {
-          const next = [...prev]
-          for (const u of result.updates) {
-            const idx = next.findIndex(x => x.sectionId === u.sectionId)
-            if (idx >= 0) next[idx] = u
-            else next.push(u)
-          }
-          return next
-        })
-        // Keep the targeted ones enabled, plus any previously enabled ones
-        setEnabledSections(prev => {
-          const next = new Set(prev)
-          targetSectionIds.forEach(id => next.add(id))
-          return next
-        })
-        // Expand the newly targeted ones
-        setExpandedSections(prev => {
-          const next = new Set(prev)
-          targetSectionIds.forEach(id => next.add(id))
-          return next
-        })
+        mergeUpdatesResult(result.updates, targetSectionIds)
       } else {
-        setUpdates(result.updates)
-        setEnabledSections(new Set(result.updates.map((u) => u.sectionId)))
-        if (result.updates.length > 0) {
-          setExpandedSections(new Set([result.updates[0].sectionId]))
-        }
+        const initialEnabled = new Set(result.updates.map((u) => u.sectionId))
+        const initialExpanded = result.updates.length > 0 ? new Set([result.updates[0].sectionId]) : new Set()
+        setUpdatesResult(result.updates, initialEnabled, initialExpanded)
       }
-      setPhase('preview')
     } catch (err) {
-      if (callId !== analysisCallIdRef.current) return
-      setPhase('error')
-      setErrorMsg(err.message || 'Failed to analyze session.')
+      if (callId !== useCommitStore.getState().currentCallId) return
+      setError(err.message || 'Failed to analyze session.')
     }
   }
 
-  // Auto-analyze when the modal opens
+  // Auto-analyze when opened and in 'idle' phase
+  // Note: we track if we just opened a new request
   useEffect(() => {
-    if (!open || !topicContext?.pillarId) return
+    if (isOpen && phase === 'idle' && topicContext?.pillarId) {
+      const timer = setTimeout(() => {
+        analyze()
+      }, 0)
 
-    const timer = setTimeout(() => {
-      analyze()
-    }, 0)
-
-    const currentCallId = analysisCallIdRef.current
-    return () => {
-      clearTimeout(timer)
-      analysisCallIdRef.current = currentCallId + 1
+      return () => {
+        clearTimeout(timer)
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, topicContext?.pillarId, topicContext?.topicId])
+  }, [isOpen, phase, topicContext?.pillarId, topicContext?.topicId])
 
-  if (!open) return null
+  if (!isOpen) return null
 
   const toggleSection = (sectionId) => {
     setEnabledSections((prev) => {
@@ -158,14 +126,18 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
         topicId: topicContext.topicId,
         updates: toSave.map((u) => ({ sectionId: u.sectionId, content: u.newContent })),
       })
-      setSavedCount(result.savedCount || toSave.length)
+      const count = result.savedCount || toSave.length
+      setSavedCount(count)
       setPhase('done')
       addToast({
         type: 'success',
-        message: `Committed ${result.savedCount || toSave.length} section${toSave.length !== 1 ? 's' : ''} to "${topicContext.topicName}" guide`,
+        message: `Committed ${count} section${toSave.length !== 1 ? 's' : ''} to "${topicContext.topicName}" guide`,
       })
-      onCommitSuccess?.(topicContext)
-      setTimeout(onClose, 1500)
+      
+      // Dispatch custom event to update sidebar
+      window.dispatchEvent(new Event('guide-progress-updated'))
+      
+      setTimeout(closeCompletely, 1500)
     } catch (err) {
       addToast({ type: 'error', message: err.message || 'Failed to save.' })
       setPhase('preview')
@@ -173,10 +145,18 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
   }
 
   const enabledCount = enabledSections.size
-  const allSections = BLUEPRINT_SECTIONS[topicContext?.pillarId] || []
+  const allSections = topicContext ? (BLUEPRINT_SECTIONS[topicContext.pillarId] || []) : []
   const updateMap = new Map(updates.map(u => [u.sectionId, u]))
   const identifiedIds = new Set(updates.map(u => u.sectionId))
   const requiresReanalysis = Array.from(enabledSections).some(id => !identifiedIds.has(id))
+
+  const handleCloseOrMinimize = () => {
+    if (phase === 'analyzing' || phase === 'saving' || phase === 'preview') {
+      setMinimized(true)
+    } else {
+      closeCompletely()
+    }
+  }
 
   return (
     <div
@@ -188,7 +168,7 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         padding: 'var(--space-4)',
       }}
-      onClick={(e) => { if (e.target === e.currentTarget && phase !== 'saving') onClose() }}
+      onClick={(e) => { if (e.target === e.currentTarget && phase !== 'saving') handleCloseOrMinimize() }}
     >
       <div
         style={{
@@ -227,9 +207,11 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
               </div>
             </div>
           </div>
-          <button className="btn btn-ghost btn-icon" onClick={onClose} disabled={phase === 'saving'}>
-            <X size={16} />
-          </button>
+          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+            <button className="btn btn-ghost btn-icon" onClick={handleCloseOrMinimize}>
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
         {/* ── Analyzing Phase ── */}
@@ -239,7 +221,7 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
             padding: 'var(--space-10)',
             minHeight: 280,
           }}>
-            <div style={{ textAlign: 'center' }}>
+            <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <div style={{
                 width: 56, height: 56, borderRadius: '50%',
                 background: 'var(--color-accent-subtle)',
@@ -254,7 +236,7 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', maxWidth: 320, margin: '0 auto', lineHeight: 1.6 }}>
                 AI is reading through your conversation, identifying which guide sections were covered, and reconciling with existing content…
               </div>
-              <div style={{ marginTop: 'var(--space-4)' }}>
+              <div style={{ marginTop: 'var(--space-4)', display: 'flex', justifyContent: 'center' }}>
                 <Loader2 size={20} style={{ color: 'var(--color-accent)', animation: 'spin 1s linear infinite' }} />
               </div>
             </div>
@@ -283,7 +265,7 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
               <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
                 {errorMsg}
               </div>
-              <button className="btn btn-secondary" style={{ marginTop: 'var(--space-4)' }} onClick={onClose}>
+              <button className="btn btn-secondary" style={{ marginTop: 'var(--space-4)' }} onClick={closeCompletely}>
                 Close
               </button>
             </div>
@@ -467,7 +449,7 @@ export default function CommitModal({ open, onClose, messages = [], topicContext
               display: 'flex', gap: 'var(--space-3)', justifyContent: 'flex-end',
               alignItems: 'center', flexShrink: 0,
             }}>
-              <button className="btn btn-secondary" onClick={onClose} disabled={phase === 'saving'}>
+              <button className="btn btn-secondary" onClick={closeCompletely} disabled={phase === 'saving'}>
                 Cancel
               </button>
               {requiresReanalysis ? (
