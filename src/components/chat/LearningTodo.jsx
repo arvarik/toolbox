@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { CheckCircle2, Circle, ChevronRight, ChevronDown, BookOpen, Sparkles } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
+import { BLUEPRINT_SECTIONS, PILLARS } from '../../utils/constants'
+
 import { guideContentApi } from '../../utils/api'
+import Skeleton from '../shared/Skeleton'
 
 /**
  * LearningTodo — smart to-do list showing unfilled guide sections.
@@ -123,11 +125,7 @@ export default function LearningTodo({ onStudyTopic }) {
         {isLoading ? (
           <div style={{ padding: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
             {[1, 2, 3].map((i) => (
-              <div key={i} style={{
-                height: 36, borderRadius: 'var(--radius-md)',
-                background: 'var(--color-bg-hover)',
-                animation: 'pulse 1.5s ease-in-out infinite',
-              }} />
+              <Skeleton key={i} style={{ height: 36 }} />
             ))}
           </div>
         ) : (

@@ -189,14 +189,13 @@ export default function SettingsPage() {
           </p>
 
           <textarea
-            className="input"
+            className="input settings-textarea"
             rows={5}
             value={profileText}
             onChange={(e) => setProfileText(e.target.value)}
             placeholder="No profile data learned yet. You can manually type facts about yourself here..."
-            style={{ width: '100%', resize: 'vertical', marginTop: 'var(--space-3)', fontFamily: 'var(--font-sans)', fontSize: 'var(--text-sm)', lineHeight: 1.5 }}
           />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-2)' }}>
+          <div className="settings-action-bar">
             <button
               className="btn btn-primary"
               onClick={handleSaveProfile}
@@ -285,22 +284,22 @@ export default function SettingsPage() {
           </p>
 
           {systemStats && (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 'var(--space-3)', marginTop: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
-              <div style={{ background: 'var(--color-bg-hover)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Guide Sections</div>
-                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>{systemStats.guideCount}</div>
+            <div className="settings-stats-grid">
+              <div className="stat-card">
+                <div className="stat-card-label">Guide Sections</div>
+                <div className="stat-card-value">{systemStats.guideCount}</div>
               </div>
-              <div style={{ background: 'var(--color-bg-hover)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Flashcards</div>
-                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>{systemStats.flashcardsCount}</div>
+              <div className="stat-card">
+                <div className="stat-card-label">Flashcards</div>
+                <div className="stat-card-value">{systemStats.flashcardsCount}</div>
               </div>
-              <div style={{ background: 'var(--color-bg-hover)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Whiteboards</div>
-                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>{systemStats.boardsCount}</div>
+              <div className="stat-card">
+                <div className="stat-card-label">Whiteboards</div>
+                <div className="stat-card-value">{systemStats.boardsCount}</div>
               </div>
-              <div style={{ background: 'var(--color-bg-hover)', padding: 'var(--space-3)', borderRadius: 'var(--radius-md)' }}>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Cached AI Starters</div>
-                <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600 }}>{systemStats.cachedStartersCount}</div>
+              <div className="stat-card">
+                <div className="stat-card-label">Cached AI Starters</div>
+                <div className="stat-card-value">{systemStats.cachedStartersCount}</div>
               </div>
             </div>
           )}
@@ -350,7 +349,7 @@ export default function SettingsPage() {
             Boost your workflow with these shortcuts.
           </p>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', marginTop: 'var(--space-3)' }}>
+          <div className="shortcut-list">
             {[
               ['1', 'Navigate to Guide'],
               ['2', 'Navigate to Builder'],
@@ -362,26 +361,9 @@ export default function SettingsPage() {
               ['S', 'Save Board (in Builder)'],
               ['/', 'Search Topics'],
             ].map(([key, desc]) => (
-              <div
-                key={key}
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  padding: 'var(--space-2) 0',
-                  borderBottom: '1px solid var(--color-border)',
-                }}
-              >
-                <span style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)' }}>{desc}</span>
-                <kbd style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '11px',
-                  background: 'var(--color-bg-hover)',
-                  padding: '2px 8px',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--color-border)',
-                  color: 'var(--color-text-tertiary)',
-                }}>
+              <div key={key} className="shortcut-item">
+                <span className="shortcut-desc">{desc}</span>
+                <kbd className="shortcut-key">
                   {isMac ? `⌘${key}` : `Ctrl+${key}`}
                 </kbd>
               </div>
@@ -398,22 +380,16 @@ export default function SettingsPage() {
             Toolbox is an open-source system design interview preparation tool. Self-hosted for complete data privacy.
           </p>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+          <div className="flex-column" style={{ gap: 'var(--space-2)' }}>
             {[
               ['Version', '0.2.0'],
               ['Storage', 'SQLite (local)'],
               ['AI Backend', 'Google Gemini'],
               ['Active Model', model],
             ].map(([label, value]) => (
-              <div key={label} style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                fontSize: 'var(--text-sm)',
-                color: 'var(--color-text-secondary)',
-                padding: 'var(--space-2) 0',
-              }}>
+              <div key={label} className="about-list-item">
                 <span>{label}</span>
-                <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--color-text-tertiary)' }}>{value}</span>
+                <span className="about-list-value">{value}</span>
               </div>
             ))}
           </div>

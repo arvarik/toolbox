@@ -4,6 +4,7 @@ import MarkdownRenderer from './MarkdownRenderer'
 import useAppStore from '../../stores/appStore'
 import useIsMobile from '../../hooks/useIsMobile'
 import { chatApi } from '../../utils/api'
+import Skeleton from './Skeleton'
 
 // Safe storage wrapper to prevent SSR or restricted environment crashes
 const safeStorage = {
@@ -469,14 +470,11 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
         {isLoading && (
           <div className="chat-message ai loading" data-testid="chat-loading">
             <div className="chat-message-avatar ai">✦</div>
-            <div className="chat-message-content">
-              <div className="bounced-dots" data-testid="bounced-dots" style={{ display: 'flex', gap: '4px', marginBottom: '8px' }}>
-                <span className="dot"></span>
-                <span className="dot"></span>
-                <span className="dot"></span>
-              </div>
-              <div className="chat-message-text" style={{ opacity: 0.5 }}>
-                Thinking...
+            <div className="chat-message-content" style={{ width: '100%' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                <Skeleton style={{ width: '90%', height: 16 }} />
+                <Skeleton style={{ width: '95%', height: 16 }} />
+                <Skeleton style={{ width: '80%', height: 16 }} />
               </div>
             </div>
           </div>

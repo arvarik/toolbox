@@ -8,6 +8,8 @@ import {
 } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
+import Skeleton from '../shared/Skeleton'
+import PullToRefresh from '../shared/PullToRefresh'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
 import { guideContentApi, chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
@@ -96,13 +98,21 @@ export default function BlueprintShell() {
   }, [fetchContent])
 
   // Fetch progress map for the library landing page
+  const fetchProgress = useCallback(async () => {
+    try {
+      const data = await guideContentApi.progress()
+      setProgress(data || {})
+    } catch {
+      setProgress({})
+    }
+  }, [])
+
   useEffect(() => {
     if (!pillarId) {
-      guideContentApi.progress()
-        .then((data) => setProgress(data || {}))
-        .catch(() => setProgress({}))
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fetchProgress()
     }
-  }, [pillarId])
+  }, [pillarId, fetchProgress])
 
   const toggleSection = (sectionId) => {
     setExpandedSections((prev) => ({
@@ -229,38 +239,25 @@ export default function BlueprintShell() {
     const overallPercent = totalSections > 0 ? Math.round((totalFilled / totalSections) * 100) : 0
 
     return (
-      <div className="page-wrapper" style={{ padding: isMobile ? 'var(--space-4) var(--space-3)' : 'var(--space-8)', maxWidth: 960, margin: '0 auto' }}>
+      <PullToRefresh onRefresh={fetchProgress}>
+        <div className="page-wrapper blueprint-library-wrapper">
         {/* Hero header */}
-        <div style={{ marginBottom: 'var(--space-8)', textAlign: 'center' }}>
-          <div style={{
-            width: 56, height: 56, borderRadius: 'var(--radius-xl)',
-            background: 'var(--color-accent-subtle)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            margin: '0 auto var(--space-4)',
-          }}>
+        <div className="blueprint-library-hero">
+          <div className="blueprint-hero-icon">
             <BookOpen size={28} style={{ color: 'var(--color-accent)' }} />
           </div>
-          <h1 className="page-title" style={{ fontSize: 'var(--text-3xl)', marginBottom: 'var(--space-2)' }}>
+          <h1 className="page-title blueprint-hero-title">
             System Design Guide
           </h1>
-          <p className="page-description" style={{ maxWidth: 520, margin: '0 auto', fontSize: 'var(--text-sm)' }}>
+          <p className="page-description blueprint-hero-desc">
             Your authoritative library of system design knowledge across seven pillars.
             Study through chat, then commit insights here for reference.
           </p>
         </div>
 
         {/* Overall progress card */}
-        <div style={{
-          background: 'var(--color-surface)',
-          border: '1px solid var(--color-border)',
-          borderRadius: 'var(--radius-xl)',
-          padding: 'var(--space-6)',
-          marginBottom: 'var(--space-8)',
-        }}>
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            marginBottom: 'var(--space-4)',
-          }}>
+        <div className="blueprint-progress-card">
+          <div className="blueprint-progress-header">
             <div>
               <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>
                 Library Progress
@@ -278,18 +275,8 @@ export default function BlueprintShell() {
           </div>
 
           {/* Progress bar */}
-          <div style={{
-            height: 6, background: 'var(--color-bg-tertiary)',
-            borderRadius: 'var(--radius-full)', overflow: 'hidden',
-            marginBottom: 'var(--space-4)',
-          }}>
-            <div style={{
-              height: '100%',
-              width: `${overallPercent}%`,
-              background: 'linear-gradient(90deg, var(--color-accent), var(--color-teal))',
-              borderRadius: 'var(--radius-full)',
-              transition: 'width 0.6s ease',
-            }} />
+          <div className="blueprint-progress-bar-bg">
+            <div className="blueprint-progress-bar-fill" style={{ width: `${overallPercent}%` }} />
           </div>
 
           {/* CTA to chat */}
@@ -304,103 +291,57 @@ export default function BlueprintShell() {
         </div>
 
         {/* Pillar cards grid */}
-        <div style={{ marginBottom: 'var(--space-4)' }}>
-          <div style={{
-            fontSize: 'var(--text-xs)', fontWeight: 600,
-            textTransform: 'uppercase', letterSpacing: 'var(--tracking-wide)',
-            color: 'var(--color-text-tertiary)',
-            marginBottom: 'var(--space-4)',
-          }}>
-            Pillars
-          </div>
+        <div className="blueprint-pillar-list-header">
+          Pillars
         </div>
 
         <div className="guide-grid">
           {pillarStats.map((p) => (
             <div
               key={p.id}
-              className="card card-interactive"
+              className="blueprint-pillar-card"
               onClick={() => navigate(`/guide/${p.id}`)}
-              style={{ 
-                display: 'flex', 
-                flexDirection: 'column', 
-                padding: 'var(--space-5)', 
-                position: 'relative', 
-                overflow: 'hidden',
-                background: 'var(--color-surface)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-xl)',
-                transition: 'all 0.2s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = p.color;
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = `0 4px 12px ${p.color}15`;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = 'var(--color-border)';
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
+              style={{ '--dynamic-color': p.color }}
             >
-              <div style={{
-                display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
-                marginBottom: 'var(--space-4)',
-              }}>
-                <div
-                  style={{
-                    width: 40, height: 40,
-                    borderRadius: 'var(--radius-md)',
-                    background: `${p.color}15`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >
-                  <Cpu size={20} style={{ color: p.color }} />
+              <div className="blueprint-pillar-card-header">
+                <div className="blueprint-pillar-icon-wrap">
+                  <Cpu size={20} className="blueprint-pillar-icon" />
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 'var(--text-lg)', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                  <div className="blueprint-card-title">
                     {p.shortName}
                   </div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
+                  <div className="blueprint-card-subtitle">
                     {p.topics.length} topics
                   </div>
                 </div>
               </div>
 
-              {/* Progress Section */}
-              <div style={{ marginTop: 'auto' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                  <span style={{ fontSize: '11px', color: 'var(--color-text-secondary)', fontWeight: 500 }}>
+              <div className="blueprint-card-progress-section">
+                <div className="blueprint-card-progress-header">
+                  <span className="blueprint-card-progress-label">
                     {p.percent === 100 ? 'Complete' : 'Progress'}
                   </span>
-                  <span style={{ fontSize: '11px', color: p.percent > 0 ? p.color : 'var(--color-text-tertiary)', fontWeight: 600 }}>
+                  <span className="blueprint-card-progress-value" style={{ '--dynamic-color': p.percent > 0 ? p.color : 'var(--color-text-tertiary)' }}>
                     {p.filled}/{p.total}
                   </span>
                 </div>
-                <div style={{
-                  height: 4, background: 'var(--color-bg-tertiary)',
-                  borderRadius: 'var(--radius-full)', overflow: 'hidden',
-                }}>
-                  <div style={{
-                    height: '100%',
-                    width: `${Math.max(p.percent, 0)}%`,
-                    background: p.color,
-                    borderRadius: 'var(--radius-full)',
-                    transition: 'width 0.4s ease',
-                  }} />
+                <div className="blueprint-card-progress-bg">
+                  <div className="blueprint-card-progress-fill" style={{ width: `${Math.max(p.percent, 0)}%`, '--dynamic-color': p.color }} />
                 </div>
               </div>
             </div>
           ))}
         </div>
-      </div>
+        </div>
+      </PullToRefresh>
     )
   }
 
   // ── Pillar selected but no topic ──────────────────────────────────────────
   if (!topic) {
     return (
-      <div className="page-wrapper" style={{ padding: isMobile ? 'var(--space-4) var(--space-3)' : 'var(--space-8)' }}>
+      <div className="page-wrapper blueprint-topic-wrapper">
         <div style={{ marginBottom: 'var(--space-6)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
             <span
@@ -420,45 +361,19 @@ export default function BlueprintShell() {
           {pillar.topics.map((t) => (
             <div
               key={t.id}
-              className="card card-interactive"
+              className="blueprint-pillar-card"
               onClick={() => navigate(`/guide/${pillar.id}/${t.id}`)}
-              style={{ 
-                cursor: 'pointer',
-                display: 'flex', 
-                flexDirection: 'column', 
-                padding: 'var(--space-5)', 
-                background: 'var(--color-surface)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-xl)',
-                transition: 'all 0.2s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.borderColor = pillar.color;
-                e.currentTarget.style.transform = 'translateY(-2px)';
-                e.currentTarget.style.boxShadow = `0 4px 12px ${pillar.color}15`;
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.borderColor = 'var(--color-border)';
-                e.currentTarget.style.transform = 'translateY(0)';
-                e.currentTarget.style.boxShadow = 'none';
-              }}
+              style={{ '--dynamic-color': pillar.color }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
-                <div
-                  style={{
-                    width: 40, height: 40,
-                    borderRadius: 'var(--radius-md)',
-                    background: `${pillar.color}15`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >
-                  <Cpu size={20} style={{ color: pillar.color }} />
+              <div className="blueprint-pillar-card-header">
+                <div className="blueprint-pillar-icon-wrap">
+                  <Cpu size={20} className="blueprint-pillar-icon" />
                 </div>
                 <div>
-                  <div style={{ fontSize: 'var(--text-md)', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                  <div className="blueprint-card-title" style={{ fontSize: 'var(--text-md)' }}>
                     {t.name}
                   </div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
+                  <div className="blueprint-card-subtitle">
                     {sections.length} blueprint sections
                   </div>
                 </div>
@@ -472,19 +387,19 @@ export default function BlueprintShell() {
 
   // ── Full blueprint view for selected topic ────────────────────────────────
   return (
-    <div className="page-wrapper" style={{ padding: isMobile ? 'var(--space-4) var(--space-3)' : 'var(--space-8)' }}>
+    <div className="page-wrapper blueprint-topic-wrapper">
       {/* Topic header */}
-      <div style={{ marginBottom: 'var(--space-8)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
+      <div className="blueprint-topic-header">
+        <div className="blueprint-badge-wrap">
           <span
-            className="badge"
-            style={{ background: `${pillar.color}20`, color: pillar.color }}
+            className="badge blueprint-badge"
+            style={{ '--dynamic-color': pillar.color }}
           >
             Pillar {pillar.number}: {pillar.shortName}
           </span>
         </div>
         <h1 className="page-title">{topic.name}</h1>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+        <div className="blueprint-topic-actions">
           <p className="page-description" style={{ margin: 0 }}>
             Study blueprint — deep dive into every dimension of this component.
           </p>
@@ -534,22 +449,20 @@ export default function BlueprintShell() {
             >
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: isMobile ? 'var(--space-2)' : 'var(--space-4)' }}>
                 <div
+                  className="blueprint-section-icon-wrap"
                   style={{
                     width: isMobile ? 28 : 40, height: isMobile ? 28 : 40,
                     borderRadius: 'var(--radius-md)',
-                    background: hasContent ? `${pillar.color}15` : 'var(--color-accent-subtle)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    flexShrink: 0,
-                    transition: 'background var(--duration-fast)',
+                    background: hasContent ? `color-mix(in srgb, ${pillar.color} 15%, transparent)` : 'var(--color-accent-subtle)',
                   }}
                 >
                   <Icon size={isMobile ? 14 : 18} style={{ color: hasContent ? pillar.color : 'var(--color-accent)' }} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {/* Section header */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+                  <div className="blueprint-section-header-row">
                     <h3
-                      style={{ fontSize: 'var(--text-md)', fontWeight: 600, cursor: 'pointer', flex: 1, margin: 0 }}
+                      className="blueprint-section-title"
                       onClick={() => toggleSection(section.id)}
                     >
                       {section.name}
@@ -557,20 +470,14 @@ export default function BlueprintShell() {
 
                     {/* Status badge */}
                     {!isLoadingContent && (
-                      <span style={{
-                        fontSize: '10px', fontWeight: 600, padding: '2px 8px',
-                        borderRadius: 'var(--radius-full)',
-                        background: hasContent ? 'rgba(34,197,94,0.12)' : 'var(--color-bg-tertiary)',
-                        color: hasContent ? '#22c55e' : 'var(--color-text-tertiary)',
-                        whiteSpace: 'nowrap',
-                      }}>
+                      <span className={`blueprint-status-badge ${hasContent ? 'filled' : 'empty'}`}>
                         {hasContent ? '✓ Filled' : 'Empty'}
                       </span>
                     )}
 
                     {/* Edit / Clear actions — only when content exists and not editing */}
                     {hasContent && !isEditing && (
-                      <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
+                      <div className="blueprint-edit-actions">
                         <button
                           className="btn btn-ghost btn-icon btn-sm"
                           onClick={() => startEdit(section.id)}
@@ -593,10 +500,9 @@ export default function BlueprintShell() {
                     {/* Edit action — when empty and not editing */}
                     {!hasContent && !isEditing && (
                       <button
-                        className="btn btn-ghost btn-sm"
+                        className="btn btn-ghost btn-sm blueprint-add-notes-btn"
                         onClick={() => startEdit(section.id)}
                         title="Add notes manually"
-                        style={{ fontSize: '11px', color: 'var(--color-text-tertiary)' }}
                       >
                         <Edit3 size={11} />
                         Add notes
@@ -612,21 +518,9 @@ export default function BlueprintShell() {
                         onChange={(e) => setEditDraft(e.target.value)}
                         rows={12}
                         placeholder="Write markdown notes for this section..."
-                        style={{
-                          width: '100%',
-                          padding: 'var(--space-3)',
-                          background: 'var(--color-bg-secondary)',
-                          border: '1px solid var(--color-accent)',
-                          borderRadius: 'var(--radius-md)',
-                          color: 'var(--color-text-primary)',
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: 'var(--text-xs)',
-                          lineHeight: 1.6,
-                          resize: 'vertical',
-                          outline: 'none',
-                        }}
+                        className="blueprint-edit-textarea"
                       />
-                      <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)', justifyContent: 'flex-end' }}>
+                      <div className="blueprint-edit-actions-bottom">
                         <button
                           className="btn btn-ghost btn-sm"
                           onClick={cancelEdit}
@@ -651,51 +545,23 @@ export default function BlueprintShell() {
                   {!isEditing && isExpanded && (
                     <div>
                       {isLoadingContent ? (
-                        <div style={{
-                          height: 60,
-                          background: 'var(--color-bg-hover)',
-                          borderRadius: 'var(--radius-md)',
-                          animation: 'pulse 1.5s ease-in-out infinite',
-                        }} />
+                        <div className="blueprint-content blueprint-content-box blueprint-content-text">
+                          <Skeleton style={{ width: '60%', height: 24, marginBottom: 'var(--space-4)' }} />
+                          <Skeleton style={{ width: '100%', height: 16, marginBottom: 'var(--space-2)' }} />
+                          <Skeleton style={{ width: '95%', height: 16, marginBottom: 'var(--space-2)' }} />
+                          <Skeleton style={{ width: '80%', height: 16 }} />
+                        </div>
                       ) : hasContent ? (
-                        <div
-                          className="blueprint-content"
-                          style={{
-                            fontSize: 'var(--text-sm)',
-                            color: 'var(--color-text-secondary)',
-                            lineHeight: 'var(--leading-relaxed)',
-                            padding: 'var(--space-4)',
-                            background: 'var(--color-bg-tertiary)',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px solid var(--color-border)',
-                          }}
-                        >
+                        <div className="blueprint-content blueprint-content-box blueprint-content-text">
                           <MarkdownRenderer content={committed.content} />
                           {committed.committedAt && (
-                            <div style={{
-                              marginTop: 'var(--space-3)',
-                              paddingTop: 'var(--space-2)',
-                              borderTop: '1px solid var(--color-border)',
-                              fontSize: '10px',
-                              color: 'var(--color-text-tertiary)',
-                            }}>
+                            <div className="blueprint-content-timestamp">
                               Last updated {new Date(committed.committedAt).toLocaleDateString()}
                             </div>
                           )}
                         </div>
                       ) : (
-                        <div
-                          style={{
-                            fontSize: 'var(--text-sm)',
-                            color: 'var(--color-text-tertiary)',
-                            lineHeight: 'var(--leading-relaxed)',
-                            padding: 'var(--space-4)',
-                            background: 'var(--color-bg-tertiary)',
-                            borderRadius: 'var(--radius-md)',
-                            border: '1px dashed var(--color-border)',
-                            minHeight: 60,
-                          }}
-                        >
+                        <div className="blueprint-content-box empty">
                           No notes yet. Start a learning session, then commit insights here, or click "Add notes" to write manually.
                         </div>
                       )}
@@ -712,22 +578,9 @@ export default function BlueprintShell() {
                     onChange={(e) => setEditDraft(e.target.value)}
                     rows={14}
                     placeholder="Write markdown notes for this section..."
-                    style={{
-                      width: '100%',
-                      boxSizing: 'border-box',
-                      padding: 'var(--space-3)',
-                      background: 'var(--color-bg-secondary)',
-                      border: '1px solid var(--color-accent)',
-                      borderRadius: 'var(--radius-md)',
-                      color: 'var(--color-text-primary)',
-                      fontFamily: 'var(--font-mono)',
-                      fontSize: '14px',
-                      lineHeight: 1.6,
-                      resize: 'vertical',
-                      outline: 'none',
-                    }}
+                    className="blueprint-edit-textarea blueprint-edit-textarea-mobile"
                   />
-                  <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-2)', justifyContent: 'flex-end' }}>
+                  <div className="blueprint-edit-actions-bottom">
                     <button
                       className="btn btn-ghost btn-sm"
                       onClick={cancelEdit}

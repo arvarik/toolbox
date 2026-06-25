@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
+import Skeleton from '../shared/Skeleton'
 import useAppStore from '../../stores/appStore'
 import { chatApi, guideContentApi } from '../../utils/api'
 import { BLUEPRINT_SECTIONS } from '../../utils/constants'
@@ -1110,9 +1111,11 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         {isLoading && (
           <div className="learning-message ai">
             <div className="learning-message-avatar ai">✦</div>
-            <div className="learning-message-body">
-              <div className="bounced-dots" style={{ display: 'flex', gap: 4, padding: '4px 0' }}>
-                <span className="dot" /><span className="dot" /><span className="dot" />
+            <div className="learning-message-body" style={{ width: '100%' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
+                <Skeleton style={{ width: '90%', height: 16 }} />
+                <Skeleton style={{ width: '95%', height: 16 }} />
+                <Skeleton style={{ width: '80%', height: 16 }} />
               </div>
             </div>
           </div>

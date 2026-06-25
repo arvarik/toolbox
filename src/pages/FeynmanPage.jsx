@@ -118,10 +118,10 @@ Format your response in Markdown with the exact following sections:
   }
 
   return (
-    <div className="page-layout" id="feynman-page" style={{ padding: 'var(--space-6)', maxWidth: 800, margin: '0 auto', width: '100%' }}>
+    <div className="page-layout feynman-container" id="feynman-page">
       <div className="page-header">
         <div>
-          <h1 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+          <h1 className="page-title feynman-title">
             <BrainCircuit className="icon-accent" size={24} />
             Feynman Simulator
           </h1>
@@ -131,7 +131,7 @@ Format your response in Markdown with the exact following sections:
         </div>
       </div>
 
-      <div className="card" style={{ padding: 'var(--space-6)', display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+      <div className="card feynman-card">
         <div>
           <label style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-2)' }}>
             What concept are you learning?
@@ -161,9 +161,8 @@ Format your response in Markdown with the exact following sections:
             </button>
           </div>
           <textarea
-            className="input"
+            className="input feynman-textarea"
             placeholder="Imagine you are explaining this to someone who has never heard of it before..."
-            style={{ minHeight: 150, resize: 'vertical' }}
             value={explanation}
             onChange={(e) => setExplanation(e.target.value)}
             disabled={isAnalyzing}
@@ -183,8 +182,8 @@ Format your response in Markdown with the exact following sections:
       </div>
 
       {(feedback || isAnalyzing || hasResult) && (
-        <div className="card" style={{ marginTop: 'var(--space-6)', padding: 'var(--space-6)' }}>
-          <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 600, marginBottom: 'var(--space-4)', display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+        <div className="card feynman-feedback-card">
+          <h2 className="feynman-feedback-title">
             <CheckCircle size={20} color="var(--color-success)" />
             Feedback Analysis
           </h2>

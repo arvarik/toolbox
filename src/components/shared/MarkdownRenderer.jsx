@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { Check, Copy } from 'lucide-react'
@@ -88,10 +90,20 @@ export default function MarkdownRenderer({ content, className = '' }) {
   // 5. Ensure headings preceded by content have proper spacing
   processedContent = processedContent.replace(/([^\n])\n(#{1,4} )/g, '$1\n\n$2')
 
+  // 6. Fix spaces inside bold markers (e.g. "** bold **" -> "**bold**")
+  processedContent = processedContent.replace(/\*\*([\s\S]*?)\*\*/g, (match, p1) => {
+    return '**' + p1.trim() + '**'
+  })
+
+  // 7. Fix LaTeX delimiters: \( ... \) to $ ... $ and \[ ... \] to $$ ... $$
+  processedContent = processedContent.replace(/\\\((.*?)\\\)/g, '$$$1$$') // inline
+  processedContent = processedContent.replace(/\\\[(.*?)\\\]/gs, '$$$$$1$$$$') // block
+
   return (
     <div className={`markdown-renderer ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
         components={{
           pre: (props) => {
             const rest = { ...props };

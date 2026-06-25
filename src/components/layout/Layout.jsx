@@ -11,6 +11,7 @@ import useAppStore from '../../stores/appStore'
 import useTimerStore from '../../stores/useTimerStore'
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts'
 import useIsMobile from '../../hooks/useIsMobile'
+import KeyboardShortcutsModal from '../shared/KeyboardShortcutsModal'
 import { configApi } from '../../utils/api'
 
 export default function Layout() {
@@ -18,6 +19,7 @@ export default function Layout() {
   const isMobile = useIsMobile()
   const [menuOpen, setMenuOpen] = useState(false)
   const [searchOpen, setSearchOpen] = useState(false)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const setApiKeyConfigured = useAppStore((s) => s.setApiKeyConfigured)
   const addToast = useAppStore((s) => s.addToast)
 
@@ -59,6 +61,9 @@ export default function Layout() {
       if (mod && e.key === '/') {
         e.preventDefault()
         setSearchOpen((prev) => !prev)
+      } else if (mod && (e.key === '?' || (e.key === '/' && e.shiftKey))) {
+        e.preventDefault()
+        setShortcutsOpen((prev) => !prev)
       }
     }
     window.addEventListener('keydown', handler)
@@ -108,6 +113,7 @@ export default function Layout() {
       )}
       <ToastContainer />
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />
+      <KeyboardShortcutsModal open={shortcutsOpen} onClose={() => setShortcutsOpen(false)} />
     </div>
   )
 }

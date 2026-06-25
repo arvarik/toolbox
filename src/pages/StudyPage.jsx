@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react'
-import { Plus, Search, MessageSquare, GraduationCap, Trash2, Edit, Play, Clock, Settings, BarChart2 } from 'lucide-react'
+import { useState, useEffect, useCallback } from 'react'
+import { Plus, Trash2, Clock, Play, BarChart2, Search, MessageSquare, GraduationCap, Edit, Settings } from 'lucide-react'
+import Skeleton from '../components/shared/Skeleton'
+import PullToRefresh from '../components/shared/PullToRefresh'
 import DeckCard from '../components/study/DeckCard'
 import FlashcardView from '../components/study/FlashcardView'
 import DeckEditor from '../components/study/DeckEditor'
@@ -59,22 +61,31 @@ export default function StudyPage() {
   const [optionsModalDeck, setOptionsModalDeck] = useState(null)
   const [studySessions, setStudySessions] = useState([])
 
-  useEffect(() => {
-    const fetchStudySessions = studySessionsApi ? studySessionsApi.list() : Promise.resolve([])
-    Promise.all([
-      decksApi.list(),
-      fetchStudySessions
-    ]).then(([list, sessions]) => {
+  const fetchDecks = useCallback(async (isRefresh = false) => {
+    if (!isRefresh) setIsLoading(true)
+    try {
+      const fetchStudySessions = studySessionsApi ? studySessionsApi.list() : Promise.resolve([])
+      const [list, sessions] = await Promise.all([
+        decksApi.list(),
+        fetchStudySessions
+      ])
       if (list && list.length > 0) {
         setDecks(list.map(mapDeckFromApi))
       }
       if (sessions) {
         setStudySessions(sessions)
       }
-    }).catch(() => {}).finally(() => {
+    } catch {
+      // Ignore
+    } finally {
       setIsLoading(false)
-    })
+    }
   }, [])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    fetchDecks()
+  }, [fetchDecks])
 
   // Collect all unique tags across decks
   const allTags = [...new Set(
@@ -488,35 +499,19 @@ export default function StudyPage() {
         </div>
 
         {/* Content */}
-        <div className="study-content">
-          {/* Loading state */}
-          {isLoading ? (
-            <div className="deck-grid">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="card" style={{
-                  padding: 'var(--space-5)',
-                  animation: 'pulse 1.5s ease-in-out infinite',
-                }}>
-                  <div style={{
-                    width: 36, height: 36,
-                    borderRadius: 'var(--radius-md)',
-                    background: 'var(--color-bg-hover)',
-                    marginBottom: 'var(--space-3)',
-                  }} />
-                  <div style={{
-                    width: '70%', height: 16,
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'var(--color-bg-hover)',
-                    marginBottom: 'var(--space-2)',
-                  }} />
-                  <div style={{
-                    width: '40%', height: 12,
-                    borderRadius: 'var(--radius-sm)',
-                    background: 'var(--color-bg-hover)',
-                  }} />
-                </div>
-              ))}
-            </div>
+        <PullToRefresh onRefresh={() => fetchDecks(true)}>
+          <div className="study-content">
+            {/* Loading state */}
+            {isLoading ? (
+              <div className="deck-grid">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="card" style={{ padding: 'var(--space-5)' }}>
+                    <Skeleton variant="circular" style={{ width: 36, height: 36, marginBottom: 'var(--space-3)' }} />
+                    <Skeleton style={{ width: '70%', height: 16, marginBottom: 'var(--space-2)' }} />
+                    <Skeleton style={{ width: '40%', height: 12 }} />
+                  </div>
+                ))}
+              </div>
           ) : (
           <>
           {/* Search */}
@@ -725,7 +720,8 @@ export default function StudyPage() {
           )}
           </>
           )}
-        </div>
+          </div>
+        </PullToRefresh>
       </div>
 
       {/* AI Chat panel */}

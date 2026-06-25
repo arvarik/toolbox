@@ -62,6 +62,34 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
   const learnCount = remainingCards.filter(c => c.state === 1 || c.state === 3).length
   const dueCount = remainingCards.filter(c => c.state === 2).length
 
+  const touchStartX = useRef(null)
+  const touchEndX = useRef(null)
+
+  const handleTouchStart = (e) => {
+    if (reviewMode) return
+    touchStartX.current = e.targetTouches[0].clientX
+  }
+
+  const handleTouchMove = (e) => {
+    if (reviewMode || touchStartX.current === null) return
+    touchEndX.current = e.targetTouches[0].clientX
+  }
+
+  const handleTouchEnd = () => {
+    if (reviewMode || touchStartX.current === null || touchEndX.current === null) return
+    const diff = touchStartX.current - touchEndX.current
+    if (Math.abs(diff) > 50) {
+      if (diff > 0) {
+        handleNext()
+      } else {
+        handlePrev()
+      }
+    }
+    touchStartX.current = null
+    touchEndX.current = null
+  }
+
+
   const handleFlip = () => {
     if (!isReviewing) setFlipped(!flipped)
   }
@@ -347,7 +375,13 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
       </div>
 
       {/* Card */}
-      <div className={`flashcard${flipped ? ' flipped' : ''}`} onClick={handleFlip}>
+      <div 
+        className={`flashcard${flipped ? ' flipped' : ''}`} 
+        onClick={handleFlip}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
         <div className="flashcard-inner">
           <div className="flashcard-face flashcard-front">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
