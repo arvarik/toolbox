@@ -577,6 +577,9 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
         </MemoryRouter>
       )
 
+      // Wait for initial board to be created and loaded
+      await screen.findByText('Untitled Board')
+
       const canvas = document.querySelector('#builder-canvas')
       canvas.getBoundingClientRect = vi.fn(() => ({ left: 0, top: 0, width: 800, height: 600 }))
 
