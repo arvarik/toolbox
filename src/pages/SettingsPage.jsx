@@ -539,7 +539,7 @@ export default function SettingsPage() {
 
           <div className="flex-column" style={{ gap: 'var(--space-2)' }}>
             {[
-              ['Version', '1.3.2'],
+              ['Version', import.meta.env.VITE_APP_VERSION || 'Unknown'],
               ['Storage', 'SQLite (local)'],
               ['AI Providers', activeProviders.length > 0 ? activeProviders.join(', ') : 'None configured'],
               ['Active Model', model],
