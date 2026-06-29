@@ -214,11 +214,5 @@ function migrate() {
 
 migrate()
 
-// Seed API keys from environment variables for all registered providers.
-// This iterates over PROVIDER_CLASSES and checks each provider's envKey.
-// Adding a new provider to the registry automatically handles seeding.
-import { seedApiKeysFromEnv } from './providers/index.js'
-seedApiKeysFromEnv()
-
 export default db
 

@@ -14,6 +14,10 @@ import guideContentRoutes from './routes/guide_content.js'
 import profileRoutes from './routes/profile.js'
 import systemRoutes from './routes/system.js'
 import searchRoutes from './routes/search.js'
+import { seedApiKeysFromEnv } from './providers/index.js'
+
+// Seed API keys from environment variables for all registered providers
+seedApiKeysFromEnv()
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
