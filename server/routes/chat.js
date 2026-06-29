@@ -4,6 +4,7 @@ import db from '../db.js'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../src/utils/constants.js'
 import logger from '../utils/logger.js'
 import { generateEmbedding, cosineSimilarity } from '../utils/embeddings.js'
+import { getProvider } from '../providers/index.js'
 
 const router = Router()
 
@@ -77,26 +78,8 @@ router.get('/starters', async (req, res) => {
     }
 
     // 7. Cache missing or stale — generate new ones
-    const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-    if (!config?.value) {
-      return res.status(400).json({ message: 'API key not configured.' })
-    }
-
-    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(config.value)
-    const model = genAI.getGenerativeModel({
-      model: requestedModel || 'gemini-3.5-flash',
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: SchemaType.ARRAY,
-          items: {
-            type: SchemaType.STRING,
-          },
-          description: "An array of 12 to 15 short, engaging study questions for the user to ask the AI."
-        }
-      }
-    })
+    const modelId = requestedModel || 'gemini-3.5-flash'
+    const provider = getProvider(modelId)
 
     const prompt = `You are an expert system design tutor creating contextual chat starters.
 The user is studying the topic: "${topic.name}" (Part of the "${pillar.name}" pillar).
@@ -117,19 +100,22 @@ Based on this state, generate 12 to 15 highly targeted starter questions the use
 - If they have covered some sections, suggest questions that bridge the gap to the missing sections, or challenge their understanding of what they've written.
 - If they are starting fresh, suggest questions to tackle the most important introductory sections.
 - Tailor the questions to their user profile if relevant (e.g. focusing on their weak points or upcoming interviews).
-- Format as short, actionable questions they would ask YOU (e.g. "Can you quiz me on [X]?", "How does [X] handle [Y] failure mode?").
-`
+- Format as short, actionable questions they would ask YOU (e.g. "Can you quiz me on [X]?", "How does [X] handle [Y] failure mode?").`
 
-    const result = await model.generateContent(prompt)
-    let suggestionsText = result.response.text()
-    
-    // Validate JSON
-    let parsedSuggestions = []
+    const schema = {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'An array of 12 to 15 short, engaging study questions for the user to ask the AI.'
+    }
+
+    let parsedSuggestions
     try {
-      parsedSuggestions = JSON.parse(suggestionsText)
+      parsedSuggestions = await provider.generateJSON(prompt, schema, { model: modelId })
+      if (!Array.isArray(parsedSuggestions)) {
+        parsedSuggestions = ["Let's do a deep dive on this topic", "Test my knowledge on this topic"]
+      }
     } catch {
       parsedSuggestions = ["Let's do a deep dive on this topic", "Test my knowledge on this topic"]
-      suggestionsText = JSON.stringify(parsedSuggestions)
     }
 
     // Save to DB (save all generated prompts)
@@ -153,7 +139,7 @@ Based on this state, generate 12 to 15 highly targeted starter questions the use
 
 /**
  * POST /api/chat
- * Send a message to Gemini and get a response (non-streaming).
+ * Send a message and get a response (non-streaming).
  * Body: { message, context, history }
  */
 router.post('/', async (req, res) => {
@@ -163,48 +149,30 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ message: 'Message is required' })
   }
 
-  // Get API key from config
-  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!config?.value) {
-    return res.status(400).json({
-      message: 'Gemini API key not configured. Please add your key in Settings.',
-    })
-  }
-
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(config.value)
+    const modelId = requestedModel || 'gemini-3.5-flash'
+    const provider = getProvider(modelId)
 
     // Build system context based on the page
     const systemContext = context
       ? `You are an expert system design interview tutor. Context: ${context}\n\n`
       : 'You are an expert system design interview tutor helping a student prepare for system design interviews.\n\n'
 
-    const model = genAI.getGenerativeModel({ 
-      model: requestedModel || 'gemini-3.5-flash',
-      systemInstruction: systemContext
-    })
-
-    // Build conversation history
-    const chatHistory = history.map((msg) => ({
+    const historyFormatted = history.map((msg) => ({
       role: msg.role === 'ai' ? 'model' : 'user',
-      parts: [{ text: msg.content }],
+      content: msg.content,
     }))
 
-    const chat = model.startChat({
-      history: chatHistory,
-      generationConfig: {
-        temperature: 0.5,
-        maxOutputTokens: 8192,
-        thinkingConfig: {
-          thinkingBudget: 1024,
-          includeThoughts: false
-        }
-      },
-    })
+    // Use generateText with the full prompt including history context
+    const historyText = historyFormatted.map(m => `${m.role}: ${m.content}`).join('\n')
+    const fullPrompt = historyText ? `${historyText}\nuser: ${message}` : message
 
-    const result = await chat.sendMessage(message)
-    const response = result.response.text()
+    const response = await provider.generateText(fullPrompt, {
+      model: modelId,
+      systemPrompt: systemContext,
+      temperature: 0.5,
+      maxOutputTokens: 8192,
+    })
 
     res.json({ response })
   } catch (err) {
@@ -215,7 +183,7 @@ router.post('/', async (req, res) => {
 
 /**
  * POST /api/chat/stream
- * Stream a response from Gemini via Server-Sent Events (SSE).
+ * Stream a response via Server-Sent Events (SSE).
  * Body: { message, context, history }
  */
 router.post('/stream', async (req, res) => {
@@ -225,11 +193,12 @@ router.post('/stream', async (req, res) => {
     return res.status(400).json({ message: 'Message is required' })
   }
 
-  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!config?.value) {
-    return res.status(400).json({
-      message: 'Gemini API key not configured. Please add your key in Settings.',
-    })
+  const modelId = requestedModel || 'gemini-3.5-flash'
+  let provider
+  try {
+    provider = getProvider(modelId)
+  } catch (err) {
+    return res.status(400).json({ message: err.message })
   }
 
   // Set SSE headers
@@ -245,40 +214,7 @@ router.post('/stream', async (req, res) => {
   });
 
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(config.value)
-
-    // Tools definition (submit_draft removed — critic pattern is incompatible
-    // with thinking-mode streaming due to function call turn adjacency rules)
-    const tools = [{
-      functionDeclarations: [
-        {
-          name: "search_flashcards",
-          description: "Search the user's flashcards. Useful to see what concepts they have learned or are struggling with.",
-          parameters: {
-            type: "OBJECT",
-            properties: {
-              query: { type: "STRING", description: "Search query for flashcards" }
-            },
-            required: ["query"]
-          }
-        },
-        {
-          name: "search_guide",
-          description: "Search the global system design guide content.",
-          parameters: {
-            type: "OBJECT",
-            properties: {
-              query: { type: "STRING", description: "Topic to search for in the guide" }
-            },
-            required: ["query"]
-          }
-        }
-      ]
-    }];
-
     // ─── 1. Infinite Working Memory (No Compaction) ─────────────────────────
-    // We do NOT compact memory. We pass the full history.
     const fullHistory = history;
 
     // Fetch all flashcards and guide notes to build the ultimate context
@@ -329,137 +265,110 @@ router.post('/stream', async (req, res) => {
     // Append the massive knowledge base
     systemContext += globalKnowledgeContext;
 
-    let model;
-    try {
-      const { GoogleAICacheManager } = await import('@google/generative-ai/server');
-      const cacheManager = new GoogleAICacheManager(config.value);
-      const cache = await cacheManager.create({
-        model: 'models/' + (requestedModel || 'gemini-3.5-flash'),
-        systemInstruction: systemContext,
-        contents: [
-          { role: 'user', parts: [{ text: 'Understood. I am ready to help the student.' }] },
-          { role: 'model', parts: [{ text: 'Ready.' }] }
-        ],
-        ttlSeconds: 600
-      });
-      model = genAI.getGenerativeModelFromCachedContent(cache, { tools: tools });
-    } catch (cacheErr) {
-      logger.warn(`[chat/stream] Context caching skipped or failed (${cacheErr.message}). Falling back to standard model init.`);
-      model = genAI.getGenerativeModel({ 
-        model: requestedModel || 'gemini-3.5-flash',
-        tools: tools,
-        systemInstruction: systemContext
-      });
+    // ─── 3. Tool definitions ────────────────────────────────────────────────
+    const tools = [
+      {
+        name: "search_flashcards",
+        description: "Search the user's flashcards. Useful to see what concepts they have learned or are struggling with.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Search query for flashcards" }
+          },
+          required: ["query"]
+        }
+      },
+      {
+        name: "search_guide",
+        description: "Search the global system design guide content.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Topic to search for in the guide" }
+          },
+          required: ["query"]
+        }
+      }
+    ];
+
+    // ─── 4. Tool executor ───────────────────────────────────────────────────
+    const toolExecutor = async (fnName, args) => {
+      if (fnName === 'search_flashcards') {
+        const q = args.query || '';
+        const qEmb = await generateEmbedding(q);
+        const rows = db.prepare("SELECT front, back, state, ease_factor, embedding FROM flashcards").all();
+        
+        if (qEmb.length > 0) {
+          const scored = rows.map(r => {
+            let sim = 0;
+            try {
+              if (r.embedding) sim = cosineSimilarity(qEmb, JSON.parse(r.embedding));
+            } catch (e) { void e; }
+            return { ...r, sim };
+          }).sort((a, b) => b.sim - a.sim);
+          const result = scored.slice(0, 5).map(r => ({ front: r.front, back: r.back, state: r.state, ease_factor: r.ease_factor }));
+          return result.length ? result : "No flashcards found.";
+        } else {
+          return rows.slice(0, 5);
+        }
+      } else if (fnName === 'search_guide') {
+        const q = args.query || '';
+        const qEmb = await generateEmbedding(q);
+        const rows = db.prepare("SELECT content, embedding FROM guide_content").all();
+        
+        if (qEmb.length > 0) {
+          const scored = rows.map(r => {
+            let sim = 0;
+            try {
+              if (r.embedding) sim = cosineSimilarity(qEmb, JSON.parse(r.embedding));
+            } catch (e) { void e; }
+            return { ...r, sim };
+          }).sort((a, b) => b.sim - a.sim);
+          const result = scored.slice(0, 3).map(r => r.content);
+          return result.length ? result : "No guide content found.";
+        } else {
+          return rows.slice(0, 3).map(r => r.content);
+        }
+      }
+      return null;
+    };
+
+    // ─── 5. Stream with tools ───────────────────────────────────────────────
+    let generatedText = '';
+
+    const stream = provider.streamChatWithTools(
+      systemContext,
+      fullHistory,
+      message,
+      tools,
+      toolExecutor,
+      { model: modelId, temperature: 0.5, maxOutputTokens: 8192 }
+    );
+
+    for await (const chunk of stream) {
+      if (isAborted) break;
+
+      if (chunk.type === 'tool') {
+        res.write(`data: ${JSON.stringify({ tool: "Running " + chunk.name + "..." })}\n\n`);
+      } else if (chunk.type === 'text') {
+        generatedText += chunk.text;
+        res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+      }
     }
 
+    res.write('data: [DONE]\n\n')
+    res.end()
+
+    // ─── 6. Autonomous Memory Management ────────────────────────────────────
     const chatHistory = fullHistory.map((msg) => ({
       role: msg.role === 'ai' ? 'model' : 'user',
       parts: [{ text: msg.content }],
     }))
 
-    const chat = model.startChat({
-      history: chatHistory,
-      generationConfig: {
-        temperature: 0.5,
-        maxOutputTokens: 8192,
-      },
-    })
-
-    // ─── 3. Harness Loop ────────────────────────────────────────────────────
-    let currentMessage = message;
-    let isFunctionCall = false;
-    let generatedText = '';
-
-    do {
-      isFunctionCall = false;
-      const result = await chat.sendMessageStream(currentMessage);
-      
-      for await (const chunk of result.stream) {
-        if (isAborted) break;
-
-        // Note: In @google/generative-ai SDK, functionCalls is a method, not a property.
-        const chunkFunctionCalls = typeof chunk.functionCalls === 'function'
-          ? chunk.functionCalls()
-          : chunk.functionCalls;
-
-        if (chunkFunctionCalls && chunkFunctionCalls.length > 0) {
-          isFunctionCall = true;
-          const functionResponses = [];
-          
-          for (const call of chunkFunctionCalls) {
-            const fnName = call.name;
-            const args = call.args;
-            
-            res.write(`data: ${JSON.stringify({ tool: "Running " + fnName + "..." })}\n\n`);
-            
-            let toolResult = null;
-            if (fnName === 'search_flashcards') {
-              const q = args.query || '';
-              const qEmb = await generateEmbedding(q);
-              const rows = db.prepare("SELECT front, back, state, ease_factor, embedding FROM flashcards").all();
-              
-              if (qEmb.length > 0) {
-                const scored = rows.map(r => {
-                  let sim = 0;
-                  try {
-                    if (r.embedding) sim = cosineSimilarity(qEmb, JSON.parse(r.embedding));
-                  } catch (e) { void e; }
-                  return { ...r, sim };
-                }).sort((a, b) => b.sim - a.sim);
-                toolResult = scored.slice(0, 5).map(r => ({ front: r.front, back: r.back, state: r.state, ease_factor: r.ease_factor }));
-              } else {
-                toolResult = rows.slice(0, 5);
-              }
-              if (!toolResult.length) toolResult = "No flashcards found.";
-            } else if (fnName === 'search_guide') {
-              const q = args.query || '';
-              const qEmb = await generateEmbedding(q);
-              const rows = db.prepare("SELECT content, embedding FROM guide_content").all();
-              
-              if (qEmb.length > 0) {
-                const scored = rows.map(r => {
-                  let sim = 0;
-                  try {
-                    if (r.embedding) sim = cosineSimilarity(qEmb, JSON.parse(r.embedding));
-                  } catch (e) { void e; }
-                  return { ...r, sim };
-                }).sort((a, b) => b.sim - a.sim);
-                toolResult = scored.slice(0, 3).map(r => r.content);
-              } else {
-                toolResult = rows.slice(0, 3).map(r => r.content);
-              }
-              if (!toolResult.length) toolResult = "No guide content found.";
-            }
-
-            functionResponses.push({
-              functionResponse: {
-                name: fnName,
-                response: { result: toolResult }
-              }
-            });
-          }
-          currentMessage = functionResponses;
-          break; // Exit the stream processing for this turn, loop back to send functionResponses
-        } else {
-          const text = chunk.text()
-          if (text) {
-            generatedText += text;
-            res.write(`data: ${JSON.stringify({ text })}\n\n`)
-          }
-        }
-      }
-    } while (isFunctionCall && !isAborted);
-
-    res.write('data: [DONE]\n\n')
-    res.end()
-
-    // ─── 4. Autonomous Memory Management (Interactions API) ────────────────
     setTimeout(async () => {
       try {
         if (chatHistory.length > 0) {
-          const { GoogleGenAI } = await import('@google/genai');
-          const client = new GoogleGenAI({ apiKey: config.value });
-          
+          // Use the same provider for memory extraction
           const extractionPrompt = `You are the autonomous memory manager for this user.
 Analyze the following latest interaction. Extract ANY new, highly important episodic learning events (struggles, analogies that clicked, specific facts mastered).
 Only return events that are worth remembering long-term.
@@ -469,39 +378,31 @@ ${chatHistory.map(m => `${m.role}: ${m.parts[0].text}`).join('\n')}
 user: ${message}
 model: ${generatedText}`;
           
-          const extractResult = await client.models.generateContent({
-            model: requestedModel || 'gemini-3.5-flash',
-            contents: extractionPrompt,
-            config: {
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: 'object',
-                properties: {
-                  events: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        memory_text: { type: 'string', description: 'A concise description of the learning event' },
-                        importance_score: { type: 'number', description: 'Importance score from 1 to 10' }
-                      },
-                      required: ['memory_text', 'importance_score']
-                    }
-                  }
-                },
-                required: ['events']
+          const schema = {
+            type: 'object',
+            properties: {
+              events: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    memory_text: { type: 'string', description: 'A concise description of the learning event' },
+                    importance_score: { type: 'number', description: 'Importance score from 1 to 10' }
+                  },
+                  required: ['memory_text', 'importance_score']
+                }
               }
-            }
-          });
-          
+            },
+            required: ['events']
+          }
+
           let data;
           try {
-            data = JSON.parse(extractResult.text);
+            data = await provider.generateJSON(extractionPrompt, schema, { model: modelId });
           } catch(e) {
             logger.error('[Memory Manager] JSON Parse error', e.message);
           }
 
-          
           if (data && data.events && data.events.length > 0) {
             for (const ev of data.events) {
               const emb = await generateEmbedding(ev.memory_text);
@@ -535,17 +436,9 @@ router.post('/generate-flashcards', async (req, res) => {
     return res.status(400).json({ message: 'Text or sections are required to generate flashcards.' })
   }
 
-  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!config?.value) {
-    return res.status(400).json({
-      message: 'Gemini API key not configured. Please add your key in Settings.',
-    })
-  }
-
   try {
-    const { GoogleGenAI } = await import('@google/genai')
-    const client = new GoogleGenAI({ apiKey: config.value })
-    const modelName = requestedModel || 'gemini-3.5-flash'
+    const modelId = requestedModel || 'gemini-3.5-flash'
+    const provider = getProvider(modelId)
 
     // Build context section if available
     let contextBlock = ''
@@ -597,34 +490,21 @@ ${sourceBlock}`
       cardProperties.sourceSectionId = { 
         type: 'string', 
         description: 'The section id this card was generated from',
-        enum: sections.map(s => s.sectionId)
       }
       cardProperties.sourceSectionName = { type: 'string', description: 'The section name this card was generated from' }
       requiredFields.push('sourceSectionId', 'sourceSectionName')
     }
 
-    const result = await client.models.generateContent({
-      model: modelName,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: cardProperties,
-            required: requiredFields,
-          },
-        },
+    const schema = {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: cardProperties,
+        required: requiredFields,
       },
-    })
-
-    let generatedCards = []
-    try {
-      generatedCards = JSON.parse(result.text)
-    } catch {
-      return res.status(500).json({ message: 'Failed to parse generated flashcards.' })
     }
+
+    let generatedCards = await provider.generateJSON(prompt, schema, { model: modelId })
 
     // Attach source metadata if available
     if (pillarId || topicId) {
@@ -653,15 +533,9 @@ router.post('/generate-reverse-cards', async (req, res) => {
     return res.status(400).json({ message: 'Cards array is required.' })
   }
 
-  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!config?.value) {
-    return res.status(400).json({ message: 'Gemini API key not configured.' })
-  }
-
   try {
-    const { GoogleGenAI } = await import('@google/genai')
-    const client = new GoogleGenAI({ apiKey: config.value })
-    const modelName = requestedModel || 'gemini-3.5-flash'
+    const modelId = requestedModel || 'gemini-3.5-flash'
+    const provider = getProvider(modelId)
 
     const cardList = cards.map((c, i) =>
       `[Card ${i}]\nQ: ${c.front}\nA: ${c.back}`
@@ -684,33 +558,20 @@ ${cardList}
 
 Generate one reverse card per input card.`
 
-    const result = await client.models.generateContent({
-      model: modelName,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              front: { type: 'string', description: 'Reverse question' },
-              back: { type: 'string', description: 'Answer for the reverse question' },
-              originalIndex: { type: 'integer', description: 'Index of the original card this reverses' },
-            },
-            required: ['front', 'back', 'originalIndex'],
-          },
+    const schema = {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          front: { type: 'string', description: 'Reverse question' },
+          back: { type: 'string', description: 'Answer for the reverse question' },
+          originalIndex: { type: 'integer', description: 'Index of the original card this reverses' },
         },
+        required: ['front', 'back', 'originalIndex'],
       },
-    })
-
-    let reverseCards = []
-    try {
-      reverseCards = JSON.parse(result.text)
-    } catch {
-      return res.status(500).json({ message: 'Failed to parse reverse cards.' })
     }
 
+    const reverseCards = await provider.generateJSON(prompt, schema, { model: modelId })
     res.json({ reverseCards })
   } catch (err) {
     logger.error('[chat/generate-reverse-cards] Error:', err.message)
@@ -736,17 +597,9 @@ router.post('/summarize', async (req, res) => {
     return res.status(400).json({ message: 'excerpts and sectionId are required' })
   }
 
-  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!config?.value) {
-    return res.status(400).json({
-      message: 'Gemini API key not configured. Please add your key in Settings.',
-    })
-  }
-
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(config.value)
-    const model = genAI.getGenerativeModel({ model: requestedModel || 'gemini-3.5-flash' })
+    const modelId = requestedModel || 'gemini-3.5-flash'
+    const provider = getProvider(modelId)
 
     const excerptText = excerpts.join('\n\n---\n\n')
     const prompt = `You are a technical writing assistant helping compile a system design study guide.
@@ -770,9 +623,7 @@ ${excerptText}
 
 Now write the guide section content:`
 
-    const result = await model.generateContent(prompt)
-    const content = result.response.text()
-
+    const content = await provider.generateText(prompt, { model: modelId })
     res.json({ content })
   } catch (err) {
     logger.error('[chat/summarize] Error:', err.message)
@@ -793,36 +644,9 @@ router.post('/evaluate-interceptor', async (req, res) => {
     return res.status(400).json({ message: 'explanation, front, and back are required' })
   }
 
-  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!config?.value) {
-    return res.status(400).json({
-      message: 'Gemini API key not configured. Please add your key in Settings.',
-    })
-  }
-
   try {
-    const { GoogleGenerativeAI, SchemaType } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(config.value)
-    const model = genAI.getGenerativeModel({ 
-      model: requestedModel || 'gemini-3.5-flash',
-      generationConfig: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: SchemaType.OBJECT,
-          properties: {
-            pass: {
-              type: SchemaType.BOOLEAN,
-              description: "True if the user's explanation demonstrates an understanding of the underlying principle. False if they fail to explain the 'why', are too vague, or are incorrect."
-            },
-            feedback: {
-              type: SchemaType.STRING,
-              description: "1-2 sentences of feedback explaining why they passed or failed, and reinforcing the correct concept."
-            }
-          },
-          required: ["pass", "feedback"],
-        }
-      }
-    })
+    const modelId = requestedModel || 'gemini-3.5-flash'
+    const provider = getProvider(modelId)
 
     const prompt = `You are a strict learning evaluator. The user was asked a flashcard question and must explain WHY the answer is true to prove they aren't just pattern-matching.
 
@@ -833,15 +657,26 @@ User's Explanation: "${explanation}"
 
 Evaluate their explanation.`
 
-    const result = await model.generateContent(prompt)
-    const text = result.response.text()
-    
-    let evaluation;
+    const schema = {
+      type: 'object',
+      properties: {
+        pass: {
+          type: 'boolean',
+          description: "True if the user's explanation demonstrates an understanding of the underlying principle. False if they fail to explain the 'why', are too vague, or are incorrect."
+        },
+        feedback: {
+          type: 'string',
+          description: "1-2 sentences of feedback explaining why they passed or failed, and reinforcing the correct concept."
+        }
+      },
+      required: ["pass", "feedback"],
+    }
+
+    let evaluation
     try {
-      evaluation = JSON.parse(text)
+      evaluation = await provider.generateJSON(prompt, schema, { model: modelId })
     } catch (e) {
-      logger.error('[chat/evaluate-interceptor] Failed to parse JSON:', e.message, text)
-      // Fallback
+      logger.error('[chat/evaluate-interceptor] Failed to parse JSON:', e.message)
       evaluation = { pass: false, feedback: "Error evaluating response format." }
     }
 
@@ -855,10 +690,6 @@ Evaluate their explanation.`
 /**
  * @route POST /api/chat/concept-map
  * @description Generates a Mermaid concept map from a session history.
- * Pings Gemini to extract key concepts, entities, and relationships, returning a valid mermaid graph.
- * @param {Object[]} req.body.history - Array of chat messages.
- * @param {string} req.body.model - Gemini model to use.
- * @returns {Object} JSON object with a 'response' containing the markdown block for mermaid code.
  */
 router.post('/concept-map', async (req, res) => {
   const { history = [], model: requestedModel } = req.body
@@ -867,17 +698,9 @@ router.post('/concept-map', async (req, res) => {
     return res.status(400).json({ message: 'History is required to generate a map.' })
   }
 
-  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!config?.value) {
-    return res.status(400).json({
-      message: 'Gemini API key not configured. Please add your key in Settings.',
-    })
-  }
-
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(config.value)
-    const model = genAI.getGenerativeModel({ model: requestedModel || 'gemini-3.5-flash' })
+    const modelId = requestedModel || 'gemini-3.5-flash'
+    const provider = getProvider(modelId)
 
     const historyText = history.map(msg => `${msg.role}: ${msg.content}`).join('\n\n')
 
@@ -895,8 +718,7 @@ graph TD
 Chat History:
 ${historyText}`
 
-    const result = await model.generateContent(prompt)
-    let responseText = result.response.text()
+    let responseText = await provider.generateText(prompt, { model: modelId })
     
     if (!responseText.includes('```mermaid')) {
       responseText = `\`\`\`mermaid\n${responseText.replace(/```/g, '')}\n\`\`\``
@@ -914,24 +736,12 @@ ${historyText}`
 /**
  * POST /api/chat/commit
  * Analyze a chat session against a guide topic's sections.
- * Step 1: Identify which sections were substantively discussed.
- * Step 2: For each identified section, reconcile session content with existing guide content.
- *
- * Body: { messages, pillarId, topicId, topicName, model }
- * Returns: { updates: [{ sectionId, sectionName, existingContent, newContent, isNew }] }
  */
 router.post('/commit', async (req, res) => {
   const { messages = [], pillarId, topicId, topicName, model: requestedModel, targetSectionIds = [] } = req.body
 
   if (!messages.length || !pillarId || !topicId) {
     return res.status(400).json({ message: 'messages, pillarId, and topicId are required' })
-  }
-
-  const config = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!config?.value) {
-    return res.status(400).json({
-      message: 'Gemini API key not configured. Please add your key in Settings.',
-    })
   }
 
   let sections = BLUEPRINT_SECTIONS[pillarId]
@@ -944,9 +754,8 @@ router.post('/commit', async (req, res) => {
   }
 
   try {
-    const { GoogleGenAI } = await import('@google/genai')
-    const client = new GoogleGenAI({ apiKey: config.value })
-    const modelName = requestedModel || 'gemini-3.5-flash'
+    const modelId = requestedModel || 'gemini-3.5-flash'
+    const provider = getProvider(modelId)
 
     logger.info(`[chat/commit] Analyzing session for topic "${topicName}" (${pillarId}/${topicId}). ${messages.length} messages.`)
 
@@ -1027,39 +836,31 @@ ${conversationText}
 
 Return the targeted sections with their complete updated content.`
 
-    const result = await client.models.generateContent({
-      model: modelName,
-      contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: {
-          type: 'object',
-          properties: {
-            sections: {
-              type: 'array',
-              items: {
-                type: 'object',
-                properties: {
-                  sectionId: { 
-                    type: 'string', 
-                    description: 'The section id from the provided list',
-                    enum: sections.map(s => s.id)
-                  },
-                  reason: { type: 'string', description: 'Brief reason why this section was covered in the conversation' },
-                  newContent: { type: 'string', description: 'The complete updated section content in markdown format' }
-                },
-                required: ['sectionId', 'reason', 'newContent']
-              }
-            }
-          },
-          required: ['sections']
+    const schema = {
+      type: 'object',
+      properties: {
+        sections: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              sectionId: { 
+                type: 'string', 
+                description: 'The section id from the provided list',
+              },
+              reason: { type: 'string', description: 'Brief reason why this section was covered in the conversation' },
+              newContent: { type: 'string', description: 'The complete updated section content in markdown format' }
+            },
+            required: ['sectionId', 'reason', 'newContent']
+          }
         }
-      }
-    })
+      },
+      required: ['sections']
+    }
 
     let identifiedSections
     try {
-      const parsed = JSON.parse(result.text)
+      const parsed = await provider.generateJSON(prompt, schema, { model: modelId })
       identifiedSections = parsed.sections || []
     } catch (parseErr) {
       logger.error('[chat/commit] Failed to parse response:', parseErr.message)

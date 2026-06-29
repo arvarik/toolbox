@@ -53,8 +53,8 @@ export default function PomodoroModal({ onClose }) {
   const strokeDashoffset = circumference - progress * circumference
 
   return (
-      <div className="modal-overlay" style={{ zIndex: 9999, backdropFilter: 'blur(12px)', backgroundColor: 'rgba(0, 0, 0, 0.4)' }}>
-        <div className="modal-content" style={{ maxWidth: 400, width: '100%' }}>
+      <div className="modal-overlay" onClick={onClose} style={{ zIndex: 9999, backdropFilter: 'blur(12px)', backgroundColor: 'rgba(0, 0, 0, 0.4)' }}>
+        <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400, width: '100%' }}>
           <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <TimerIcon size={20} style={{ color: 'var(--color-primary)' }} />

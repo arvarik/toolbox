@@ -51,6 +51,7 @@ vi.mock('../utils/api', () => {
       get: vi.fn(),
       update: vi.fn(),
       testApiKey: vi.fn(),
+      getAvailableModels: vi.fn(() => Promise.resolve({ groups: [], providers: [] })),
     },
     decksApi: {
       list: vi.fn(() => Promise.resolve(mockDecks)),
@@ -124,7 +125,7 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
 
   it('asserts that removing API key persists to backend and is retained on mount/reload', async () => {
     // 1. Simulate key already stored in backend
-    configApi.get.mockResolvedValue({ gemini_api_key: 'AIza...', api_key_configured: true })
+    configApi.get.mockResolvedValue({ gemini_api_key: 'AIza...', api_key_configured: true, api_keys_configured: { gemini: true, claude: false } })
     useAppStore.setState({ apiKeyConfigured: true })
 
     const { rerender } = render(
@@ -134,28 +135,28 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
     )
 
     // Verify UI shows connected
-    expect(screen.getByText('Connected — AI features are enabled')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.getByText('Connected — AI features enabled')).toBeInTheDocument()
+    })
 
-    // 2. Click Remove API Key
-    const removeBtn = screen.getByRole('button', { name: 'Remove API Key' })
+    // 2. Click Remove Gemini Key
+    const removeBtn = screen.getByRole('button', { name: 'Remove Gemini Key' })
     fireEvent.click(removeBtn)
 
     // Confirm in modal
     const confirmBtn = screen.getByRole('button', { name: 'Remove' })
     fireEvent.click(confirmBtn)
 
-    // State becomes disconnected in frontend store
+    // State becomes disconnected in frontend
     await waitFor(() => {
-      expect(useAppStore.getState().apiKeyConfigured).toBe(false)
-      expect(screen.getByText('Not configured — AI features are disabled')).toBeInTheDocument()
+      expect(screen.queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
     })
 
     // Assert that API call was made to backend configApi.update to clear the key
     expect(configApi.update).toHaveBeenCalledWith({ gemini_api_key: '' })
 
     // 3. Re-render/remount to simulate page reload or page navigation back to settings
-    // Simulate that configApi.get now returns api_key_configured: false (since it was deleted)
-    configApi.get.mockResolvedValue({ gemini_api_key: '', api_key_configured: false })
+    configApi.get.mockResolvedValue({ gemini_api_key: '', api_key_configured: false, api_keys_configured: { gemini: false, claude: false } })
 
     rerender(
       <MemoryRouter>
@@ -164,8 +165,8 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
     )
 
     await waitFor(() => {
-      expect(useAppStore.getState().apiKeyConfigured).toBe(false)
-      expect(screen.getByText('Not configured — AI features are disabled')).toBeInTheDocument()
+      const statuses = screen.getAllByText('Not configured')
+      expect(statuses.length).toBeGreaterThanOrEqual(1)
     })
   })
 

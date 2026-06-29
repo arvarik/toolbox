@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, MessageSquare } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import PomodoroWidget from './PomodoroWidget'
@@ -15,6 +16,12 @@ const navItems = [
 export default function MobileDrawer({ open, onClose }) {
   const model = useAppStore((s) => s.model)
   const setModel = useAppStore((s) => s.setModel)
+  const availableModels = useAppStore((s) => s.availableModels)
+  const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
+
+  useEffect(() => {
+    if (open) fetchAvailableModels()
+  }, [open, fetchAvailableModels])
 
   if (!open) return null
 
@@ -78,8 +85,17 @@ export default function MobileDrawer({ open, onClose }) {
                   cursor: 'pointer'
                 }}
               >
-                <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-                <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (High)</option>
+                {availableModels.length > 0 ? (
+                availableModels.map((group) => (
+                  <optgroup key={group.provider.id} label={group.provider.name}>
+                    {group.models.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </optgroup>
+                ))
+              ) : (
+                <option value={model}>{model}</option>
+              )}
               </select>
             </div>
 

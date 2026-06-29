@@ -1048,7 +1048,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', maxWidth: 340, margin: '0 auto' }}>
                 {apiKeyConfigured
                   ? 'Ask deep questions, explore concepts, then commit insights to the guide.'
-                  : 'Add your Gemini API key in Settings to start studying with AI.'}
+                  : 'Add your API key in Settings to start studying with AI.'}
               </div>
             </div>
 

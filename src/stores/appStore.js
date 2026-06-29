@@ -4,6 +4,7 @@
  * and shared workspace data (diagram nodes/edges).
  */
 import { create } from 'zustand'
+import { configApi } from '../utils/api'
 
 // Read initial theme from localStorage
 const getInitialTheme = () => {
@@ -74,9 +75,26 @@ const useAppStore = create((set) => ({
       chatOpen: { ...s.chatOpen, [page]: open },
     })),
 
-  // API key status
+  // API key status (backward-compat: apiKeyConfigured = true if ANY provider key is set)
   apiKeyConfigured: false,
   setApiKeyConfigured: (status) => set({ apiKeyConfigured: status }),
+  // Per-provider key status: { gemini: bool, claude: bool }
+  apiKeysConfigured: {},
+  setApiKeysConfigured: (status) => set({
+    apiKeysConfigured: status,
+    apiKeyConfigured: Object.values(status).some(Boolean),
+  }),
+
+  // Dynamic model catalog (fetched from backend based on configured keys)
+  availableModels: [],
+  fetchAvailableModels: async () => {
+    try {
+      const data = await configApi.getAvailableModels()
+      set({ availableModels: data.groups || [] })
+    } catch {
+      // Silently fail — models will just show as empty
+    }
+  },
 
   // Toast notifications
   toasts: [],

@@ -1,59 +1,63 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { configApi, systemApi, profileApi, guideContentApi } from '../utils/api'
 import Modal from '../components/shared/Modal'
 
-const AVAILABLE_MODELS = [
-  { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Fast and efficient — best for most tasks' },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: 'Previous generation, still capable' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: 'Most capable, slower responses' },
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', description: 'Legacy model' },
+/**
+ * Default fallback provider config (used before server metadata loads).
+ * These match the static getters in GeminiProvider and ClaudeProvider,
+ * but serve as client-side defaults until the /available-models response arrives.
+ */
+const DEFAULT_PROVIDER_DEFS = [
+  {
+    id: 'gemini',
+    name: 'Google Gemini',
+    shortName: 'Gemini',
+    configKey: 'gemini_api_key',
+    color: '#4285F4',
+    keyPlaceholder: 'AIza...',
+    keyHelpUrl: 'https://aistudio.google.com/apikey',
+    keyHelpLabel: 'Google AI Studio',
+  },
+  {
+    id: 'claude',
+    name: 'Anthropic Claude',
+    shortName: 'Claude',
+    configKey: 'claude_api_key',
+    color: '#D97757',
+    keyPlaceholder: 'sk-ant-...',
+    keyHelpUrl: 'https://console.anthropic.com/settings/keys',
+    keyHelpLabel: 'Anthropic Console',
+  },
 ]
 
-export default function SettingsPage() {
-  const { apiKeyConfigured, setApiKeyConfigured, addToast, theme, toggleTheme, model, setModel } = useAppStore()
+/**
+ * Reusable component for managing a single provider's API key.
+ */
+function ProviderKeySection({ providerId, providerDef, keyStatus, onKeyStatusChange }) {
+  const addToast = useAppStore((s) => s.addToast)
   const [apiKey, setApiKey] = useState('')
-  const isMac = typeof window !== 'undefined' && navigator.userAgent.includes('Mac')
   const [showKey, setShowKey] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
-  const [keyStatus, setKeyStatus] = useState(apiKeyConfigured ? 'connected' : 'disconnected')
   const [showConfirmModal, setShowConfirmModal] = useState(false)
-  const [systemStats, setSystemStats] = useState(null)
-  const [profileText, setProfileText] = useState('')
-  const [isSavingProfile, setIsSavingProfile] = useState(false)
-
-  // Check initial API key status on mount
-  useEffect(() => {
-    configApi.get().then((config) => {
-      if (config.api_key_configured) {
-        setApiKeyConfigured(true)
-        setKeyStatus('connected')
-      }
-    }).catch(() => {})
-
-    systemApi.stats().then(setSystemStats).catch(console.error)
-    profileApi.get().then(res => setProfileText(res.profileText || '')).catch(console.error)
-  }, [setApiKeyConfigured])
 
   const handleSaveKey = async () => {
     if (!apiKey.trim()) return
-
     setIsTesting(true)
     try {
-      const result = await configApi.testApiKey(apiKey.trim())
+      const result = await configApi.testApiKey(apiKey.trim(), providerId)
       if (result.valid) {
-        setApiKeyConfigured(true)
-        setKeyStatus('connected')
+        onKeyStatusChange(providerId, 'connected')
         setApiKey('')
-        addToast({ type: 'success', message: 'API key saved and verified' })
+        addToast({ type: 'success', message: `${providerDef.shortName} API key saved and verified` })
       } else {
-        setKeyStatus('disconnected')
-        addToast({ type: 'error', message: 'Invalid API key' })
+        onKeyStatusChange(providerId, 'disconnected')
+        addToast({ type: 'error', message: `Invalid ${providerDef.shortName} API key` })
       }
     } catch (err) {
-      setKeyStatus('disconnected')
-      addToast({ type: 'error', message: err.message || 'Failed to verify API key' })
+      onKeyStatusChange(providerId, 'disconnected')
+      addToast({ type: 'error', message: err.message || `Failed to verify ${providerDef.shortName} API key` })
     } finally {
       setIsTesting(false)
     }
@@ -61,25 +65,175 @@ export default function SettingsPage() {
 
   const handleClearKey = async () => {
     try {
-      await configApi.update({ gemini_api_key: '' })
+      await configApi.update({ [providerDef.configKey]: '' })
       setApiKey('')
-      setApiKeyConfigured(false)
-      setKeyStatus('disconnected')
-      addToast({ type: 'info', message: 'API key removed' })
+      onKeyStatusChange(providerId, 'disconnected')
+      addToast({ type: 'info', message: `${providerDef.shortName} API key removed` })
     } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Failed to remove API key' })
+      addToast({ type: 'error', message: err.message || `Failed to remove ${providerDef.shortName} API key` })
     }
   }
 
-  const handleClearCache = async () => {
-    try {
-      await systemApi.clearCache()
-      addToast({ type: 'success', message: 'AI starter cache cleared successfully' })
-      systemApi.stats().then(setSystemStats).catch(console.error)
-    } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Failed to clear cache' })
+  return (
+    <div style={{ marginBottom: 'var(--space-5)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
+        <div
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: providerDef.color,
+            flexShrink: 0,
+          }}
+        />
+        <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
+          {providerDef.name}
+        </h3>
+      </div>
+
+      <div className="settings-field">
+        <div className="api-key-input-wrapper">
+          <input
+            id={`${providerId}-api-key-input`}
+            className="input"
+            type={showKey ? 'text' : 'password'}
+            placeholder={providerDef.keyPlaceholder}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <button
+            className="btn btn-ghost btn-icon"
+            onClick={() => setShowKey(!showKey)}
+            title={showKey ? 'Hide key' : 'Show key'}
+          >
+            {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={handleSaveKey}
+            disabled={!apiKey.trim() || isTesting}
+          >
+            {isTesting ? 'Verifying...' : 'Save & Verify'}
+          </button>
+        </div>
+        <div className={`api-key-status ${keyStatus}`}>
+          <span className="api-key-status-dot" />
+          {keyStatus === 'connected'
+            ? 'Connected — AI features enabled'
+            : 'Not configured'}
+        </div>
+        <p className="settings-help">
+          Get your API key from{' '}
+          {providerDef.keyHelpUrl ? (
+            <a
+              href={providerDef.keyHelpUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ color: 'var(--color-accent)', textDecoration: 'underline' }}
+            >
+              {providerDef.keyHelpLabel}
+            </a>
+          ) : null}
+          . Your key is stored locally and never shared.
+        </p>
+      </div>
+
+      {keyStatus === 'connected' && (
+        <div style={{ marginTop: 'var(--space-3)' }}>
+          <button
+            className="btn btn-ghost"
+            onClick={() => setShowConfirmModal(true)}
+            style={{ color: 'var(--color-error)', fontSize: 'var(--text-xs)' }}
+          >
+            <Trash2 size={12} />
+            Remove {providerDef.shortName} Key
+          </button>
+        </div>
+      )}
+
+      <Modal
+        open={showConfirmModal}
+        onClose={() => setShowConfirmModal(false)}
+        title={`Remove ${providerDef.shortName} API Key`}
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setShowConfirmModal(false)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              style={{ background: 'var(--color-error)' }}
+              onClick={() => {
+                handleClearKey()
+                setShowConfirmModal(false)
+              }}
+            >
+              Remove
+            </button>
+          </>
+        }
+      >
+        <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
+          Are you sure you want to remove your saved {providerDef.name} API Key?
+        </p>
+      </Modal>
+    </div>
+  )
+}
+
+export default function SettingsPage() {
+  const { addToast, theme, toggleTheme, model, setModel, fetchAvailableModels, availableModels } = useAppStore()
+  const isMac = typeof window !== 'undefined' && navigator.userAgent.includes('Mac')
+  const [systemStats, setSystemStats] = useState(null)
+  const [profileText, setProfileText] = useState('')
+  const [isSavingProfile, setIsSavingProfile] = useState(false)
+
+  // Per-provider key status — initialized dynamically from fetched providers
+  const [keyStatuses, setKeyStatuses] = useState({})
+  const [providerDefs, setProviderDefs] = useState(DEFAULT_PROVIDER_DEFS)
+
+  const handleKeyStatusChange = useCallback((providerId, status) => {
+    setKeyStatuses((prev) => ({ ...prev, [providerId]: status }))
+    // Refresh available models whenever a key status changes
+    fetchAvailableModels()
+    // Update the global store
+    const newConfigured = {}
+    const updated = { ...keyStatuses, [providerId]: status }
+    for (const [id, s] of Object.entries(updated)) {
+      newConfigured[id] = s === 'connected'
     }
-  }
+    useAppStore.getState().setApiKeysConfigured(newConfigured)
+  }, [keyStatuses, fetchAvailableModels])
+
+  useEffect(() => {
+    // Fetch provider definitions and available models
+    configApi.getAvailableModels().then((data) => {
+      if (data.providers && data.providers.length > 0) {
+        setProviderDefs(data.providers)
+      }
+    }).catch(() => {})
+
+    configApi.get().then((config) => {
+      const statuses = {}
+      if (config.api_keys_configured) {
+        for (const [providerId, configured] of Object.entries(config.api_keys_configured)) {
+          statuses[providerId] = configured ? 'connected' : 'disconnected'
+        }
+      } else if (config.api_key_configured) {
+        statuses.gemini = 'connected'
+      }
+      setKeyStatuses(statuses)
+      const configuredMap = {}
+      for (const [id, s] of Object.entries(statuses)) {
+        configuredMap[id] = s === 'connected'
+      }
+      useAppStore.getState().setApiKeysConfigured(configuredMap)
+    }).catch(() => {})
+
+    fetchAvailableModels()
+    systemApi.stats().then(setSystemStats).catch(console.error)
+    profileApi.get().then(res => setProfileText(res.profileText || '')).catch(console.error)
+  }, [fetchAvailableModels])
 
   const handleSaveProfile = async () => {
     setIsSavingProfile(true)
@@ -94,89 +248,59 @@ export default function SettingsPage() {
     }
   }
 
+  const handleClearCache = async () => {
+    try {
+      await systemApi.clearCache()
+      addToast({ type: 'success', message: 'AI starter cache cleared successfully' })
+      systemApi.stats().then(setSystemStats).catch(console.error)
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to clear cache' })
+    }
+  }
+
   const handleExportGuide = () => {
     window.open(guideContentApi.exportUrl(), '_blank')
   }
+
+  // Flatten available models for easy display
+  const allModels = availableModels.flatMap(group =>
+    group.models.map(m => ({ ...m, providerColor: group.provider.color, providerName: group.provider.name }))
+  )
+
+  // Determine active providers for About section
+  const activeProviders = Object.entries(keyStatuses)
+    .filter(([, s]) => s === 'connected')
+    .map(([id]) => {
+      const def = providerDefs.find(p => p.id === id)
+      return def?.name || id
+    })
 
   return (
     <div className="page-wrapper" id="settings-page">
       <div className="page-header">
         <h1 className="page-title">Settings</h1>
         <p className="page-description">
-          Configure your Toolbox instance, manage your API key, and customize your experience.
+          Configure your Toolbox instance, manage your API keys, and customize your experience.
         </p>
       </div>
 
       <div className="settings-content">
-        {/* API Key Section */}
+        {/* API Keys Section */}
         <div className="settings-section">
-          <h2 className="settings-section-title">Gemini API Key</h2>
+          <h2 className="settings-section-title">AI Provider API Keys</h2>
           <p className="settings-section-desc">
-            Required for AI-powered features: Guide chat, architecture verification, and flashcard generation.
+            Configure API keys for AI-powered features. Add keys for one or more providers — models will appear based on which keys are configured.
           </p>
 
-          <div className="settings-field">
-            <label className="settings-label" htmlFor="api-key-input">API Key</label>
-            <div className="api-key-input-wrapper">
-              <input
-                id="api-key-input"
-                className="input"
-                type={showKey ? 'text' : 'password'}
-                placeholder="AIza..."
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-              />
-              <button
-                className="btn btn-ghost btn-icon"
-                onClick={() => setShowKey(!showKey)}
-                title={showKey ? 'Hide key' : 'Show key'}
-              >
-                {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSaveKey}
-                disabled={!apiKey.trim() || isTesting}
-              >
-                {isTesting ? 'Verifying...' : 'Save & Verify'}
-              </button>
-            </div>
-            <div className={`api-key-status ${keyStatus}`}>
-              <span className="api-key-status-dot" />
-              {keyStatus === 'connected'
-                ? 'Connected — AI features are enabled'
-                : 'Not configured — AI features are disabled'}
-            </div>
-            <p className="settings-help">
-              Get your API key from{' '}
-              <a
-                href="https://aistudio.google.com/apikey"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ color: 'var(--color-accent)', textDecoration: 'underline' }}
-              >
-                Google AI Studio
-              </a>
-              . Your key is stored locally on this server and never shared.
-            </p>
-          </div>
-
-          {apiKeyConfigured && (
-            <div style={{ marginTop: 'var(--space-6)', borderTop: '1px solid var(--color-border)', paddingTop: 'var(--space-4)' }}>
-              <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-error)', marginBottom: 'var(--space-1)' }}>Danger Zone</h3>
-              <p style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', marginBottom: 'var(--space-3)' }}>
-                Permanently remove your saved credentials.
-              </p>
-              <button
-                className="btn btn-ghost"
-                onClick={() => setShowConfirmModal(true)}
-                style={{ color: 'var(--color-error)' }}
-              >
-                <Trash2 size={14} />
-                Remove API Key
-              </button>
-            </div>
-          )}
+          {providerDefs.map((def) => (
+            <ProviderKeySection
+              key={def.id}
+              providerId={def.id}
+              providerDef={def}
+              keyStatus={keyStatuses[def.id] || 'disconnected'}
+              onKeyStatusChange={handleKeyStatusChange}
+            />
+          ))}
         </div>
 
         <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
@@ -185,7 +309,7 @@ export default function SettingsPage() {
         <div className="settings-section">
           <h2 className="settings-section-title">AI Shadow Memory</h2>
           <p className="settings-section-desc">
-            The AI learns facts about you over time (e.g., "Interviewing at Google in 2 weeks") to tailor its explanations. You can view or manually edit its memory here.
+            The AI learns facts about you over time (e.g., &quot;Interviewing at Google in 2 weeks&quot;) to tailor its explanations. You can view or manually edit its memory here.
           </p>
 
           <textarea
@@ -212,43 +336,76 @@ export default function SettingsPage() {
         <div className="settings-section">
           <h2 className="settings-section-title">AI Model</h2>
           <p className="settings-section-desc">
-            Choose which Gemini model to use for AI chat and content generation.
+            Choose which AI model to use for chat and content generation. Available models depend on your configured API keys.
           </p>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
-            {AVAILABLE_MODELS.map((m) => (
-              <label
-                key={m.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--space-3)',
-                  padding: 'var(--space-3)',
-                  borderRadius: 'var(--radius-md)',
-                  border: `1px solid ${model === m.id ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                  background: model === m.id ? 'var(--color-accent-subtle)' : 'var(--color-surface)',
-                  cursor: 'pointer',
-                  transition: 'all var(--duration-fast)',
-                }}
-              >
-                <input
-                  type="radio"
-                  name="model"
-                  value={m.id}
-                  checked={model === m.id}
-                  onChange={() => {
-                    setModel(m.id)
-                    addToast({ type: 'info', message: `Model switched to ${m.name}` })
-                  }}
-                  style={{ accentColor: 'var(--color-accent)' }}
-                />
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }}>{m.name}</div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>{m.description}</div>
+          {allModels.length === 0 ? (
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', fontStyle: 'italic', marginTop: 'var(--space-3)' }}>
+              No models available. Configure at least one API key above.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+              {/* Group by provider */}
+              {availableModels.map((group) => (
+                <div key={group.provider.id}>
+                  <div style={{
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    textTransform: 'uppercase',
+                    color: group.provider.color,
+                    letterSpacing: '0.05em',
+                    marginBottom: 'var(--space-1)',
+                    marginTop: 'var(--space-2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 'var(--space-1)',
+                  }}>
+                    <span style={{
+                      width: 6,
+                      height: 6,
+                      borderRadius: '50%',
+                      background: group.provider.color,
+                      display: 'inline-block',
+                    }} />
+                    {group.provider.name}
+                  </div>
+                  {group.models.map((m) => (
+                    <label
+                      key={m.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 'var(--space-3)',
+                        padding: 'var(--space-3)',
+                        borderRadius: 'var(--radius-md)',
+                        border: `1px solid ${model === m.id ? group.provider.color : 'var(--color-border)'}`,
+                        background: model === m.id ? 'var(--color-accent-subtle)' : 'var(--color-surface)',
+                        cursor: 'pointer',
+                        transition: 'all var(--duration-fast)',
+                        marginBottom: 'var(--space-1)',
+                      }}
+                    >
+                      <input
+                        type="radio"
+                        name="model"
+                        value={m.id}
+                        checked={model === m.id}
+                        onChange={() => {
+                          setModel(m.id)
+                          addToast({ type: 'info', message: `Model switched to ${m.name}` })
+                        }}
+                        style={{ accentColor: group.provider.color }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }}>{m.name}</div>
+                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>{m.description}</div>
+                      </div>
+                    </label>
+                  ))}
                 </div>
-              </label>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
@@ -384,7 +541,7 @@ export default function SettingsPage() {
             {[
               ['Version', '0.2.0'],
               ['Storage', 'SQLite (local)'],
-              ['AI Backend', 'Google Gemini'],
+              ['AI Providers', activeProviders.length > 0 ? activeProviders.join(', ') : 'None configured'],
               ['Active Model', model],
             ].map(([label, value]) => (
               <div key={label} className="about-list-item">
@@ -395,33 +552,6 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
-
-      <Modal
-        open={showConfirmModal}
-        onClose={() => setShowConfirmModal(false)}
-        title="Remove API Key"
-        footer={
-          <>
-            <button className="btn btn-secondary" onClick={() => setShowConfirmModal(false)}>
-              Cancel
-            </button>
-            <button
-              className="btn btn-primary"
-              style={{ background: 'var(--color-error)' }}
-              onClick={() => {
-                handleClearKey()
-                setShowConfirmModal(false)
-              }}
-            >
-              Remove
-            </button>
-          </>
-        }
-      >
-        <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
-          Are you sure you want to remove your saved Gemini API Key?
-        </p>
-      </Modal>
     </div>
   )
 }

@@ -425,7 +425,7 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
             <div className="empty-state-description" style={{ fontSize: 'var(--text-xs)' }}>
               {apiKeyConfigured
                 ? 'Type a question below to get started.'
-                : 'Add your Gemini API key in Settings to enable AI features.'}
+                : 'Add your API key in Settings to enable AI features.'}
             </div>
             {apiKeyConfigured && (
               <div className="starter-prompts" data-testid="starter-prompts" style={{ marginTop: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>

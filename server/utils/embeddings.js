@@ -16,6 +16,9 @@ function getGenAI() {
 
 /**
  * Generates an embedding for a given text using gemini-embedding-2.
+ * 
+ * NOTE: Embeddings are always Gemini-only. Claude does not offer an embedding model.
+ * This function always uses the Gemini API key regardless of which chat model is selected.
  */
 export async function generateEmbedding(text) {
   if (!text || text.trim() === '') return [];

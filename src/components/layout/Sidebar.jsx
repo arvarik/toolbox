@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import {
   MessageSquare,
@@ -37,9 +38,16 @@ export default function Sidebar() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const model = useAppStore((s) => s.model)
   const setModel = useAppStore((s) => s.setModel)
+  const availableModels = useAppStore((s) => s.availableModels)
+  const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
   const location = useLocation()
 
   const isMobile = useIsMobile()
+
+  // Fetch available models on mount
+  useEffect(() => {
+    fetchAvailableModels()
+  }, [fetchAvailableModels])
 
   return (
     <aside className={`sidebar${collapsed ? ' collapsed' : ''}${isMobile ? ' hidden-mobile' : ''}`} id="app-sidebar">
@@ -101,8 +109,17 @@ export default function Sidebar() {
                 cursor: 'pointer'
               }}
             >
-              <option value="gemini-3.5-flash">Gemini 3.5 Flash</option>
-              <option value="gemini-3.1-pro-preview">Gemini 3.1 Pro (High)</option>
+              {availableModels.length > 0 ? (
+                availableModels.map((group) => (
+                  <optgroup key={group.provider.id} label={group.provider.name}>
+                    {group.models.map((m) => (
+                      <option key={m.id} value={m.id}>{m.name}</option>
+                    ))}
+                  </optgroup>
+                ))
+              ) : (
+                <option value={model}>{model}</option>
+              )}
             </select>
           </div>
         )}

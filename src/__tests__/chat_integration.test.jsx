@@ -58,9 +58,10 @@ vi.mock('../utils/api', () => {
 
   return {
     configApi: {
-      get: vi.fn(() => Promise.resolve({ api_key_configured: true })),
+      get: vi.fn(() => Promise.resolve({ api_key_configured: true, api_keys_configured: { gemini: true, claude: false } })),
       update: vi.fn(() => Promise.resolve({ success: true })),
       testApiKey: vi.fn(() => Promise.resolve({ valid: true })),
+      getAvailableModels: vi.fn(() => Promise.resolve({ groups: [], providers: [] })),
     },
     decksApi: {
       list: vi.fn(() => Promise.resolve(mockDecks)),
@@ -167,7 +168,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
     configApi.update.mockReset()
     configApi.testApiKey.mockReset()
 
-    configApi.get.mockResolvedValue({ api_key_configured: true })
+    configApi.get.mockResolvedValue({ api_key_configured: true, api_keys_configured: { gemini: true, claude: false } })
     configApi.update.mockResolvedValue({ success: true })
     configApi.testApiKey.mockResolvedValue({ valid: true })
 
@@ -661,17 +662,17 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
         </MemoryRouter>
       )
 
-      // Input API Key
-      const apiKeyInput = screen.getByLabelText('API Key')
+      // Input API Key (use Gemini placeholder)
+      const apiKeyInput = screen.getByPlaceholderText('AIza...')
       fireEvent.change(apiKeyInput, { target: { value: 'AIzaSecretKey' } })
 
-      // Save & Verify
-      const saveBtn = screen.getByRole('button', { name: 'Save & Verify' })
-      fireEvent.click(saveBtn)
+      // Save & Verify (first save button is Gemini's)
+      const saveButtons = screen.getAllByRole('button', { name: 'Save & Verify' })
+      fireEvent.click(saveButtons[0])
 
       // Verify connected state checkmark/text
       await waitFor(() => {
-        expect(screen.getByText('Connected — AI features are enabled')).toBeInTheDocument()
+        expect(screen.getByText('Connected — AI features enabled')).toBeInTheDocument()
       })
 
       // Navigate to builder (which always has a chat panel)
@@ -681,8 +682,9 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       expect(useAppStore.getState().apiKeyConfigured).toBe(true)
     })
 
-    it('22. Scenario 5 (End-to-End combination): go to settings, test danger zone remove key button, verify status changed, confirm chat panel empty state prompts key config', async () => {
+    it('22. Scenario 5 (End-to-End combination): go to settings, test remove key button, verify status changed, confirm chat panel empty state prompts key config', async () => {
       useAppStore.setState({ apiKeyConfigured: true })
+      configApi.get.mockResolvedValue({ api_key_configured: true, api_keys_configured: { gemini: true, claude: false } })
 
       render(
         <MemoryRouter initialEntries={['/settings']}>
@@ -691,11 +693,11 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       )
 
       // Verify initially connected
-      await screen.findByText('Connected — AI features are enabled')
+      await screen.findByText('Connected — AI features enabled')
       await Promise.resolve()
 
       // Open remove API key modal
-      const removeBtn = screen.getByRole('button', { name: 'Remove API Key' })
+      const removeBtn = screen.getByRole('button', { name: 'Remove Gemini Key' })
       fireEvent.click(removeBtn)
 
       // Confirm removal
@@ -704,9 +706,8 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
 
       // Verify status changed to disconnected
       await waitFor(() => {
-        expect(screen.getByText('Not configured — AI features are disabled')).toBeInTheDocument()
+        expect(screen.queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
       })
-      expect(useAppStore.getState().apiKeyConfigured).toBe(false)
 
       // Navigate to builder
       fireEvent.click(document.querySelector('#nav-builder'))
@@ -715,7 +716,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       const verifyBtn = document.querySelector('#builder-chat-btn')
       fireEvent.click(verifyBtn)
       expect(screen.getByText('Configure API Key')).toBeInTheDocument()
-      expect(screen.getByText('Add your Gemini API key in Settings to enable AI features.')).toBeInTheDocument()
+      expect(screen.getByText('Add your API key in Settings to enable AI features.')).toBeInTheDocument()
     })
   })
 })

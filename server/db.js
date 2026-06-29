@@ -191,6 +191,13 @@ function migrate() {
     }
   }
 
+  // Board position column (additive — safe to re-run)
+  try {
+    db.exec(`ALTER TABLE boards ADD COLUMN position INTEGER DEFAULT 0`)
+  } catch {
+    // Column already exists — ignore
+  }
+
   // Reverse card tracking columns (additive — safe to re-run)
   const reverseColumns = [
     ['is_reverse', 'INTEGER DEFAULT 0'],
@@ -207,17 +214,11 @@ function migrate() {
 
 migrate()
 
-// Seed Gemini API key from environment variable if present and not already stored
-if (process.env.GEMINI_API_KEY) {
-  const existing = db.prepare("SELECT value FROM config WHERE key = 'gemini_api_key'").get()
-  if (!existing?.value) {
-    db.prepare(`
-      INSERT INTO config (key, value, updated_at)
-      VALUES ('gemini_api_key', ?, datetime('now'))
-      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run(process.env.GEMINI_API_KEY)
-    logger.info('[db] Seeded Gemini API key from environment')
-  }
-}
+// Seed API keys from environment variables for all registered providers.
+// This iterates over PROVIDER_CLASSES and checks each provider's envKey.
+// Adding a new provider to the registry automatically handles seeding.
+import { seedApiKeysFromEnv } from './providers/index.js'
+seedApiKeysFromEnv()
 
 export default db
+

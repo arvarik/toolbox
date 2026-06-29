@@ -1,34 +1,44 @@
 import { Router } from 'express'
 import db from '../db.js'
+import {
+  getAvailableModels,
+  getApiKeyStatus,
+  getProviderByIdWithKey,
+  getProviderDefinitions,
+  getApiKeyFields,
+} from '../providers/index.js'
 
 const router = Router()
 
 /**
  * GET /api/config
- * Returns all config values (with API key masked).
+ * Returns all config values (with API keys masked) and provider status.
  */
 router.get('/', (req, res) => {
   const rows = db.prepare('SELECT key, value FROM config').all()
+  const apiKeyFields = getApiKeyFields()
   const config = {}
   for (const row of rows) {
-    if (row.key === 'gemini_api_key') {
+    if (apiKeyFields.includes(row.key)) {
       // Mask the key for client display
       config[row.key] = row.value ? `${row.value.slice(0, 8)}...${row.value.slice(-4)}` : ''
-      config.api_key_configured = !!row.value
     } else {
       config[row.key] = row.value
     }
   }
+  // Add per-provider key status
+  config.api_keys_configured = getApiKeyStatus()
+  // Backward compat: api_key_configured is true if ANY provider is configured
+  config.api_key_configured = Object.values(config.api_keys_configured).some(Boolean)
   res.json(config)
 })
 
 /**
  * PUT /api/config
  * Update configuration values.
+ * Accepts any key-value pairs. API key fields are handled alongside other config.
  */
 router.put('/', (req, res) => {
-  const { gemini_api_key, ...rest } = req.body
-
   const upsert = db.prepare(`
     INSERT INTO config (key, value, updated_at)
     VALUES (?, ?, datetime('now'))
@@ -36,10 +46,7 @@ router.put('/', (req, res) => {
   `)
 
   const transaction = db.transaction(() => {
-    if (gemini_api_key !== undefined) {
-      upsert.run('gemini_api_key', gemini_api_key)
-    }
-    for (const [key, value] of Object.entries(rest)) {
+    for (const [key, value] of Object.entries(req.body)) {
       upsert.run(key, String(value))
     }
   })
@@ -50,35 +57,47 @@ router.put('/', (req, res) => {
 
 /**
  * POST /api/config/test-key
- * Test if a Gemini API key is valid.
+ * Test if an API key is valid for a specific provider.
+ * Body: { key: string, provider: 'gemini' | 'claude' | ... }
  */
 router.post('/test-key', async (req, res) => {
-  const { key } = req.body
+  const { key, provider = 'gemini' } = req.body
 
   if (!key) {
     return res.status(400).json({ message: 'API key is required' })
   }
 
   try {
-    // Attempt a simple API call to verify the key
-    const { GoogleGenerativeAI } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(key)
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' })
+    const providerInstance = getProviderByIdWithKey(provider, key)
+    await providerInstance.testApiKey(key)
 
-    // Quick test with a minimal prompt
-    await model.generateContent('Say "ok"')
+    // Derive the config key from the provider's static metadata
+    const providerDefs = getProviderDefinitions()
+    const providerDef = providerDefs.find(p => p.id === provider)
+    const configKey = providerDef ? providerDef.configKey : `${provider}_api_key`
 
     // Save the verified key
     db.prepare(`
       INSERT INTO config (key, value, updated_at)
-      VALUES ('gemini_api_key', ?, datetime('now'))
+      VALUES (?, ?, datetime('now'))
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-    `).run(key)
+    `).run(configKey, key)
 
     res.json({ valid: true })
-  } catch {
-    res.status(400).json({ valid: false, message: 'Invalid API key' })
+  } catch (err) {
+    res.status(400).json({ valid: false, message: err.message || 'Invalid API key' })
   }
+})
+
+/**
+ * GET /api/config/available-models
+ * Returns all available models based on configured API keys, grouped by provider.
+ * Also returns full provider metadata for the settings UI.
+ */
+router.get('/available-models', (req, res) => {
+  const models = getAvailableModels()
+  const providers = getProviderDefinitions()
+  res.json({ providers, groups: models })
 })
 
 export default router

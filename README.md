@@ -61,7 +61,7 @@ Toolbox is a self-hosted web app that brings together everything you need to pre
 git clone https://github.com/arvarik/toolbox.git
 cd toolbox
 cp .env.example .env
-# Add your GEMINI_API_KEY to .env (or configure via the Settings UI)
+# Add your API keys to .env (or configure via the Settings UI)
 docker compose up -d
 ```
 
@@ -100,6 +100,7 @@ npm run dev   # Vite (5173) + Express (3100)
 | `PORT` | `3100` | Server port |
 | `DB_PATH` | `./data/toolbox.db` | SQLite database path |
 | `GEMINI_API_KEY` | — | Gemini API key (can also be set via Settings UI) |
+| `CLAUDE_API_KEY` | — | Claude API key (can also be set via Settings UI) |
 
 All user data lives in a single SQLite file — back it up by copying that file.
 

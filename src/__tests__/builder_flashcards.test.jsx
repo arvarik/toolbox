@@ -79,9 +79,11 @@ vi.mock('../utils/api', () => {
     boardsApi: {
       list: vi.fn(() => Promise.resolve([])),
       get: vi.fn(() => Promise.resolve({})),
-      create: vi.fn(() => Promise.resolve({})),
+      create: vi.fn(() => Promise.resolve({ id: 'board-created', name: 'Untitled Board' })),
       update: vi.fn(() => Promise.resolve({})),
       delete: vi.fn(() => Promise.resolve({})),
+      rename: vi.fn(() => Promise.resolve({})),
+      reorder: vi.fn(() => Promise.resolve([])),
     },
     chatApi: {
       send: vi.fn(() => Promise.resolve({ response: 'AI response content' })),
@@ -222,14 +224,15 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       canvas.getBoundingClientRect = originalGetBoundingClientRect
     })
 
-    it('5. board tab UI navigation/tabs switching', () => {
+    it('5. board tab UI navigation/tabs switching', async () => {
       render(
         <MemoryRouter>
           <BuilderPage />
         </MemoryRouter>
       )
 
-      expect(screen.getByText('Untitled Board')).toBeInTheDocument()
+      // Wait for async board loading (boardsApi.list resolves with [])
+      expect(await screen.findByText('Untitled Board')).toBeInTheDocument()
 
       const newBoardBtn = document.querySelector('#new-board-btn')
       expect(newBoardBtn).toBeInTheDocument()

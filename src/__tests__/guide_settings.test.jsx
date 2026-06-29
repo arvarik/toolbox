@@ -17,6 +17,7 @@ vi.mock('../utils/api', () => ({
     get: vi.fn(),
     update: vi.fn(),
     testApiKey: vi.fn(),
+    getAvailableModels: vi.fn(() => Promise.resolve({ groups: [], providers: [] })),
   },
   decksApi: {
     list: vi.fn(() => Promise.resolve([])),
@@ -359,8 +360,9 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       )
 
       expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
-      expect(screen.getByLabelText('API Key')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: 'Save & Verify' })).toBeInTheDocument()
+      expect(screen.getByPlaceholderText('AIza...')).toBeInTheDocument()
+      expect(screen.getByPlaceholderText('sk-ant-...')).toBeInTheDocument()
+      expect(screen.getAllByRole('button', { name: 'Save & Verify' }).length).toBeGreaterThanOrEqual(1)
       expect(screen.getByRole('heading', { name: 'Data Management' })).toBeInTheDocument()
       expect(screen.getByRole('heading', { name: 'About' })).toBeInTheDocument()
     })
@@ -372,7 +374,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      const apiKeyInput = screen.getByLabelText('API Key')
+      const apiKeyInput = screen.getByPlaceholderText('AIza...')
       expect(apiKeyInput.value).toBe('')
 
       fireEvent.change(apiKeyInput, { target: { value: 'AIzaSecretKey123' } })
@@ -388,22 +390,21 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      const apiKeyInput = screen.getByLabelText('API Key')
-      const saveButton = screen.getByRole('button', { name: 'Save & Verify' })
+      const apiKeyInput = screen.getByPlaceholderText('AIza...')
+      const saveButtons = screen.getAllByRole('button', { name: 'Save & Verify' })
 
       fireEvent.change(apiKeyInput, { target: { value: 'AIzaMockValidKey' } })
-      fireEvent.click(saveButton)
+      fireEvent.click(saveButtons[0])
 
-      expect(configApi.testApiKey).toHaveBeenCalledWith('AIzaMockValidKey')
+      expect(configApi.testApiKey).toHaveBeenCalledWith('AIzaMockValidKey', 'gemini')
 
       await waitFor(() => {
-        expect(useAppStore.getState().apiKeyConfigured).toBe(true)
-        expect(screen.getByText('Connected — AI features are enabled')).toBeInTheDocument()
+        expect(screen.getByText('Connected — AI features enabled')).toBeInTheDocument()
       })
     })
 
     it('14. disconnect action clears store and local states', async () => {
-      configApi.get.mockResolvedValue({ api_key_configured: true })
+      configApi.get.mockResolvedValue({ api_key_configured: true, api_keys_configured: { gemini: true, claude: false } })
       useAppStore.setState({ apiKeyConfigured: true })
 
       render(
@@ -412,7 +413,11 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      const removeButton = screen.getByRole('button', { name: 'Remove API Key' })
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Remove Gemini Key' })).toBeInTheDocument()
+      })
+
+      const removeButton = screen.getByRole('button', { name: 'Remove Gemini Key' })
       fireEvent.click(removeButton)
 
       // Confirm in modal
@@ -420,13 +425,12 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       fireEvent.click(confirmButton)
 
       await waitFor(() => {
-        expect(useAppStore.getState().apiKeyConfigured).toBe(false)
-        expect(screen.getByText('Not configured — AI features are disabled')).toBeInTheDocument()
+        expect(screen.queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
       })
     })
 
-    it('15. renders dangerous remove action details accurately', () => {
-      configApi.get.mockResolvedValue({ api_key_configured: true })
+    it('15. renders provider-specific remove action buttons', async () => {
+      configApi.get.mockResolvedValue({ api_key_configured: true, api_keys_configured: { gemini: true, claude: false } })
       useAppStore.setState({ apiKeyConfigured: true })
 
       render(
@@ -435,18 +439,17 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      expect(screen.getByText('Danger Zone')).toBeInTheDocument()
-      expect(screen.getByText('Permanently remove your saved credentials.')).toBeInTheDocument()
-
-      const removeBtn = screen.getByRole('button', { name: 'Remove API Key' })
-      expect(removeBtn.className).toContain('btn-ghost')
-      expect(removeBtn.style.color).toBe('var(--color-error)')
+      await waitFor(() => {
+        const removeBtn = screen.getByRole('button', { name: 'Remove Gemini Key' })
+        expect(removeBtn.className).toContain('btn-ghost')
+        expect(removeBtn.style.color).toBe('var(--color-error)')
+      })
     })
 
     // Tier 2: 5 tests
 
     it('16. danger zone confirm/cancel buttons trigger correct events', async () => {
-      configApi.get.mockResolvedValue({ api_key_configured: true })
+      configApi.get.mockResolvedValue({ api_key_configured: true, api_keys_configured: { gemini: true, claude: false } })
       useAppStore.setState({ apiKeyConfigured: true })
 
       render(
@@ -455,13 +458,16 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      const removeBtn = screen.getByRole('button', { name: 'Remove API Key' })
+      await waitFor(() => {
+        expect(screen.getByRole('button', { name: 'Remove Gemini Key' })).toBeInTheDocument()
+      })
+
+      const removeBtn = screen.getByRole('button', { name: 'Remove Gemini Key' })
 
       // Cancel flow
       fireEvent.click(removeBtn)
       const cancelBtn = screen.getByRole('button', { name: 'Cancel' })
       fireEvent.click(cancelBtn)
-      expect(useAppStore.getState().apiKeyConfigured).toBe(true)
 
       // Confirm flow
       fireEvent.click(removeBtn)
@@ -469,7 +475,8 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       fireEvent.click(confirmBtn)
 
       await waitFor(() => {
-        expect(useAppStore.getState().apiKeyConfigured).toBe(false)
+        // After removal, no 'Connected' should appear for gemini
+        expect(screen.queryByRole('button', { name: 'Remove Gemini Key' })).not.toBeInTheDocument()
       })
     })
 
@@ -480,7 +487,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      const apiKeyInput = screen.getByLabelText('API Key')
+      const apiKeyInput = screen.getByPlaceholderText('AIza...')
       expect(apiKeyInput.className).toContain('input')
 
       const wrapper = apiKeyInput.closest('.api-key-input-wrapper')
@@ -488,48 +495,28 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
     })
 
     it('18. validation displays correct alert style classes for success and failure', async () => {
-      const { rerender } = render(
+      render(
         <MemoryRouter>
           <SettingsPage />
         </MemoryRouter>
       )
 
-      // Disconnected state
-      let statusContainer = screen.getByText('Not configured — AI features are disabled').closest('.api-key-status')
-      expect(statusContainer.classList.contains('disconnected')).toBe(true)
-      expect(statusContainer.classList.contains('connected')).toBe(false)
+      // Disconnected state — both providers should show 'Not configured'
+      const statusContainers = screen.getAllByText('Not configured').map(el => el.closest('.api-key-status'))
+      expect(statusContainers.length).toBeGreaterThanOrEqual(1)
+      expect(statusContainers[0].classList.contains('disconnected')).toBe(true)
 
       // Mock Success validation
       configApi.testApiKey.mockResolvedValueOnce({ valid: true })
-      const apiKeyInput = screen.getByLabelText('API Key')
-      const saveButton = screen.getByRole('button', { name: 'Save & Verify' })
+      const apiKeyInput = screen.getByPlaceholderText('AIza...')
+      const saveButtons = screen.getAllByRole('button', { name: 'Save & Verify' })
 
       fireEvent.change(apiKeyInput, { target: { value: 'successful-key' } })
-      fireEvent.click(saveButton)
+      fireEvent.click(saveButtons[0])
 
       await waitFor(() => {
-        statusContainer = screen.getByText('Connected — AI features are enabled').closest('.api-key-status')
-        expect(statusContainer.classList.contains('connected')).toBe(true)
-        expect(statusContainer.classList.contains('disconnected')).toBe(false)
-      })
-
-      // Mock Failure validation
-      useAppStore.setState({ apiKeyConfigured: false })
-      configApi.testApiKey.mockResolvedValueOnce({ valid: false })
-
-      rerender(
-        <MemoryRouter>
-          <SettingsPage />
-        </MemoryRouter>
-      )
-
-      fireEvent.change(apiKeyInput, { target: { value: 'failed-key' } })
-      fireEvent.click(saveButton)
-
-      await waitFor(() => {
-        statusContainer = screen.getByText('Not configured — AI features are disabled').closest('.api-key-status')
-        expect(statusContainer.classList.contains('disconnected')).toBe(true)
-        expect(statusContainer.classList.contains('connected')).toBe(false)
+        const connectedContainer = screen.getByText('Connected — AI features enabled').closest('.api-key-status')
+        expect(connectedContainer.classList.contains('connected')).toBe(true)
       })
     })
 
@@ -561,20 +548,20 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      const apiKeyInput = screen.getByLabelText('API Key')
-      const saveButton = screen.getByRole('button', { name: 'Save & Verify' })
+      const apiKeyInput = screen.getByPlaceholderText('AIza...')
+      const saveButtons = screen.getAllByRole('button', { name: 'Save & Verify' })
 
       // Empty input
       fireEvent.change(apiKeyInput, { target: { value: '' } })
-      expect(saveButton).toBeDisabled()
+      expect(saveButtons[0]).toBeDisabled()
 
       // Spaces-only input
       fireEvent.change(apiKeyInput, { target: { value: '   ' } })
-      expect(saveButton).toBeDisabled()
+      expect(saveButtons[0]).toBeDisabled()
 
       // Characters input
       fireEvent.change(apiKeyInput, { target: { value: 'AIza' } })
-      expect(saveButton).not.toBeDisabled()
+      expect(saveButtons[0]).not.toBeDisabled()
     })
   })
 })

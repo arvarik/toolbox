@@ -66,7 +66,10 @@ async function request(path, options = {}) {
 export const configApi = {
   get: () => request('/config'),
   update: (data) => request('/config', { method: 'PUT', body: data }),
-  testApiKey: (key) => request('/config/test-key', { method: 'POST', body: { key } }),
+  /** Test an API key for a specific provider. provider: 'gemini' | 'claude' */
+  testApiKey: (key, provider = 'gemini') => request('/config/test-key', { method: 'POST', body: { key, provider } }),
+  /** Get all available models based on configured API keys, grouped by provider */
+  getAvailableModels: () => request('/config/available-models'),
 }
 
 /* ---- Decks ---- */
@@ -107,6 +110,8 @@ export const boardsApi = {
   create: (data) => request('/boards', { method: 'POST', body: data }),
   update: (id, data) => request(`/boards/${id}`, { method: 'PUT', body: data }),
   delete: (id) => request(`/boards/${id}`, { method: 'DELETE' }),
+  rename: (id, name) => request(`/boards/${id}/rename`, { method: 'PATCH', body: { name } }),
+  reorder: (ids) => request('/boards/reorder', { method: 'PATCH', body: { ids } }),
 }
 
 /* ---- Chat ---- */

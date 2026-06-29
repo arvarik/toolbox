@@ -15,6 +15,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.107.0",
     "@google/genai": "^2.8.0",
     "@google/generative-ai": "^0.24.1",
     "better-sqlite3": "^12.10.0",
