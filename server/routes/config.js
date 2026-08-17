@@ -3,7 +3,7 @@ import db from '../db.js'
 import {
   getAvailableModels,
   getApiKeyStatus,
-  getProviderByIdWithKey,
+  testProviderKey,
   getProviderDefinitions,
   getApiKeyFields,
   getProviderIdForConfigKey,
@@ -94,8 +94,7 @@ router.post('/test-key', async (req, res) => {
   }
 
   try {
-    const providerInstance = getProviderByIdWithKey(provider, key)
-    await providerInstance.testApiKey(key)
+    await testProviderKey(provider, key)
 
     // Derive the config key from the provider's static metadata
     const providerDefs = getProviderDefinitions()

@@ -20,7 +20,7 @@ import {
   inferModelFamily,
   prettyModelName,
 } from './model_filter.js'
-import { customModelId } from './custom.js'
+import { customModelId } from './defs.js'
 
 /**
  * Persist a discovered model list for a catalog ID.

@@ -23,7 +23,7 @@
 | Icons | `lucide-react` only | Consistent icon set |
 | Backend | Node.js + Express | Simple, matches dev experience |
 | Database | SQLite (`better-sqlite3`) | Self-hostable, zero-config |
-| AI | Google Gemini API | Via `@google/generative-ai` SDK |
+| AI | Vercel AI SDK (`ai`) | Multi-provider: Gemini, Claude, OpenAI, and custom OpenAI-compatible endpoints |
 
 ---
 
