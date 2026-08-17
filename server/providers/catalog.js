@@ -14,7 +14,12 @@
  */
 
 import db from '../db.js'
-import { applyCatalogGuardrails, inferModelFamily, prettyModelName } from './model_filter.js'
+import {
+  applyCatalogGuardrails,
+  keepLatestPerFamily,
+  inferModelFamily,
+  prettyModelName,
+} from './model_filter.js'
 import { customModelId } from './custom.js'
 
 /**
@@ -55,7 +60,9 @@ export function clearCatalog(catalogId) {
 
 /**
  * Normalize raw discovered models into catalog entries for a cloud provider.
- * Applies the modality/recency/alias guardrails first.
+ * Runs the modality/recency/alias guardrails, then reduces the list to
+ * the latest generation of each family (newest Flash, newest Opus,
+ * newest flagship GPT, ...) so pickers stay short and current.
  *
  * @param {string} providerId - 'gemini' | 'claude' | 'openai'
  * @param {Array<{id, name?, description?, releasedAt?}>} rawModels
@@ -64,7 +71,8 @@ export function clearCatalog(catalogId) {
  */
 export function buildProviderCatalogEntries(providerId, rawModels, nowMs = Date.now()) {
   const filtered = applyCatalogGuardrails(rawModels, nowMs)
-  const entries = filtered.map((m) => {
+  const latest = keepLatestPerFamily(providerId, filtered)
+  return latest.map((m) => {
     const family = inferModelFamily(providerId, m.id)
     return {
       id: m.id,
@@ -74,9 +82,6 @@ export function buildProviderCatalogEntries(providerId, rawModels, nowMs = Date.
       releasedAt: m.releasedAt ?? null,
     }
   })
-  // Newest first when timestamps exist; stable order otherwise
-  entries.sort((a, b) => (b.releasedAt || 0) - (a.releasedAt || 0))
-  return entries
 }
 
 /**

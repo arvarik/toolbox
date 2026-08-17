@@ -6,6 +6,9 @@ import {
   baseAliasOf,
   applyCatalogGuardrails,
   inferModelFamily,
+  extractGeneration,
+  isPreviewVariant,
+  keepLatestPerFamily,
   prettyModelName,
   RECENCY_WINDOW_MS,
 } from '../providers/model_filter.js'
@@ -147,15 +150,128 @@ describe('family inference', () => {
     expect(inferModelFamily('claude', 'claude-opus-4-8')).toBe('Opus')
   })
 
-  it('classifies OpenAI families', () => {
-    expect(inferModelFamily('openai', 'gpt-5.1')).toBe('Flagship')
-    expect(inferModelFamily('openai', 'gpt-5.1-mini')).toBe('Mini')
-    expect(inferModelFamily('openai', 'o4-mini')).toBe('Mini')
+  it('classifies OpenAI families including the GPT-5.6 tier names', () => {
+    expect(inferModelFamily('openai', 'gpt-5.6-sol')).toBe('Flagship')
+    expect(inferModelFamily('openai', 'gpt-5.6-terra')).toBe('Balanced')
+    expect(inferModelFamily('openai', 'gpt-5.6-luna')).toBe('Fast')
+    expect(inferModelFamily('openai', 'gpt-5.2')).toBe('Flagship')
+    expect(inferModelFamily('openai', 'gpt-5.2-mini')).toBe('Mini')
+    expect(inferModelFamily('openai', 'gpt-5.2-nano')).toBe('Nano')
     expect(inferModelFamily('openai', 'o3')).toBe('Reasoning')
+  })
+
+  it('classifies Fable and Gemma', () => {
+    expect(inferModelFamily('claude', 'claude-fable-5')).toBe('Fable')
+    expect(inferModelFamily('gemini', 'gemma-4-31b-it')).toBe('Gemma')
   })
 
   it('returns null for unknown providers', () => {
     expect(inferModelFamily('custom', 'llama3.2:3b')).toBe(null)
+  })
+})
+
+describe('generation extraction (extractGeneration)', () => {
+  it('reads dotted and dashed version numbers', () => {
+    expect(extractGeneration('gemini-3.6-flash')).toBe(3.6)
+    expect(extractGeneration('gpt-5.6-sol')).toBe(5.6)
+    expect(extractGeneration('claude-opus-4-8')).toBe(4.8)
+    expect(extractGeneration('claude-opus-5')).toBe(5)
+    expect(extractGeneration('claude-haiku-4-5')).toBe(4.5)
+    expect(extractGeneration('o4-mini')).toBe(4)
+  })
+
+  it('ignores snapshot date suffixes', () => {
+    expect(extractGeneration('claude-opus-4-5-20251101')).toBe(4.5)
+  })
+
+  it('returns null when no version exists', () => {
+    expect(extractGeneration('gemini-flash-latest')).toBe(null)
+    expect(extractGeneration('')).toBe(null)
+  })
+})
+
+describe('preview variant detection (isPreviewVariant)', () => {
+  it('flags preview, experimental, and latest aliases', () => {
+    expect(isPreviewVariant('gemini-3.6-flash-preview-06-17')).toBe(true)
+    expect(isPreviewVariant('gemini-exp-1206')).toBe(true)
+    expect(isPreviewVariant('gemini-flash-latest')).toBe(true)
+    expect(isPreviewVariant('chatgpt-4o-latest')).toBe(true)
+  })
+
+  it('passes stable releases', () => {
+    expect(isPreviewVariant('gemini-3.6-flash')).toBe(false)
+    expect(isPreviewVariant('claude-opus-5')).toBe(false)
+    expect(isPreviewVariant('gpt-5.6-sol')).toBe(false)
+  })
+})
+
+describe('latest-per-family reduction (keepLatestPerFamily)', () => {
+  it('keeps only the newest generation of each Gemini family', () => {
+    const raw = [
+      { id: 'gemini-2.5-flash' },
+      { id: 'gemini-3.5-flash' },
+      { id: 'gemini-3.6-flash' },
+      { id: 'gemini-flash-latest' },
+      { id: 'gemini-2.5-pro' },
+      { id: 'gemini-3.1-pro' },
+      { id: 'gemini-pro-latest' },
+      { id: 'gemini-2.5-flash-lite' },
+      { id: 'gemini-3.5-flash-lite' },
+      { id: 'gemini-flash-lite-latest' },
+    ]
+    const result = keepLatestPerFamily('gemini', raw).map((m) => m.id)
+    expect(result).toEqual(['gemini-3.1-pro', 'gemini-3.6-flash', 'gemini-3.5-flash-lite'])
+  })
+
+  it('keeps only the newest generation of each Claude family', () => {
+    const raw = [
+      { id: 'claude-opus-5' },
+      { id: 'claude-sonnet-5' },
+      { id: 'claude-fable-5' },
+      { id: 'claude-opus-4-8' },
+      { id: 'claude-opus-4-7' },
+      { id: 'claude-sonnet-4-6' },
+      { id: 'claude-opus-4-5-20251101' },
+      { id: 'claude-haiku-4-5' },
+    ]
+    const result = keepLatestPerFamily('claude', raw).map((m) => m.id)
+    expect(result).toEqual(['claude-fable-5', 'claude-opus-5', 'claude-sonnet-5', 'claude-haiku-4-5'])
+  })
+
+  it('keeps only the newest generation of each OpenAI family', () => {
+    const raw = [
+      { id: 'gpt-5.6-sol' },
+      { id: 'gpt-5.6-terra' },
+      { id: 'gpt-5.6-luna' },
+      { id: 'gpt-5.2' },
+      { id: 'gpt-5.1' },
+      { id: 'gpt-5.2-mini' },
+      { id: 'gpt-5.2-nano' },
+      { id: 'o4-mini' },
+    ]
+    const result = keepLatestPerFamily('openai', raw).map((m) => m.id)
+    expect(result).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.2-mini', 'gpt-5.2-nano'])
+  })
+
+  it('prefers stable releases over previews within the same generation', () => {
+    const raw = [
+      { id: 'gemini-3.6-flash' },
+      { id: 'gemini-3.6-flash-preview-06-17' },
+    ]
+    const result = keepLatestPerFamily('gemini', raw).map((m) => m.id)
+    expect(result).toEqual(['gemini-3.6-flash'])
+  })
+
+  it('keeps an alias when its family has no versioned model', () => {
+    const raw = [{ id: 'gemini-pro-latest' }]
+    const result = keepLatestPerFamily('gemini', raw).map((m) => m.id)
+    expect(result).toEqual(['gemini-pro-latest'])
+  })
+
+  it('passes unclassifiable models through unchanged', () => {
+    const raw = [{ id: 'mystery-model-1' }, { id: 'mystery-model-2' }]
+    const result = keepLatestPerFamily('gemini', raw).map((m) => m.id)
+    expect(result).toEqual(['mystery-model-1', 'mystery-model-2'])
   })
 })
 
@@ -187,5 +303,35 @@ describe('credential masking (maskSecret)', () => {
   it('detects masked values so they are never re-saved', () => {
     expect(isMaskedValue('••••1234')).toBe(true)
     expect(isMaskedValue('sk-real-key')).toBe(false)
+  })
+})
+
+describe('specialized non-chat systems are excluded', () => {
+  it('drops music, robotics, research-agent, and computer-use models', () => {
+    expect(isChatModel('lyria-3-clip-preview')).toBe(false)
+    expect(isChatModel('gemini-robotics-er-2-preview')).toBe(false)
+    expect(isChatModel('gemini-2.5-computer-use-preview-10-2025')).toBe(false)
+    expect(isChatModel('deep-research-pro-preview-12-2025')).toBe(false)
+    expect(isChatModel('antigravity-preview-05-2026')).toBe(false)
+  })
+
+  it('does not let specialized models hijack a Gemini family', () => {
+    expect(inferModelFamily('gemini', 'deep-research-pro-preview-12-2025')).toBe(null)
+    expect(inferModelFamily('gemini', 'gemini-3.1-pro')).toBe('Pro')
+  })
+})
+
+describe('suffix-variant collapse within a family', () => {
+  it('keeps the base variant when a sibling only adds a suffix', () => {
+    const raw = [
+      { id: 'gemini-3.1-pro-preview' },
+      { id: 'gemini-3.1-pro-preview-customtools' },
+    ]
+    const result = keepLatestPerFamily('gemini', raw).map((m) => m.id)
+    expect(result).toEqual(['gemini-3.1-pro-preview'])
+  })
+
+  it('drops the Nano Banana image line entirely', () => {
+    expect(isChatModel('nano-banana-pro-preview')).toBe(false)
   })
 })

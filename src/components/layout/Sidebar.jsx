@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import PomodoroWidget from './PomodoroWidget'
+import ModelPicker from '../shared/ModelPicker'
 import useIsMobile from '../../hooks/useIsMobile'
 
 const navItems = [
@@ -36,9 +37,6 @@ const bottomItems = [
 export default function Sidebar() {
   const collapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
-  const model = useAppStore((s) => s.model)
-  const setModel = useAppStore((s) => s.setModel)
-  const availableModels = useAppStore((s) => s.availableModels)
   const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
   const location = useLocation()
 
@@ -94,53 +92,7 @@ export default function Sidebar() {
         {!collapsed && (
           <div style={{ padding: '0 var(--space-4)', marginBottom: 'var(--space-2)' }}>
             <div className="sidebar-section-label" style={{ marginBottom: '4px' }}>Model</div>
-            {availableModels.some((g) => g.models.length > 0) ? (
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                id="sidebar-model-select"
-                style={{
-                  width: '100%',
-                  background: 'var(--color-surface)',
-                  color: 'var(--color-text-secondary)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '4px 8px',
-                  fontSize: '11px',
-                  outline: 'none',
-                  cursor: 'pointer'
-                }}
-              >
-                {availableModels
-                  .filter((group) => group.models.length > 0)
-                  .map((group) => (
-                    <optgroup key={group.provider.id} label={group.provider.name}>
-                      {group.models.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}{m.family ? ` · ${m.family}` : ''}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-              </select>
-            ) : (
-              <NavLink
-                to="/settings"
-                id="sidebar-model-empty-state"
-                aria-label="Add an AI provider"
-                style={{
-                  display: 'block',
-                  fontSize: '11px',
-                  color: 'var(--color-text-tertiary)',
-                  border: '1px dashed var(--color-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '4px 8px',
-                  textDecoration: 'none',
-                }}
-              >
-                Add a provider in Settings →
-              </NavLink>
-            )}
+            <ModelPicker variant="sidebar" />
           </div>
         )}
 

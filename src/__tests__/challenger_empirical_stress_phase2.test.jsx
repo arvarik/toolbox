@@ -145,7 +145,7 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
 
     // Verify UI shows connected
     await waitFor(() => {
-      expect(screen.getByText('Connected — AI features enabled')).toBeInTheDocument()
+      expect(screen.getByText('Connected')).toBeInTheDocument()
     })
 
     // 2. Click Remove Gemini Key
@@ -158,7 +158,7 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
 
     // State becomes disconnected in frontend
     await waitFor(() => {
-      expect(screen.queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
+      expect(screen.queryByText('Connected')).not.toBeInTheDocument()
     })
 
     // Assert that API call was made to backend configApi.update to clear the key

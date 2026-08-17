@@ -39,9 +39,17 @@ const NON_CHAT_PATTERNS = [
   /veo/i,
   /-image/i,
   /image-generation/i,
+  /banana/i, // Google's "Nano Banana" image-generation line
   // Moderation & safety classifiers
   /moderation/i,
   /guard/i,
+  // Specialized non-chat systems (music, robotics, agentic research,
+  // computer-use automation, IDE-specific endpoints)
+  /lyria/i,
+  /robotics/i,
+  /computer-use/i,
+  /deep-research/i,
+  /antigravity/i,
   // Legacy completion-only engines
   /babbage/i,
   /davinci/i,
@@ -132,33 +140,149 @@ export function applyCatalogGuardrails(models, nowMs = Date.now()) {
 
 /**
  * Infer the marketing family of a model from its ID.
- * Used for display grouping/labels in pickers.
+ * Used for display grouping/labels and for the latest-per-family
+ * reduction below.
  *
  * @param {string} providerId - 'gemini' | 'claude' | 'openai' | other
  * @param {string} modelId
- * @returns {string|null} Family label (e.g. 'Flash', 'Sonnet', 'Reasoning') or null
+ * @returns {string|null} Family label (e.g. 'Flash', 'Sonnet', 'Flagship') or null
  */
 export function inferModelFamily(providerId, modelId) {
   const id = (modelId || '').toLowerCase()
   if (providerId === 'gemini') {
+    // Family names only apply to the core Gemini/Gemma lines — a stray
+    // 'pro' or 'flash' in a specialized model ID must not hijack a family.
+    if (id.startsWith('gemma')) return 'Gemma'
+    if (!id.startsWith('gemini')) return null
     if (id.includes('flash-lite')) return 'Flash-Lite'
     if (id.includes('flash')) return 'Flash'
     if (id.includes('pro')) return 'Pro'
     return null
   }
   if (providerId === 'claude') {
+    if (id.includes('fable')) return 'Fable'
+    if (id.includes('opus')) return 'Opus'
     if (id.includes('sonnet')) return 'Sonnet'
     if (id.includes('haiku')) return 'Haiku'
-    if (id.includes('opus')) return 'Opus'
     return null
   }
   if (providerId === 'openai') {
-    if (id.includes('mini') || id.includes('nano')) return 'Mini'
+    // GPT-5.6 tier names: sol (flagship), terra (balanced), luna (fast)
+    if (id.includes('-sol')) return 'Flagship'
+    if (id.includes('-terra')) return 'Balanced'
+    if (id.includes('-luna')) return 'Fast'
+    if (id.includes('nano')) return 'Nano'
+    if (id.includes('mini')) return 'Mini'
     if (/^o\d/.test(id)) return 'Reasoning'
-    if (id.startsWith('gpt') || id.startsWith('chatgpt')) return 'Flagship'
+    if (id.includes('codex')) return 'Codex'
+    if (id.startsWith('chatgpt')) return 'Chat'
+    if (id.startsWith('gpt')) return 'Flagship'
     return null
   }
   return null
+}
+
+/** Display/sort order of families per provider (unknown families sort last). */
+const FAMILY_ORDER = {
+  gemini: ['Pro', 'Flash', 'Flash-Lite', 'Gemma'],
+  claude: ['Fable', 'Opus', 'Sonnet', 'Haiku'],
+  openai: ['Flagship', 'Balanced', 'Fast', 'Mini', 'Nano', 'Reasoning', 'Codex', 'Chat'],
+}
+
+/**
+ * Extract a comparable generation number from a model ID.
+ * 'gemini-3.6-flash' → 3.6, 'claude-opus-4-8' → 4.8, 'gpt-5.6-sol' → 5.6,
+ * 'o4-mini' → 4, 'gemini-flash-latest' → null.
+ *
+ * Snapshot suffixes are stripped first so date digits never win, and
+ * Claude's dash-separated versions normalize to dots before matching.
+ *
+ * @param {string} modelId
+ * @returns {number|null}
+ */
+export function extractGeneration(modelId) {
+  if (!modelId) return null
+  const base = baseAliasOf(modelId).replace(/(\d)-(\d)/g, '$1.$2')
+  const match = base.match(/\d+(?:\.\d+)?/)
+  if (!match) return null
+  const value = parseFloat(match[0])
+  return Number.isNaN(value) ? null : value
+}
+
+/** Matches preview/experimental/floating-alias variants. */
+const PREVIEW_VARIANT_RE = /preview|exp\b|experimental|-latest\b|latest$/i
+
+/**
+ * Check if a model ID looks like a preview/experimental/alias variant
+ * rather than a stable release.
+ * @param {string} modelId
+ * @returns {boolean}
+ */
+export function isPreviewVariant(modelId) {
+  return PREVIEW_VARIANT_RE.test(modelId || '')
+}
+
+/**
+ * Reduce a model list to the latest generation of each family.
+ *
+ * The heuristic behind the picker: users want "the newest Flash, the
+ * newest Opus, the newest flagship GPT" — not every generation that
+ * happens to be under a year old. For each family:
+ *   1. Find the highest generation number among its models.
+ *   2. Keep only models of that generation.
+ *   3. When both stable and preview/alias variants remain, keep stable.
+ * Models without any version number (e.g. 'gemini-flash-latest') are
+ * kept only when their family has no versioned model at all.
+ * Unclassifiable models (family null) pass through unchanged.
+ *
+ * The result is sorted by family display order, then generation.
+ *
+ * @param {string} providerId
+ * @param {Array<{id: string}>} models
+ * @returns {Array} The reduced, ordered model list
+ */
+export function keepLatestPerFamily(providerId, models) {
+  const groups = new Map()
+  for (const model of models) {
+    const family = inferModelFamily(providerId, model.id)
+    const key = family ?? '__other__'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(model)
+  }
+
+  const order = FAMILY_ORDER[providerId] || []
+  const sortedKeys = [...groups.keys()].sort((a, b) => {
+    const ia = a === '__other__' ? Infinity : order.indexOf(a) === -1 ? order.length : order.indexOf(a)
+    const ib = b === '__other__' ? Infinity : order.indexOf(b) === -1 ? order.length : order.indexOf(b)
+    return ia - ib
+  })
+
+  const result = []
+  for (const key of sortedKeys) {
+    const group = groups.get(key)
+    if (key === '__other__') {
+      result.push(...group)
+      continue
+    }
+    const versioned = group.filter((m) => extractGeneration(m.id) !== null)
+    let kept
+    if (versioned.length > 0) {
+      const maxGen = Math.max(...versioned.map((m) => extractGeneration(m.id)))
+      kept = versioned.filter((m) => extractGeneration(m.id) === maxGen)
+      const stable = kept.filter((m) => !isPreviewVariant(m.id))
+      if (stable.length > 0) kept = stable
+    } else {
+      kept = group
+    }
+    // Collapse suffix variants: when one kept ID is a prefix of another
+    // ('gemini-3.1-pro-preview' vs 'gemini-3.1-pro-preview-customtools'),
+    // keep the base variant only.
+    kept = kept.filter(
+      (m) => !kept.some((other) => other !== m && m.id.startsWith(`${other.id}-`))
+    )
+    result.push(...kept)
+  }
+  return result
 }
 
 /**

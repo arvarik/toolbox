@@ -102,7 +102,7 @@ describe('safe active-model fallback (appStore.applyModelGroups)', () => {
 
 describe('settings page — provider key management', () => {
   it('renders cards for Gemini, Claude, and OpenAI with portal links', async () => {
-    render(<SettingsPage />)
+    render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     expect(screen.getByText('Google Gemini')).toBeInTheDocument()
     expect(screen.getByText('Anthropic Claude')).toBeInTheDocument()
     expect(screen.getByText('OpenAI')).toBeInTheDocument()
@@ -120,42 +120,40 @@ describe('settings page — provider key management', () => {
   })
 
   it('verifies a key before saving and reports discovered models', async () => {
-    const { container } = render(<SettingsPage />)
+    const { container } = render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     const input = container.querySelector('#openai-api-key-input')
     fireEvent.change(input, { target: { value: 'sk-valid' } })
 
-    const section = input.closest('.settings-field').parentElement
-    fireEvent.click(within(section).getByText('Save & Verify'))
+    const card = container.querySelector('#provider-card-openai')
+    fireEvent.click(within(card).getByText('Save & Verify'))
 
     await waitFor(() => {
       expect(configApi.testApiKey).toHaveBeenCalledWith('sk-valid', 'openai')
     })
     await waitFor(() => {
-      expect(within(section).getByText('Connected — AI features enabled')).toBeInTheDocument()
+      expect(within(card).getByText('Connected')).toBeInTheDocument()
     })
   })
 
-  it('shows a connection error and does not mark connected for invalid keys', async () => {
+  it('shows a connection error pill and does not mark connected for invalid keys', async () => {
     configApi.testApiKey.mockRejectedValueOnce(new Error('Invalid API key'))
-    const { container } = render(<SettingsPage />)
+    const { container } = render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     const input = container.querySelector('#gemini-api-key-input')
     fireEvent.change(input, { target: { value: 'bad-key' } })
 
-    const section = input.closest('.settings-field').parentElement
-    fireEvent.click(within(section).getByText('Save & Verify'))
+    const card = container.querySelector('#provider-card-gemini')
+    fireEvent.click(within(card).getByText('Save & Verify'))
 
     await waitFor(() => {
-      expect(
-        within(section).getByText('Connection error — check your key and try again')
-      ).toBeInTheDocument()
+      expect(within(card).getByText('Error')).toBeInTheDocument()
     })
-    expect(within(section).queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
+    expect(within(card).queryByText('Connected')).not.toBeInTheDocument()
   })
 })
 
 describe('settings page — custom endpoints (BYOM)', () => {
   it('adds an endpoint using the Ollama preset', async () => {
-    const { container } = render(<SettingsPage />)
+    const { container } = render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     const section = container.querySelector('#custom-endpoints-section')
 
     fireEvent.click(within(section).getByText('Add Custom Endpoint'))
@@ -175,7 +173,7 @@ describe('settings page — custom endpoints (BYOM)', () => {
   })
 
   it('tests an endpoint without saving it', async () => {
-    const { container } = render(<SettingsPage />)
+    const { container } = render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     const section = container.querySelector('#custom-endpoints-section')
 
     fireEvent.click(within(section).getByText('Add Custom Endpoint'))
@@ -205,11 +203,11 @@ describe('settings page — custom endpoints (BYOM)', () => {
         models: [{ id: 'custom:ep-1:llama3.2:3b' }, { id: 'custom:ep-1:qwen2.5' }],
       },
     ])
-    render(<SettingsPage />)
+    render(<MemoryRouter><SettingsPage /></MemoryRouter>)
 
     expect(await screen.findByText('Homelab Ollama')).toBeInTheDocument()
     expect(screen.getByText(/••••abcd/)).toBeInTheDocument()
-    expect(screen.getByText('2 models available')).toBeInTheDocument()
+    expect(screen.getByText('2 models')).toBeInTheDocument()
     // The raw key never appears anywhere
     expect(screen.queryByText(/sk-/)).not.toBeInTheDocument()
   })
@@ -225,11 +223,11 @@ describe('settings page — custom endpoints (BYOM)', () => {
         models: [],
       },
     ])
-    render(<SettingsPage />)
+    render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     await screen.findByText('Homelab Ollama')
 
     fireEvent.click(screen.getByLabelText('Remove Homelab Ollama'))
-    fireEvent.click(await screen.findByText('Remove'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove' }))
     await waitFor(() => {
       expect(endpointsApi.delete).toHaveBeenCalledWith('ep-1')
     })
@@ -244,7 +242,7 @@ describe('settings page — model catalog', () => {
       errors: {},
       refreshed: ['gemini'],
     })
-    const { container } = render(<SettingsPage />)
+    const { container } = render(<MemoryRouter><SettingsPage /></MemoryRouter>)
     fireEvent.click(container.querySelector('#refresh-models-btn'))
 
     await waitFor(() => expect(configApi.refreshModels).toHaveBeenCalled())
@@ -253,26 +251,63 @@ describe('settings page — model catalog', () => {
     })
   })
 
-  it('groups models under provider headers with family labels', async () => {
+  it('shows the active model card and opens the picker with grouped models', async () => {
     configApi.getAvailableModels.mockResolvedValue({ groups: [GEMINI_GROUP, CUSTOM_GROUP], providers: [] })
-    render(<SettingsPage />)
+    const { container } = render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    )
 
-    expect(await screen.findByText('Gemini 3.5 Flash')).toBeInTheDocument()
-    expect(screen.getByText('Flash')).toBeInTheDocument()
-    expect(screen.getByText('Llama3.2 3b')).toBeInTheDocument()
-    expect(screen.getAllByText('Homelab Ollama').length).toBeGreaterThan(0)
+    // Active model card reflects the current selection
+    await waitFor(() => {
+      expect(container.querySelector('#active-model-card')).not.toBe(null)
+    })
+    const card = container.querySelector('#active-model-card')
+    expect(within(card).getByText('Gemini 3.5 Flash')).toBeInTheDocument()
+
+    // Open the picker — models appear grouped under provider headers with family chips
+    fireEvent.click(screen.getByRole('button', { name: /change model/i }))
+    const dialog = await screen.findByRole('dialog', { name: 'Select AI model' })
+    expect(within(dialog).getByText('Google Gemini')).toBeInTheDocument()
+    expect(within(dialog).getByText('Homelab Ollama')).toBeInTheDocument()
+    expect(within(dialog).getByText('Gemini 3.1 Pro')).toBeInTheDocument()
+    expect(within(dialog).getByText('Pro')).toBeInTheDocument()
+    expect(within(dialog).getByText('Llama3.2 3b')).toBeInTheDocument()
+  })
+
+  it('filters models with the picker search', async () => {
+    configApi.getAvailableModels.mockResolvedValue({ groups: [GEMINI_GROUP, CUSTOM_GROUP], providers: [] })
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /change model/i }))
+    const dialog = await screen.findByRole('dialog', { name: 'Select AI model' })
+
+    fireEvent.change(within(dialog).getByPlaceholderText('Search models…'), { target: { value: 'llama' } })
+    expect(within(dialog).getByText('Llama3.2 3b')).toBeInTheDocument()
+    expect(within(dialog).queryByText('Gemini 3.5 Flash')).not.toBeInTheDocument()
+
+    fireEvent.change(within(dialog).getByPlaceholderText('Search models…'), { target: { value: 'zzz' } })
+    expect(within(dialog).getByText(/No models match/)).toBeInTheDocument()
   })
 
   it('shows an encouraging empty state when nothing is configured', () => {
-    render(<SettingsPage />)
+    render(
+      <MemoryRouter>
+        <SettingsPage />
+      </MemoryRouter>
+    )
     expect(
       screen.getByText('No models available yet. Add an API key or a custom endpoint above to unlock AI features.')
     ).toBeInTheDocument()
   })
 })
 
-describe('sidebar — grouped model picker', () => {
-  it('groups models by provider including custom endpoints', () => {
+describe('sidebar — model picker', () => {
+  it('shows the active model on the trigger and groups models by provider', async () => {
     configApi.getAvailableModels.mockResolvedValue({ groups: [GEMINI_GROUP, CUSTOM_GROUP], providers: [] })
     useAppStore.setState({ availableModels: [GEMINI_GROUP, CUSTOM_GROUP] })
     const { container } = render(
@@ -281,15 +316,17 @@ describe('sidebar — grouped model picker', () => {
       </MemoryRouter>
     )
 
-    const select = container.querySelector('#sidebar-model-select')
-    const groups = Array.from(select.querySelectorAll('optgroup')).map((g) => g.label)
-    expect(groups).toEqual(['Google Gemini', 'Homelab Ollama'])
+    const trigger = container.querySelector('#model-picker-trigger')
+    expect(trigger).not.toBe(null)
+    expect(within(trigger).getByText('Gemini 3.5 Flash')).toBeInTheDocument()
 
-    const customOption = select.querySelector('option[value="custom:ep-1:llama3.2:3b"]')
-    expect(customOption).not.toBe(null)
+    fireEvent.click(trigger)
+    const dialog = await screen.findByRole('dialog', { name: 'Select AI model' })
+    expect(within(dialog).getByText('Google Gemini')).toBeInTheDocument()
+    expect(within(dialog).getByText('Homelab Ollama')).toBeInTheDocument()
   })
 
-  it('switches the global model from the sidebar', () => {
+  it('switches the global model from the picker', async () => {
     configApi.getAvailableModels.mockResolvedValue({ groups: [GEMINI_GROUP, CUSTOM_GROUP], providers: [] })
     useAppStore.setState({ availableModels: [GEMINI_GROUP, CUSTOM_GROUP] })
     const { container } = render(
@@ -297,22 +334,25 @@ describe('sidebar — grouped model picker', () => {
         <Sidebar />
       </MemoryRouter>
     )
-    fireEvent.change(container.querySelector('#sidebar-model-select'), {
-      target: { value: 'custom:ep-1:llama3.2:3b' },
-    })
+    fireEvent.click(container.querySelector('#model-picker-trigger'))
+    const dialog = await screen.findByRole('dialog', { name: 'Select AI model' })
+    fireEvent.click(within(dialog).getByText('Llama3.2 3b'))
+
     expect(useAppStore.getState().model).toBe('custom:ep-1:llama3.2:3b')
+    // Picker closes after selection
+    expect(screen.queryByRole('dialog', { name: 'Select AI model' })).not.toBeInTheDocument()
   })
 
-  it('links to Settings when no models are configured', () => {
+  it('guides the user to Settings when no models are configured', async () => {
     useAppStore.setState({ availableModels: [] })
     const { container } = render(
       <MemoryRouter>
         <Sidebar />
       </MemoryRouter>
     )
-    expect(container.querySelector('#sidebar-model-select')).toBe(null)
-    const emptyState = container.querySelector('#sidebar-model-empty-state')
-    expect(emptyState).not.toBe(null)
-    expect(emptyState.getAttribute('href')).toBe('/settings')
+    fireEvent.click(container.querySelector('#model-picker-trigger'))
+    const dialog = await screen.findByRole('dialog', { name: 'Select AI model' })
+    expect(within(dialog).getByText('No models yet')).toBeInTheDocument()
+    expect(within(dialog).getByRole('button', { name: /set up providers/i })).toBeInTheDocument()
   })
 })

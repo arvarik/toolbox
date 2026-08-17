@@ -684,7 +684,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
 
       // Verify connected state checkmark/text
       await waitFor(() => {
-        expect(screen.getByText('Connected — AI features enabled')).toBeInTheDocument()
+        expect(screen.getByText('Connected')).toBeInTheDocument()
       })
 
       // Navigate to builder (which always has a chat panel)
@@ -705,7 +705,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       )
 
       // Verify initially connected
-      await screen.findByText('Connected — AI features enabled')
+      await screen.findByText('Connected')
       await Promise.resolve()
 
       // Open remove API key modal
@@ -718,7 +718,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
 
       // Verify status changed to disconnected
       await waitFor(() => {
-        expect(screen.queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
+        expect(screen.queryByText('Connected')).not.toBeInTheDocument()
       })
 
       // Navigate to builder

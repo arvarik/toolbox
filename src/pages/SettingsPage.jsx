@@ -3,6 +3,7 @@ import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon, RefreshCw, Plus, Serv
 import useAppStore from '../stores/appStore'
 import { configApi, systemApi, profileApi, guideContentApi, endpointsApi } from '../utils/api'
 import Modal from '../components/shared/Modal'
+import ModelPicker from '../components/shared/ModelPicker'
 
 /**
  * Default fallback provider config (used before server metadata loads).
@@ -99,20 +100,13 @@ function ProviderKeySection({ providerId, providerDef, keyStatus, maskedKey, onK
   }
 
   return (
-    <div style={{ marginBottom: 'var(--space-5)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 'var(--space-2)' }}>
-        <div
-          style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            background: providerDef.color,
-            flexShrink: 0,
-          }}
-        />
-        <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>
-          {providerDef.name}
-        </h3>
+    <div className="provider-card" id={`provider-card-${providerId}`}>
+      <div className="provider-card-header">
+        <span className="provider-card-dot" style={{ background: providerDef.color }} />
+        <h3 className="provider-card-name">{providerDef.name}</h3>
+        <span className={`status-pill ${keyStatus}`}>
+          {keyStatus === 'connected' ? 'Connected' : keyStatus === 'error' ? 'Error' : 'Not configured'}
+        </span>
       </div>
 
       <div className="settings-field">
@@ -140,14 +134,12 @@ function ProviderKeySection({ providerId, providerDef, keyStatus, maskedKey, onK
             {isTesting ? 'Verifying...' : 'Save & Verify'}
           </button>
         </div>
-        <div className={`api-key-status ${keyStatus}`}>
-          <span className="api-key-status-dot" />
-          {keyStatus === 'connected'
-            ? 'Connected — AI features enabled'
-            : keyStatus === 'error'
-              ? 'Connection error — check your key and try again'
-              : 'Not configured'}
-        </div>
+        {keyStatus === 'error' && (
+          <div className="api-key-status error">
+            <span className="api-key-status-dot" />
+            The key was rejected. Check it and try again.
+          </div>
+        )}
         <p className="settings-help">
           Get your API key from{' '}
           {providerDef.keyHelpUrl ? (
@@ -165,7 +157,7 @@ function ProviderKeySection({ providerId, providerDef, keyStatus, maskedKey, onK
       </div>
 
       {keyStatus === 'connected' && (
-        <div style={{ marginTop: 'var(--space-3)' }}>
+        <div style={{ marginTop: 'var(--space-2)' }}>
           <button
             className="btn btn-ghost"
             onClick={() => setShowConfirmModal(true)}
@@ -329,53 +321,41 @@ function CustomEndpointsSection() {
       )}
 
       {endpoints.map((ep) => (
-        <div
-          key={ep.id}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--space-3)',
-            padding: 'var(--space-3)',
-            borderRadius: 'var(--radius-md)',
-            border: '1px solid var(--color-border)',
-            background: 'var(--color-surface)',
-            marginTop: 'var(--space-3)',
-          }}
-        >
-          <Server size={16} style={{ color: '#8B5CF6', flexShrink: 0 }} />
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }}>
-              {ep.name}
-            </div>
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {ep.baseUrl}
-              {ep.hasApiKey ? ` · key ${ep.apiKeyMasked}` : ''}
-            </div>
-            <div className={`api-key-status ${ep.models.length > 0 ? 'connected' : 'disconnected'}`}>
-              <span className="api-key-status-dot" />
-              {ep.models.length > 0 ? `${ep.models.length} models available` : 'No models discovered yet'}
-            </div>
+        <div key={ep.id} className="provider-card">
+          <div className="provider-card-header" style={{ marginBottom: 'var(--space-1)' }}>
+            <Server size={14} style={{ color: '#8B5CF6', flexShrink: 0 }} />
+            <h3 className="provider-card-name">{ep.name}</h3>
+            <span className={`status-pill ${ep.models.length > 0 ? 'connected' : 'disconnected'}`}>
+              {ep.models.length > 0 ? `${ep.models.length} models` : 'No models'}
+            </span>
           </div>
-          <button
-            className="btn btn-ghost"
-            style={{ fontSize: 'var(--text-xs)' }}
-            onClick={() => handleTestSaved(ep)}
-            disabled={testingId === ep.id}
-          >
-            <RefreshCw size={12} />
-            {testingId === ep.id ? 'Testing...' : 'Test'}
-          </button>
-          <button className="btn btn-ghost" style={{ fontSize: 'var(--text-xs)' }} onClick={() => openEditForm(ep)}>
-            Edit
-          </button>
-          <button
-            className="btn btn-ghost"
-            style={{ color: 'var(--color-error)', fontSize: 'var(--text-xs)' }}
-            onClick={() => setDeleteTarget(ep)}
-            aria-label={`Remove ${ep.name}`}
-          >
-            <Trash2 size={12} />
-          </button>
+          <p className="settings-help" style={{ margin: '0 0 var(--space-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {ep.baseUrl}
+            {ep.hasApiKey ? ` · key ${ep.apiKeyMasked}` : ''}
+          </p>
+          <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap' }}>
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 'var(--text-xs)' }}
+              onClick={() => handleTestSaved(ep)}
+              disabled={testingId === ep.id}
+            >
+              <RefreshCw size={12} />
+              {testingId === ep.id ? 'Testing...' : 'Test'}
+            </button>
+            <button className="btn btn-ghost" style={{ fontSize: 'var(--text-xs)' }} onClick={() => openEditForm(ep)}>
+              Edit
+            </button>
+            <button
+              className="btn btn-ghost"
+              style={{ color: 'var(--color-error)', fontSize: 'var(--text-xs)' }}
+              onClick={() => setDeleteTarget(ep)}
+              aria-label={`Remove ${ep.name}`}
+            >
+              <Trash2 size={12} />
+              Remove
+            </button>
+          </div>
         </div>
       ))}
 
@@ -479,7 +459,7 @@ function CustomEndpointsSection() {
 }
 
 export default function SettingsPage() {
-  const { addToast, theme, toggleTheme, model, setModel, fetchAvailableModels, availableModels } = useAppStore()
+  const { addToast, theme, toggleTheme, model, fetchAvailableModels, availableModels } = useAppStore()
   const isMac = typeof window !== 'undefined' && navigator.userAgent.includes('Mac')
   const [systemStats, setSystemStats] = useState(null)
   const [profileText, setProfileText] = useState('')
@@ -593,6 +573,7 @@ export default function SettingsPage() {
   const allModels = availableModels.flatMap(group =>
     group.models.map(m => ({ ...m, providerColor: group.provider.color, providerName: group.provider.name }))
   )
+  const activeModelInfo = allModels.find((m) => m.id === model)
 
   // Determine active providers for About section
   const activeProviders = Object.entries(keyStatuses)
@@ -681,8 +662,9 @@ export default function SettingsPage() {
             </button>
           </div>
           <p className="settings-section-desc">
-            Choose which AI model to use for chat and content generation. Models are discovered live from your
-            configured providers and endpoints — Refresh Models re-syncs the catalog at any time.
+            One model powers every AI feature — chat, whiteboard reviews, Feynman feedback, and flashcard
+            generation. Catalogs sync with each provider&apos;s latest releases; only the newest generation of
+            each family is shown.
           </p>
 
           {allModels.length === 0 ? (
@@ -690,85 +672,34 @@ export default function SettingsPage() {
               No models available yet. Add an API key or a custom endpoint above to unlock AI features.
             </p>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
-              {/* Group by provider */}
-              {availableModels.map((group) => (
-                <div key={group.provider.id}>
-                  <div style={{
-                    fontSize: '11px',
-                    fontWeight: 600,
-                    textTransform: 'uppercase',
-                    color: group.provider.color,
-                    letterSpacing: '0.05em',
-                    marginBottom: 'var(--space-1)',
-                    marginTop: 'var(--space-2)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--space-1)',
-                  }}>
-                    <span style={{
-                      width: 6,
-                      height: 6,
-                      borderRadius: '50%',
-                      background: group.provider.color,
-                      display: 'inline-block',
-                    }} />
-                    {group.provider.name}
-                  </div>
-                  {group.models.map((m) => (
-                    <label
-                      key={m.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 'var(--space-3)',
-                        padding: 'var(--space-3)',
-                        borderRadius: 'var(--radius-md)',
-                        border: `1px solid ${model === m.id ? group.provider.color : 'var(--color-border)'}`,
-                        background: model === m.id ? 'var(--color-accent-subtle)' : 'var(--color-surface)',
-                        cursor: 'pointer',
-                        transition: 'all var(--duration-fast)',
-                        marginBottom: 'var(--space-1)',
-                      }}
+            <div className="active-model-card" id="active-model-card">
+              <span
+                className="model-trigger-dot"
+                style={{
+                  width: 10,
+                  height: 10,
+                  background: activeModelInfo?.providerColor ?? 'var(--color-text-tertiary)',
+                }}
+              />
+              <div className="active-model-card-info">
+                <div className="active-model-card-name">
+                  {activeModelInfo?.name ?? model}
+                  {activeModelInfo?.family && (
+                    <span
+                      className="model-trigger-family"
+                      style={{ color: activeModelInfo.providerColor, borderColor: activeModelInfo.providerColor }}
                     >
-                      <input
-                        type="radio"
-                        name="model"
-                        value={m.id}
-                        checked={model === m.id}
-                        onChange={() => {
-                          setModel(m.id)
-                          addToast({ type: 'info', message: `Model switched to ${m.name}` })
-                        }}
-                        style={{ accentColor: group.provider.color }}
-                      />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-                          <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }}>{m.name}</span>
-                          {m.family && (
-                            <span
-                              style={{
-                                fontSize: '10px',
-                                fontWeight: 600,
-                                textTransform: 'uppercase',
-                                letterSpacing: '0.04em',
-                                color: group.provider.color,
-                                border: `1px solid ${group.provider.color}`,
-                                borderRadius: 'var(--radius-full)',
-                                padding: '0 6px',
-                                lineHeight: '16px',
-                              }}
-                            >
-                              {m.family}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>{m.description}</div>
-                      </div>
-                    </label>
-                  ))}
+                      {activeModelInfo.family}
+                    </span>
+                  )}
                 </div>
-              ))}
+                <div className="active-model-card-desc">
+                  {activeModelInfo
+                    ? `${activeModelInfo.providerName}${activeModelInfo.description ? ` — ${activeModelInfo.description}` : ''}`
+                    : 'This model is no longer available — pick another one.'}
+                </div>
+              </div>
+              <ModelPicker variant="settings" />
             </div>
           )}
         </div>

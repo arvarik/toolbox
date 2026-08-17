@@ -408,7 +408,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       expect(configApi.testApiKey).toHaveBeenCalledWith('AIzaMockValidKey', 'gemini')
 
       await waitFor(() => {
-        expect(screen.getByText('Connected — AI features enabled')).toBeInTheDocument()
+        expect(screen.getByText('Connected')).toBeInTheDocument()
       })
     })
 
@@ -434,7 +434,7 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       fireEvent.click(confirmButton)
 
       await waitFor(() => {
-        expect(screen.queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
+        expect(screen.queryByText('Connected')).not.toBeInTheDocument()
       })
     })
 
@@ -510,10 +510,10 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
         </MemoryRouter>
       )
 
-      // Disconnected state — both providers should show 'Not configured'
-      const statusContainers = screen.getAllByText('Not configured').map(el => el.closest('.api-key-status'))
-      expect(statusContainers.length).toBeGreaterThanOrEqual(1)
-      expect(statusContainers[0].classList.contains('disconnected')).toBe(true)
+      // Disconnected state — providers should show 'Not configured' pills
+      const statusPills = screen.getAllByText('Not configured').map(el => el.closest('.status-pill'))
+      expect(statusPills.length).toBeGreaterThanOrEqual(1)
+      expect(statusPills[0].classList.contains('disconnected')).toBe(true)
 
       // Mock Success validation
       configApi.testApiKey.mockResolvedValueOnce({ valid: true })
@@ -524,8 +524,8 @@ describe('Guide & Settings Comprehensive Test Suite', () => {
       fireEvent.click(saveButtons[0])
 
       await waitFor(() => {
-        const connectedContainer = screen.getByText('Connected — AI features enabled').closest('.api-key-status')
-        expect(connectedContainer.classList.contains('connected')).toBe(true)
+        const connectedPill = screen.getByText('Connected').closest('.status-pill')
+        expect(connectedPill.classList.contains('connected')).toBe(true)
       })
     })
 

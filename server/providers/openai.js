@@ -24,14 +24,15 @@ export class OpenAIProvider extends OpenAICompatibleProvider {
   static get keyHelpLabel() { return 'OpenAI Platform' }
 
   /**
-   * Static fallback catalog. Live discovery (GET /v1/models) replaces
-   * this list as soon as a key is verified.
+   * Static fallback catalog: the GPT-5.6 family (July 2026).
+   * Live discovery (GET /v1/models) replaces this list as soon as a
+   * key is verified.
    */
   static get models() {
     return [
-      { id: 'gpt-5.1', name: 'GPT-5.1', description: 'Flagship — strongest general intelligence', family: 'Flagship' },
-      { id: 'gpt-5.1-mini', name: 'GPT-5.1 Mini', description: 'Fast and cost-effective for everyday tasks', family: 'Mini' },
-      { id: 'o4-mini', name: 'o4 Mini', description: 'Efficient reasoning model', family: 'Reasoning' },
+      { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', description: 'Flagship — hardest coding, agents, and research', family: 'Flagship' },
+      { id: 'gpt-5.6-terra', name: 'GPT-5.6 Terra', description: 'Balanced quality and cost for most tasks', family: 'Balanced' },
+      { id: 'gpt-5.6-luna', name: 'GPT-5.6 Luna', description: 'Fastest and most cost-effective', family: 'Fast' },
     ]
   }
 
