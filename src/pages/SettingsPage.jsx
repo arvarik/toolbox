@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon } from 'lucide-react'
+import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon, RefreshCw, Plus, Server } from 'lucide-react'
 import useAppStore from '../stores/appStore'
-import { configApi, systemApi, profileApi, guideContentApi } from '../utils/api'
+import { configApi, systemApi, profileApi, guideContentApi, endpointsApi } from '../utils/api'
 import Modal from '../components/shared/Modal'
 
 /**
@@ -30,12 +30,33 @@ const DEFAULT_PROVIDER_DEFS = [
     keyHelpUrl: 'https://console.anthropic.com/settings/keys',
     keyHelpLabel: 'Anthropic Console',
   },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    shortName: 'OpenAI',
+    configKey: 'openai_api_key',
+    color: '#10A37F',
+    keyPlaceholder: 'sk-...',
+    keyHelpUrl: 'https://platform.openai.com/api-keys',
+    keyHelpLabel: 'OpenAI Platform',
+  },
+]
+
+/**
+ * Quick-fill presets for popular OpenAI-compatible engines.
+ */
+const ENDPOINT_PRESETS = [
+  { label: 'Ollama', name: 'Ollama', baseUrl: 'http://localhost:11434/v1' },
+  { label: 'LM Studio', name: 'LM Studio', baseUrl: 'http://localhost:1234/v1' },
+  { label: 'vLLM', name: 'vLLM', baseUrl: 'http://localhost:8000/v1' },
+  { label: 'OpenRouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1' },
+  { label: 'Groq', name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1' },
 ]
 
 /**
  * Reusable component for managing a single provider's API key.
  */
-function ProviderKeySection({ providerId, providerDef, keyStatus, onKeyStatusChange }) {
+function ProviderKeySection({ providerId, providerDef, keyStatus, maskedKey, onKeyStatusChange }) {
   const addToast = useAppStore((s) => s.addToast)
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -50,13 +71,16 @@ function ProviderKeySection({ providerId, providerDef, keyStatus, onKeyStatusCha
       if (result.valid) {
         onKeyStatusChange(providerId, 'connected')
         setApiKey('')
-        addToast({ type: 'success', message: `${providerDef.shortName} API key saved and verified` })
+        const discovered = result.modelsDiscovered
+          ? ` — ${result.modelsDiscovered} models discovered`
+          : ''
+        addToast({ type: 'success', message: `${providerDef.shortName} API key verified${discovered}` })
       } else {
-        onKeyStatusChange(providerId, 'disconnected')
+        onKeyStatusChange(providerId, 'error')
         addToast({ type: 'error', message: `Invalid ${providerDef.shortName} API key` })
       }
     } catch (err) {
-      onKeyStatusChange(providerId, 'disconnected')
+      onKeyStatusChange(providerId, 'error')
       addToast({ type: 'error', message: err.message || `Failed to verify ${providerDef.shortName} API key` })
     } finally {
       setIsTesting(false)
@@ -97,7 +121,7 @@ function ProviderKeySection({ providerId, providerDef, keyStatus, onKeyStatusCha
             id={`${providerId}-api-key-input`}
             className="input"
             type={showKey ? 'text' : 'password'}
-            placeholder={providerDef.keyPlaceholder}
+            placeholder={keyStatus === 'connected' && maskedKey ? maskedKey : providerDef.keyPlaceholder}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
@@ -120,7 +144,9 @@ function ProviderKeySection({ providerId, providerDef, keyStatus, onKeyStatusCha
           <span className="api-key-status-dot" />
           {keyStatus === 'connected'
             ? 'Connected — AI features enabled'
-            : 'Not configured'}
+            : keyStatus === 'error'
+              ? 'Connection error — check your key and try again'
+              : 'Not configured'}
         </div>
         <p className="settings-help">
           Get your API key from{' '}
@@ -181,6 +207,277 @@ function ProviderKeySection({ providerId, providerDef, keyStatus, onKeyStatusCha
   )
 }
 
+/**
+ * "Bring Your Own Model" — manage custom OpenAI-compatible endpoints
+ * (Ollama, LM Studio, vLLM, OpenRouter, Groq, ...).
+ */
+function CustomEndpointsSection() {
+  const addToast = useAppStore((s) => s.addToast)
+  const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
+  const [endpoints, setEndpoints] = useState([])
+  const [showForm, setShowForm] = useState(false)
+  const [editingId, setEditingId] = useState(null)
+  const [form, setForm] = useState({ name: '', baseUrl: '', apiKey: '' })
+  const [isSaving, setIsSaving] = useState(false)
+  const [testingId, setTestingId] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+
+  const loadEndpoints = useCallback(() => {
+    endpointsApi.list().then((rows) => setEndpoints(rows || [])).catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    loadEndpoints()
+  }, [loadEndpoints])
+
+  const openAddForm = () => {
+    setEditingId(null)
+    setForm({ name: '', baseUrl: '', apiKey: '' })
+    setShowForm(true)
+  }
+
+  const openEditForm = (ep) => {
+    setEditingId(ep.id)
+    setForm({ name: ep.name, baseUrl: ep.baseUrl, apiKey: '' })
+    setShowForm(true)
+  }
+
+  const applyPreset = (preset) => {
+    setForm((f) => ({ ...f, name: f.name || preset.name, baseUrl: preset.baseUrl }))
+  }
+
+  const handleTestForm = async () => {
+    setTestingId('form')
+    try {
+      const result = await endpointsApi.test({
+        baseUrl: form.baseUrl,
+        apiKey: form.apiKey,
+        endpointId: editingId || undefined,
+      })
+      addToast({ type: 'success', message: `Endpoint reachable — ${result.modelCount} models found` })
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Could not reach the endpoint' })
+    } finally {
+      setTestingId(null)
+    }
+  }
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      const payload = { name: form.name, baseUrl: form.baseUrl, apiKey: form.apiKey }
+      if (editingId) {
+        await endpointsApi.update(editingId, payload)
+        addToast({ type: 'success', message: `Endpoint "${form.name}" updated` })
+      } else {
+        const created = await endpointsApi.create(payload)
+        addToast({
+          type: 'success',
+          message: `Endpoint "${created.name}" connected — ${created.models?.length ?? 0} models discovered`,
+        })
+      }
+      setShowForm(false)
+      setEditingId(null)
+      loadEndpoints()
+      fetchAvailableModels()
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to save endpoint' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleTestSaved = async (ep) => {
+    setTestingId(ep.id)
+    try {
+      const refreshed = await endpointsApi.refreshModels(ep.id)
+      addToast({ type: 'success', message: `"${ep.name}" reachable — ${refreshed.models?.length ?? 0} models` })
+      loadEndpoints()
+      fetchAvailableModels()
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || `Could not reach "${ep.name}"` })
+    } finally {
+      setTestingId(null)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return
+    try {
+      await endpointsApi.delete(deleteTarget.id)
+      addToast({ type: 'info', message: `Endpoint "${deleteTarget.name}" removed` })
+      setDeleteTarget(null)
+      loadEndpoints()
+      fetchAvailableModels()
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to remove endpoint' })
+    }
+  }
+
+  return (
+    <div className="settings-section" id="custom-endpoints-section">
+      <h2 className="settings-section-title">Custom Endpoints — Bring Your Own Model</h2>
+      <p className="settings-section-desc">
+        Connect any OpenAI-compatible server (Ollama, LM Studio, vLLM, OpenRouter, Groq).
+        Discovered models join the global model picker under the endpoint&apos;s name.
+      </p>
+
+      {endpoints.length === 0 && !showForm && (
+        <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', fontStyle: 'italic', marginTop: 'var(--space-3)' }}>
+          No custom endpoints yet. Add one to run models locally and privately.
+        </p>
+      )}
+
+      {endpoints.map((ep) => (
+        <div
+          key={ep.id}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-3)',
+            padding: 'var(--space-3)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border)',
+            background: 'var(--color-surface)',
+            marginTop: 'var(--space-3)',
+          }}
+        >
+          <Server size={16} style={{ color: '#8B5CF6', flexShrink: 0 }} />
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }}>
+              {ep.name}
+            </div>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {ep.baseUrl}
+              {ep.hasApiKey ? ` · key ${ep.apiKeyMasked}` : ''}
+            </div>
+            <div className={`api-key-status ${ep.models.length > 0 ? 'connected' : 'disconnected'}`}>
+              <span className="api-key-status-dot" />
+              {ep.models.length > 0 ? `${ep.models.length} models available` : 'No models discovered yet'}
+            </div>
+          </div>
+          <button
+            className="btn btn-ghost"
+            style={{ fontSize: 'var(--text-xs)' }}
+            onClick={() => handleTestSaved(ep)}
+            disabled={testingId === ep.id}
+          >
+            <RefreshCw size={12} />
+            {testingId === ep.id ? 'Testing...' : 'Test'}
+          </button>
+          <button className="btn btn-ghost" style={{ fontSize: 'var(--text-xs)' }} onClick={() => openEditForm(ep)}>
+            Edit
+          </button>
+          <button
+            className="btn btn-ghost"
+            style={{ color: 'var(--color-error)', fontSize: 'var(--text-xs)' }}
+            onClick={() => setDeleteTarget(ep)}
+            aria-label={`Remove ${ep.name}`}
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      ))}
+
+      {showForm ? (
+        <div
+          style={{
+            marginTop: 'var(--space-3)',
+            padding: 'var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px dashed var(--color-border)',
+          }}
+        >
+          <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+            {ENDPOINT_PRESETS.map((preset) => (
+              <button
+                key={preset.label}
+                className="btn btn-secondary"
+                style={{ fontSize: 'var(--text-xs)', padding: '2px 10px' }}
+                onClick={() => applyPreset(preset)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="settings-field" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
+            <input
+              className="input"
+              id="endpoint-name-input"
+              placeholder="Name (e.g. Homelab Ollama)"
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+            />
+            <input
+              className="input"
+              id="endpoint-url-input"
+              placeholder="Base URL (e.g. http://localhost:11434/v1)"
+              value={form.baseUrl}
+              onChange={(e) => setForm((f) => ({ ...f, baseUrl: e.target.value }))}
+            />
+            <input
+              className="input"
+              id="endpoint-key-input"
+              type="password"
+              placeholder={editingId ? 'API key (leave blank to keep current)' : 'API key (optional)'}
+              value={form.apiKey}
+              onChange={(e) => setForm((f) => ({ ...f, apiKey: e.target.value }))}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={handleTestForm}
+              disabled={!form.baseUrl.trim() || testingId === 'form'}
+            >
+              {testingId === 'form' ? 'Testing...' : 'Test Connection'}
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={handleSave}
+              disabled={!form.name.trim() || !form.baseUrl.trim() || isSaving}
+            >
+              {isSaving ? 'Saving...' : editingId ? 'Save Changes' : 'Save & Verify'}
+            </button>
+            <button className="btn btn-ghost" onClick={() => { setShowForm(false); setEditingId(null) }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="btn btn-secondary" style={{ marginTop: 'var(--space-3)' }} onClick={openAddForm}>
+          <Plus size={14} />
+          Add Custom Endpoint
+        </button>
+      )}
+
+      <Modal
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        title="Remove Custom Endpoint"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              style={{ background: 'var(--color-error)' }}
+              onClick={handleDelete}
+            >
+              Remove
+            </button>
+          </>
+        }
+      >
+        <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
+          Remove &quot;{deleteTarget?.name}&quot;? Its models disappear from the model picker.
+        </p>
+      </Modal>
+    </div>
+  )
+}
+
 export default function SettingsPage() {
   const { addToast, theme, toggleTheme, model, setModel, fetchAvailableModels, availableModels } = useAppStore()
   const isMac = typeof window !== 'undefined' && navigator.userAgent.includes('Mac')
@@ -191,6 +488,9 @@ export default function SettingsPage() {
   // Per-provider key status — initialized dynamically from fetched providers
   const [keyStatuses, setKeyStatuses] = useState({})
   const [providerDefs, setProviderDefs] = useState(DEFAULT_PROVIDER_DEFS)
+  // Masked stored keys (e.g. '••••1234') per provider, from the config API
+  const [maskedKeys, setMaskedKeys] = useState({})
+  const [isRefreshingModels, setIsRefreshingModels] = useState(false)
 
   const handleKeyStatusChange = useCallback((providerId, status) => {
     setKeyStatuses((prev) => ({ ...prev, [providerId]: status }))
@@ -222,6 +522,12 @@ export default function SettingsPage() {
       } else if (config.api_key_configured) {
         statuses.gemini = 'connected'
       }
+      // Collect masked key hints (config values arrive pre-masked)
+      const masked = {}
+      for (const def of DEFAULT_PROVIDER_DEFS) {
+        if (config[def.configKey]) masked[def.id] = config[def.configKey]
+      }
+      setMaskedKeys(masked)
       setKeyStatuses(statuses)
       const configuredMap = {}
       for (const [id, s] of Object.entries(statuses)) {
@@ -245,6 +551,27 @@ export default function SettingsPage() {
       addToast({ type: 'error', message: err.message || 'Failed to update shadow memory' })
     } finally {
       setIsSavingProfile(false)
+    }
+  }
+
+  const handleRefreshModels = async () => {
+    setIsRefreshingModels(true)
+    try {
+      const data = await useAppStore.getState().refreshModels()
+      const errorEntries = Object.entries(data.errors || {})
+      if (errorEntries.length > 0) {
+        addToast({
+          type: 'error',
+          message: `Some catalogs failed to refresh: ${errorEntries.map(([id, msg]) => `${id}: ${msg}`).join('; ')}`,
+        })
+      } else {
+        const total = (data.groups || []).reduce((sum, g) => sum + g.models.length, 0)
+        addToast({ type: 'success', message: `Model catalog refreshed — ${total} models available` })
+      }
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to refresh models' })
+    } finally {
+      setIsRefreshingModels(false)
     }
   }
 
@@ -298,10 +625,16 @@ export default function SettingsPage() {
               providerId={def.id}
               providerDef={def}
               keyStatus={keyStatuses[def.id] || 'disconnected'}
+              maskedKey={maskedKeys[def.id] || ''}
               onKeyStatusChange={handleKeyStatusChange}
             />
           ))}
         </div>
+
+        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+
+        {/* Custom Endpoints (BYOM) */}
+        <CustomEndpointsSection />
 
         <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
 
@@ -334,14 +667,27 @@ export default function SettingsPage() {
 
         {/* Model Selection */}
         <div className="settings-section">
-          <h2 className="settings-section-title">AI Model</h2>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
+            <h2 className="settings-section-title">AI Model</h2>
+            <button
+              className="btn btn-secondary"
+              id="refresh-models-btn"
+              onClick={handleRefreshModels}
+              disabled={isRefreshingModels}
+              style={{ fontSize: 'var(--text-xs)' }}
+            >
+              <RefreshCw size={12} className={isRefreshingModels ? 'spin' : undefined} />
+              {isRefreshingModels ? 'Refreshing...' : 'Refresh Models'}
+            </button>
+          </div>
           <p className="settings-section-desc">
-            Choose which AI model to use for chat and content generation. Available models depend on your configured API keys.
+            Choose which AI model to use for chat and content generation. Models are discovered live from your
+            configured providers and endpoints — Refresh Models re-syncs the catalog at any time.
           </p>
 
           {allModels.length === 0 ? (
             <p style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', fontStyle: 'italic', marginTop: 'var(--space-3)' }}>
-              No models available. Configure at least one API key above.
+              No models available yet. Add an API key or a custom endpoint above to unlock AI features.
             </p>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', marginTop: 'var(--space-3)' }}>
@@ -397,7 +743,26 @@ export default function SettingsPage() {
                         style={{ accentColor: group.provider.color }}
                       />
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }}>{m.name}</div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                          <span style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)' }}>{m.name}</span>
+                          {m.family && (
+                            <span
+                              style={{
+                                fontSize: '10px',
+                                fontWeight: 600,
+                                textTransform: 'uppercase',
+                                letterSpacing: '0.04em',
+                                color: group.provider.color,
+                                border: `1px solid ${group.provider.color}`,
+                                borderRadius: 'var(--radius-full)',
+                                padding: '0 6px',
+                                lineHeight: '16px',
+                              }}
+                            >
+                              {m.family}
+                            </span>
+                          )}
+                        </div>
                         <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>{m.description}</div>
                       </div>
                     </label>

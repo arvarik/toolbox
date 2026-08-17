@@ -1435,6 +1435,10 @@ textarea.input {
   color: var(--color-text-tertiary);
 }
 
+.api-key-status.error {
+  color: var(--color-error);
+}
+
 .api-key-status-dot {
   width: 6px;
   height: 6px;

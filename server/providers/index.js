@@ -2,36 +2,46 @@
  * @fileoverview AI Provider Registry and Factory.
  *
  * Central entry point for the provider abstraction layer.
- * Resolves model IDs to provider instances and manages the model catalog.
+ * Resolves model IDs to provider instances, manages the discovered
+ * model catalog, and orchestrates catalog refreshes.
  *
  * ┌────────────────────────────────────────────────────────────────┐
- * │  Auto-Registration Architecture                                │
+ * │  Model resolution order (getProvider)                          │
  * │                                                                │
- * │  1. Provider classes declare static metadata (providerId,      │
- * │     models, configKey, etc.)                                   │
- * │  2. PROVIDER_CLASSES array lists all available providers       │
- * │  3. Registry auto-builds lookup maps from static metadata      │
- * │  4. Adding a new provider = 1 new file + 1 line here           │
+ * │  1. `custom:<endpointId>:<model>` → CustomEndpointProvider     │
+ * │  2. Static catalog exact match                                 │
+ * │  3. Discovered (cached) catalog match                          │
+ * │  4. Provider namespace heuristics (ownsModelId)                │
+ * │  5. First registered provider (backward compatibility)         │
  * └────────────────────────────────────────────────────────────────┘
  *
- * Usage:
- *   import { getProvider, getAvailableModels } from '../providers/index.js'
- *
- *   const provider = getProvider('claude-sonnet-4-6')  // → ClaudeProvider instance
- *   const provider = getProvider('gemini-3.5-flash')    // → GeminiProvider instance
- *   const models = getAvailableModels()                 // → grouped model list
+ * Catalogs: each provider ships a small static fallback list, replaced
+ * by live discovery (the provider's model listing API) as soon as a key
+ * is verified or a refresh runs. Discovered lists persist in SQLite via
+ * providers/catalog.js.
  */
 
 import db from '../db.js'
 import { GeminiProvider } from './gemini.js'
 import { ClaudeProvider } from './claude.js'
+import { OpenAIProvider } from './openai.js'
+import { CustomEndpointProvider, CUSTOM_ENDPOINT_COLOR, parseCustomModelId } from './custom.js'
+import {
+  saveCatalog,
+  loadCatalog,
+  clearCatalog,
+  buildProviderCatalogEntries,
+  buildEndpointCatalogEntries,
+  listCustomEndpoints,
+  getCustomEndpoint,
+} from './catalog.js'
 import logger from '../utils/logger.js'
 
 // ═══════════════════════════════════════════════════════════════
 // Provider Registration
 //
-// To add a new provider (e.g. OpenAI, Ollama):
-//   1. Create server/providers/openai.js extending AIProvider
+// To add a new key-based provider:
+//   1. Create server/providers/<name>.js extending AIProvider
 //   2. Add the class to this array
 //   3. Done — everything else auto-discovers it
 // ═══════════════════════════════════════════════════════════════
@@ -39,6 +49,7 @@ import logger from '../utils/logger.js'
 const PROVIDER_CLASSES = [
   GeminiProvider,
   ClaudeProvider,
+  OpenAIProvider,
 ]
 
 // ═══════════════════════════════════════════════════════════════
@@ -50,7 +61,7 @@ const PROVIDERS = Object.fromEntries(
   PROVIDER_CLASSES.map(P => [P.providerId, P])
 )
 
-/** Map: modelId → providerId (for fast model→provider resolution) */
+/** Map: modelId → providerId (static fallback catalogs) */
 const MODEL_TO_PROVIDER = {}
 for (const ProviderClass of PROVIDER_CLASSES) {
   for (const model of ProviderClass.models) {
@@ -67,7 +78,7 @@ const providerCache = new Map()
 
 /**
  * Get the API key for a given provider from the database config.
- * @param {string} providerId - e.g. 'gemini', 'claude'
+ * @param {string} providerId - e.g. 'gemini', 'claude', 'openai'
  * @returns {string|null} The API key or null if not configured
  */
 export function getApiKeyForProvider(providerId) {
@@ -80,19 +91,27 @@ export function getApiKeyForProvider(providerId) {
 
 /**
  * Determine which provider a model ID belongs to.
- * Uses exact match first, then prefix-based fallback.
+ * Checks static catalogs, then discovered catalogs, then namespace
+ * heuristics.
  *
  * @param {string} modelId - e.g. 'gemini-3.5-flash' or 'claude-sonnet-4-6'
  * @returns {string} Provider ID
  */
 export function getProviderIdForModel(modelId) {
-  // Exact match from the model catalog
+  // Exact match from the static model catalogs
   if (MODEL_TO_PROVIDER[modelId]) {
     return MODEL_TO_PROVIDER[modelId]
   }
-  // Prefix-based fallback: check if model ID starts with any registered provider ID
+  // Match against discovered (cached) catalogs
   for (const ProviderClass of PROVIDER_CLASSES) {
-    if (modelId.startsWith(ProviderClass.providerId)) {
+    const cached = loadCatalog(ProviderClass.providerId)
+    if (cached?.models?.some(m => m.id === modelId)) {
+      return ProviderClass.providerId
+    }
+  }
+  // Namespace heuristics (e.g. 'gpt-*' → openai, 'gemma-*' → gemini)
+  for (const ProviderClass of PROVIDER_CLASSES) {
+    if (ProviderClass.ownsModelId(modelId)) {
       return ProviderClass.providerId
     }
   }
@@ -102,13 +121,32 @@ export function getProviderIdForModel(modelId) {
 
 /**
  * Get a provider instance for a given model ID.
- * Resolves the correct provider class and API key, returns a ready-to-use instance.
+ * Resolves the correct provider class and API key, returns a ready-to-use
+ * instance. Custom endpoint models (`custom:<endpointId>:<model>`)
+ * resolve to a CustomEndpointProvider bound to that endpoint.
  *
- * @param {string} modelId - The model ID (e.g. 'gemini-3.5-flash', 'claude-sonnet-4-6')
+ * @param {string} modelId - The model ID
  * @returns {AIProvider} A provider instance
- * @throws {Error} If the provider's API key is not configured
+ * @throws {Error} If the provider's API key or endpoint is not configured
  */
 export function getProvider(modelId) {
+  // Custom endpoint models
+  const custom = parseCustomModelId(modelId)
+  if (custom) {
+    const endpoint = getCustomEndpoint(custom.endpointId)
+    if (!endpoint) {
+      throw new Error('Custom endpoint not found. It may have been removed — pick another model in Settings.')
+    }
+    const cacheKey = `custom:${endpoint.id}:${endpoint.base_url}:${(endpoint.api_key || '').slice(0, 8)}`
+    if (providerCache.has(cacheKey)) {
+      return providerCache.get(cacheKey)
+    }
+    const instance = new CustomEndpointProvider(endpoint)
+    providerCache.set(cacheKey, instance)
+    logger.info(`[providers] Created custom endpoint provider for "${endpoint.name}"`)
+    return instance
+  }
+
   const providerId = getProviderIdForModel(modelId)
   const ProviderClass = PROVIDERS[providerId]
 
@@ -139,7 +177,7 @@ export function getProvider(modelId) {
  * Get a provider instance by provider ID (not model ID).
  * Used for key testing where we know the provider but not a specific model.
  *
- * @param {string} providerId - e.g. 'gemini', 'claude'
+ * @param {string} providerId - e.g. 'gemini', 'claude', 'openai'
  * @param {string} apiKey - The API key to use
  * @returns {AIProvider} A provider instance (not cached)
  */
@@ -152,12 +190,119 @@ export function getProviderByIdWithKey(providerId, apiKey) {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Catalog refresh orchestration
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Refresh the discovered model catalog for one cloud provider.
+ * Queries the provider's model listing API, applies the guardrails
+ * (modality, 1-year recency, alias dedupe), and persists the result.
+ *
+ * @param {string} providerId
+ * @param {string} [apiKeyOverride] - Key to use instead of the stored one
+ * @returns {Promise<Array<Object>>} The refreshed catalog entries
+ * @throws {Error} When no key is configured or discovery fails
+ */
+export async function refreshProviderCatalog(providerId, apiKeyOverride) {
+  const ProviderClass = PROVIDERS[providerId]
+  if (!ProviderClass) {
+    throw new Error(`Unknown provider: "${providerId}"`)
+  }
+  const apiKey = apiKeyOverride || getApiKeyForProvider(providerId)
+  if (!apiKey) {
+    throw new Error(`${ProviderClass.displayName} API key not configured.`)
+  }
+
+  const rawModels = await ProviderClass.fetchModels(apiKey)
+  const entries = buildProviderCatalogEntries(providerId, rawModels)
+  saveCatalog(providerId, entries)
+  logger.info(`[providers] Discovered ${entries.length} ${ProviderClass.displayName} models`)
+  return entries
+}
+
+/**
+ * Refresh the discovered model catalog for one custom endpoint.
+ *
+ * @param {Object} endpoint - A custom_endpoints row
+ * @returns {Promise<Array<Object>>} The refreshed catalog entries
+ * @throws {Error} When the endpoint is unreachable
+ */
+export async function refreshEndpointCatalog(endpoint) {
+  const rawModels = await CustomEndpointProvider.fetchModels(endpoint.api_key || '', endpoint.base_url)
+  const entries = buildEndpointCatalogEntries(endpoint, rawModels)
+  saveCatalog(`custom:${endpoint.id}`, entries)
+  logger.info(`[providers] Discovered ${entries.length} models on custom endpoint "${endpoint.name}"`)
+  return entries
+}
+
+/**
+ * Refresh every configured provider and custom endpoint.
+ * Failures are collected per catalog instead of aborting the sweep.
+ *
+ * @returns {Promise<{ refreshed: string[], errors: Object<string,string> }>}
+ */
+export async function refreshAllCatalogs() {
+  const refreshed = []
+  const errors = {}
+
+  for (const ProviderClass of PROVIDER_CLASSES) {
+    const providerId = ProviderClass.providerId
+    if (!getApiKeyForProvider(providerId)) continue
+    try {
+      await refreshProviderCatalog(providerId)
+      refreshed.push(providerId)
+    } catch (err) {
+      errors[providerId] = err.message
+      logger.warn(`[providers] Catalog refresh failed for ${providerId}: ${err.message}`)
+    }
+  }
+
+  for (const endpoint of listCustomEndpoints()) {
+    const catalogId = `custom:${endpoint.id}`
+    try {
+      await refreshEndpointCatalog(endpoint)
+      refreshed.push(catalogId)
+    } catch (err) {
+      errors[catalogId] = err.message
+      logger.warn(`[providers] Catalog refresh failed for endpoint "${endpoint.name}": ${err.message}`)
+    }
+  }
+
+  return { refreshed, errors }
+}
+
+/**
+ * Clean up after a provider's API key is removed:
+ * drop its discovered catalog and cached provider instances.
+ * @param {string} providerId
+ */
+export function handleProviderKeyRemoved(providerId) {
+  clearCatalog(providerId)
+  for (const key of providerCache.keys()) {
+    if (key.startsWith(`${providerId}:`)) providerCache.delete(key)
+  }
+}
+
+/**
+ * Clean up after a custom endpoint is removed or edited:
+ * drop its discovered catalog and cached provider instances.
+ * @param {string} endpointId
+ */
+export function handleEndpointRemoved(endpointId) {
+  clearCatalog(`custom:${endpointId}`)
+  for (const key of providerCache.keys()) {
+    if (key.startsWith(`custom:${endpointId}:`)) providerCache.delete(key)
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Discovery API (for routes and frontend)
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Get all available models based on which API keys are configured.
- * Returns models grouped by provider with metadata.
+ * Get all available models grouped by provider / custom endpoint.
+ * Uses the discovered catalog when present, falling back to each
+ * provider's static list. Custom endpoints appear as their own groups.
  *
  * @returns {Array<{ provider: Object, models: Array<Object> }>}
  */
@@ -165,21 +310,42 @@ export function getAvailableModels() {
   const result = []
 
   for (const ProviderClass of PROVIDER_CLASSES) {
-    const apiKey = getApiKeyForProvider(ProviderClass.providerId)
-    if (apiKey) {
-      result.push({
-        provider: {
-          id: ProviderClass.providerId,
-          name: ProviderClass.displayName,
-          color: ProviderClass.brandColor,
-        },
-        models: ProviderClass.models.map(m => ({
-          ...m,
-          providerId: ProviderClass.providerId,
-          providerName: ProviderClass.displayName,
-        })),
-      })
-    }
+    const providerId = ProviderClass.providerId
+    const apiKey = getApiKeyForProvider(providerId)
+    if (!apiKey) continue
+
+    const cached = loadCatalog(providerId)
+    const models = (cached?.models?.length ? cached.models : ProviderClass.models)
+
+    result.push({
+      provider: {
+        id: providerId,
+        name: ProviderClass.displayName,
+        color: ProviderClass.brandColor,
+      },
+      models: models.map(m => ({
+        ...m,
+        providerId,
+        providerName: ProviderClass.displayName,
+      })),
+    })
+  }
+
+  for (const endpoint of listCustomEndpoints()) {
+    const cached = loadCatalog(`custom:${endpoint.id}`)
+    result.push({
+      provider: {
+        id: `custom:${endpoint.id}`,
+        name: endpoint.name,
+        color: CUSTOM_ENDPOINT_COLOR,
+        isCustom: true,
+      },
+      models: (cached?.models || []).map(m => ({
+        ...m,
+        providerId: `custom:${endpoint.id}`,
+        providerName: endpoint.name,
+      })),
+    })
   }
 
   return result
@@ -187,7 +353,7 @@ export function getAvailableModels() {
 
 /**
  * Get the configured status of each provider's API key.
- * @returns {Object} e.g. { gemini: true, claude: false }
+ * @returns {Object} e.g. { gemini: true, claude: false, openai: false }
  */
 export function getApiKeyStatus() {
   const status = {}
@@ -225,6 +391,16 @@ export function getProviderDefinitions() {
  */
 export function getApiKeyFields() {
   return PROVIDER_CLASSES.map(P => P.configKey)
+}
+
+/**
+ * Map a config key (e.g. 'openai_api_key') back to its provider ID.
+ * @param {string} configKey
+ * @returns {string|null}
+ */
+export function getProviderIdForConfigKey(configKey) {
+  const ProviderClass = PROVIDER_CLASSES.find(P => P.configKey === configKey)
+  return ProviderClass ? ProviderClass.providerId : null
 }
 
 /**

@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import logger from './utils/logger.js'
 
 import configRoutes from './routes/config.js'
+import endpointRoutes from './routes/endpoints.js'
 import deckRoutes from './routes/decks.js'
 import boardRoutes from './routes/boards.js'
 import chatRoutes from './routes/chat.js'
@@ -32,6 +33,7 @@ app.use(express.json({ limit: '10mb' }))
 
 // API routes
 app.use('/api/config', configRoutes)
+app.use('/api/endpoints', endpointRoutes)
 app.use('/api/decks', deckRoutes)
 app.use('/api/boards', boardRoutes)
 app.use('/api/chat', chatRoutes)

@@ -130,6 +130,17 @@ export class AIProvider {
   }
 
   /**
+   * Check if a model ID belongs to this provider's namespace.
+   * Used as a fallback when a model is not in the static or discovered
+   * catalogs (e.g. a brand-new model typed in manually).
+   * @param {string} modelId
+   * @returns {boolean}
+   */
+  static ownsModelId(modelId) {
+    return typeof modelId === 'string' && modelId.startsWith(this.providerId)
+  }
+
+  /**
    * Capability flags for feature-gating.
    * Routes and UI components can check these to gracefully degrade
    * for providers that lack certain features (e.g. local models

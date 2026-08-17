@@ -27,9 +27,9 @@ export class GeminiProvider extends AIProvider {
 
   static get models() {
     return [
-      { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Fast and efficient — best for most tasks' },
-      { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', description: 'Advanced reasoning, stable and reliable' },
-      { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Budget-friendly, high-speed for simple tasks' },
+      { id: 'gemini-3.5-flash', name: 'Gemini 3.5 Flash', description: 'Fast and efficient — best for most tasks', family: 'Flash' },
+      { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', description: 'Advanced reasoning, stable and reliable', family: 'Pro' },
+      { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash Lite', description: 'Budget-friendly, high-speed for simple tasks', family: 'Flash-Lite' },
     ]
   }
 
@@ -40,6 +40,10 @@ export class GeminiProvider extends AIProvider {
       jsonMode: true,
       embeddings: true,
     }
+  }
+
+  static ownsModelId(modelId) {
+    return /^(gemini|gemma)/i.test(modelId || '')
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -244,11 +248,57 @@ export class GeminiProvider extends AIProvider {
     } while (isFunctionCall)
   }
 
+  /**
+   * Lightweight key verification: list the model catalog.
+   * Costs no tokens and fails fast on an invalid key.
+   */
   async testApiKey(apiKey) {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai')
-    const genAI = new GoogleGenerativeAI(apiKey)
-    const model = genAI.getGenerativeModel({ model: 'gemini-3.5-flash' })
-    await model.generateContent('Say "ok"')
+    await GeminiProvider.fetchModels(apiKey)
     return true
+  }
+
+  /**
+   * Live model discovery via the Gemini model listing API.
+   * Keeps only models that support generateContent (chat-capable).
+   * The listing exposes no release timestamps, so releasedAt is null
+   * and the recency guardrail passes these models through.
+   *
+   * @param {string} apiKey
+   * @returns {Promise<Array<{id, name, description, releasedAt}>>}
+   */
+  static async fetchModels(apiKey) {
+    const models = []
+    let pageToken = ''
+    do {
+      const url = new URL('https://generativelanguage.googleapis.com/v1beta/models')
+      url.searchParams.set('key', apiKey)
+      url.searchParams.set('pageSize', '200')
+      if (pageToken) url.searchParams.set('pageToken', pageToken)
+
+      const res = await fetch(url)
+      if (!res.ok) {
+        let detail = ''
+        try {
+          const body = await res.json()
+          detail = body?.error?.message || ''
+        } catch { /* non-JSON body */ }
+        throw new Error(detail || `Gemini model listing failed with status ${res.status}`)
+      }
+
+      const data = await res.json()
+      for (const m of data.models || []) {
+        const methods = m.supportedGenerationMethods || []
+        if (!methods.includes('generateContent')) continue
+        models.push({
+          id: (m.name || '').replace(/^models\//, ''),
+          name: m.displayName || (m.name || '').replace(/^models\//, ''),
+          description: (m.description || '').slice(0, 140),
+          releasedAt: null,
+        })
+      }
+      pageToken = data.nextPageToken || ''
+    } while (pageToken)
+
+    return models
   }
 }

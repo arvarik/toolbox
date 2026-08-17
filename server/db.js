@@ -114,6 +114,23 @@ function migrate() {
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    -- Discovered AI model catalogs (per provider or custom endpoint)
+    CREATE TABLE IF NOT EXISTS model_catalog (
+      catalog_id TEXT PRIMARY KEY,
+      models TEXT NOT NULL DEFAULT '[]',
+      fetched_at TEXT DEFAULT (datetime('now'))
+    );
+
+    -- User-registered OpenAI-compatible endpoints (BYOM)
+    CREATE TABLE IF NOT EXISTS custom_endpoints (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      base_url TEXT NOT NULL,
+      api_key TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
   `)
 
   logger.info('[db] Migrations complete')

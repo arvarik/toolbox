@@ -62,6 +62,15 @@ vi.mock('../utils/api', () => {
       update: vi.fn(() => Promise.resolve({ success: true })),
       testApiKey: vi.fn(() => Promise.resolve({ valid: true })),
       getAvailableModels: vi.fn(() => Promise.resolve({ groups: [], providers: [] })),
+      refreshModels: vi.fn(() => Promise.resolve({ groups: [], providers: [], errors: {} })),
+    },
+    endpointsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({ success: true })),
+      test: vi.fn(() => Promise.resolve({ ok: true, modelCount: 0 })),
+      refreshModels: vi.fn(() => Promise.resolve({ models: [] })),
     },
     decksApi: {
       list: vi.fn(() => Promise.resolve(mockDecks)),
