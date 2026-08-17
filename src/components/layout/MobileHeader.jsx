@@ -1,5 +1,6 @@
 import { Menu, BookOpen } from 'lucide-react'
 import { useLocation } from 'react-router-dom'
+import ModelPicker from '../shared/ModelPicker'
 
 export default function MobileHeader({ onToggleMenu }) {
   const location = useLocation()
@@ -27,19 +28,20 @@ export default function MobileHeader({ onToggleMenu }) {
       </button>
 
       <div className="mobile-header-title">{getTitle()}</div>
-      
-      {isChat ? (
-        <button
-          className="btn btn-secondary btn-sm"
-          style={{ fontSize: '11px', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
-          onClick={() => window.dispatchEvent(new CustomEvent('toggle-study-plan'))}
-        >
-          <BookOpen size={12} />
-          Plan
-        </button>
-      ) : (
-        <div style={{ width: 36 }} />
-      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+        <ModelPicker variant="header" />
+        {isChat && (
+          <button
+            className="btn btn-secondary btn-sm"
+            style={{ fontSize: '11px', padding: '4px 8px', display: 'flex', alignItems: 'center', gap: '4px', flexShrink: 0 }}
+            onClick={() => window.dispatchEvent(new CustomEvent('toggle-study-plan'))}
+          >
+            <BookOpen size={12} />
+            Plan
+          </button>
+        )}
+      </div>
     </header>
   )
 }

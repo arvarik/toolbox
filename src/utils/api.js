@@ -66,10 +66,28 @@ async function request(path, options = {}) {
 export const configApi = {
   get: () => request('/config'),
   update: (data) => request('/config', { method: 'PUT', body: data }),
-  /** Test an API key for a specific provider. provider: 'gemini' | 'claude' */
+  /** Test an API key for a specific provider. provider: 'gemini' | 'claude' | 'openai' */
   testApiKey: (key, provider = 'gemini') => request('/config/test-key', { method: 'POST', body: { key, provider } }),
   /** Get all available models based on configured API keys, grouped by provider */
   getAvailableModels: () => request('/config/available-models'),
+  /** Re-sync model catalogs with every configured provider and custom endpoint */
+  refreshModels: () => request('/config/refresh-models', { method: 'POST' }),
+}
+
+/* ---- Custom Endpoints (BYOM) ---- */
+export const endpointsApi = {
+  /** List registered custom endpoints (keys masked, cached models attached) */
+  list: () => request('/endpoints'),
+  /** Register a custom endpoint. data: { name, baseUrl, apiKey? } */
+  create: (data) => request('/endpoints', { method: 'POST', body: data }),
+  /** Edit a custom endpoint. Masked/omitted apiKey keeps the stored key. */
+  update: (id, data) => request(`/endpoints/${id}`, { method: 'PUT', body: data }),
+  /** Remove a custom endpoint and its discovered models */
+  delete: (id) => request(`/endpoints/${id}`, { method: 'DELETE' }),
+  /** Ping an endpoint without saving. data: { baseUrl, apiKey?, endpointId? } */
+  test: (data) => request('/endpoints/test', { method: 'POST', body: data }),
+  /** Re-discover the model list for one endpoint */
+  refreshModels: (id) => request(`/endpoints/${id}/refresh-models`, { method: 'POST' }),
 }
 
 /* ---- Decks ---- */

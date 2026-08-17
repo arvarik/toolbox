@@ -33,9 +33,9 @@ export class ClaudeProvider extends AIProvider {
 
   static get models() {
     return [
-      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', description: 'Best balance of speed and intelligence' },
-      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', description: 'Fastest, most cost-effective' },
-      { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', description: 'Most capable, complex reasoning' },
+      { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', description: 'Best balance of speed and intelligence', family: 'Sonnet' },
+      { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', description: 'Fastest, most cost-effective', family: 'Haiku' },
+      { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', description: 'Most capable, complex reasoning', family: 'Opus' },
     ]
   }
 
@@ -255,14 +255,60 @@ export class ClaudeProvider extends AIProvider {
     }
   }
 
+  /**
+   * Lightweight key verification: list the model catalog.
+   * Costs no tokens and fails fast on an invalid key.
+   */
   async testApiKey(apiKey) {
-    const Anthropic = (await import('@anthropic-ai/sdk')).default
-    const client = new Anthropic({ apiKey })
-    await client.messages.create({
-      model: 'claude-haiku-4-5',
-      max_tokens: 16,
-      messages: [{ role: 'user', content: 'Say "ok"' }],
-    })
+    await ClaudeProvider.fetchModels(apiKey)
     return true
+  }
+
+  /**
+   * Live model discovery via the Anthropic model listing API.
+   * Returns release timestamps (created_at) for the recency guardrail.
+   *
+   * @param {string} apiKey
+   * @returns {Promise<Array<{id, name, description, releasedAt}>>}
+   */
+  static async fetchModels(apiKey) {
+    const models = []
+    let afterId = ''
+    let pages = 0
+    do {
+      const url = new URL('https://api.anthropic.com/v1/models')
+      url.searchParams.set('limit', '100')
+      if (afterId) url.searchParams.set('after_id', afterId)
+
+      const res = await fetch(url, {
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+      })
+      if (!res.ok) {
+        let detail = ''
+        try {
+          const body = await res.json()
+          detail = body?.error?.message || ''
+        } catch { /* non-JSON body */ }
+        throw new Error(detail || `Anthropic model listing failed with status ${res.status}`)
+      }
+
+      const data = await res.json()
+      for (const m of data.data || []) {
+        const releasedAt = m.created_at ? Date.parse(m.created_at) : null
+        models.push({
+          id: m.id,
+          name: m.display_name || m.id,
+          description: '',
+          releasedAt: Number.isNaN(releasedAt) ? null : releasedAt,
+        })
+      }
+      afterId = data.has_more ? data.last_id : ''
+      pages += 1
+    } while (afterId && pages < 10)
+
+    return models
   }
 }

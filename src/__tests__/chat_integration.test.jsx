@@ -62,6 +62,15 @@ vi.mock('../utils/api', () => {
       update: vi.fn(() => Promise.resolve({ success: true })),
       testApiKey: vi.fn(() => Promise.resolve({ valid: true })),
       getAvailableModels: vi.fn(() => Promise.resolve({ groups: [], providers: [] })),
+      refreshModels: vi.fn(() => Promise.resolve({ groups: [], providers: [], errors: {} })),
+    },
+    endpointsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({ success: true })),
+      test: vi.fn(() => Promise.resolve({ ok: true, modelCount: 0 })),
+      refreshModels: vi.fn(() => Promise.resolve({ models: [] })),
     },
     decksApi: {
       list: vi.fn(() => Promise.resolve(mockDecks)),
@@ -675,7 +684,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
 
       // Verify connected state checkmark/text
       await waitFor(() => {
-        expect(screen.getByText('Connected — AI features enabled')).toBeInTheDocument()
+        expect(screen.getByText('Connected')).toBeInTheDocument()
       })
 
       // Navigate to builder (which always has a chat panel)
@@ -696,7 +705,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       )
 
       // Verify initially connected
-      await screen.findByText('Connected — AI features enabled')
+      await screen.findByText('Connected')
       await Promise.resolve()
 
       // Open remove API key modal
@@ -709,7 +718,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
 
       // Verify status changed to disconnected
       await waitFor(() => {
-        expect(screen.queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
+        expect(screen.queryByText('Connected')).not.toBeInTheDocument()
       })
 
       // Navigate to builder

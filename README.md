@@ -101,6 +101,9 @@ npm run dev   # Vite (5173) + Express (3100)
 | `DB_PATH` | `./data/toolbox.db` | SQLite database path |
 | `GEMINI_API_KEY` | — | Gemini API key (can also be set via Settings UI) |
 | `CLAUDE_API_KEY` | — | Claude API key (can also be set via Settings UI) |
+| `OPENAI_API_KEY` | — | OpenAI API key (can also be set via Settings UI) |
+
+Custom OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, OpenRouter, Groq, ...) are managed in the Settings UI. The app discovers each provider's model catalog live, so new model releases appear without an app update.
 
 All user data lives in a single SQLite file — back it up by copying that file.
 

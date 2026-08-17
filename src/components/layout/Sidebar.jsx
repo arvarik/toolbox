@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import PomodoroWidget from './PomodoroWidget'
+import ModelPicker from '../shared/ModelPicker'
 import useIsMobile from '../../hooks/useIsMobile'
 
 const navItems = [
@@ -36,9 +37,6 @@ const bottomItems = [
 export default function Sidebar() {
   const collapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
-  const model = useAppStore((s) => s.model)
-  const setModel = useAppStore((s) => s.setModel)
-  const availableModels = useAppStore((s) => s.availableModels)
   const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
   const location = useLocation()
 
@@ -94,33 +92,7 @@ export default function Sidebar() {
         {!collapsed && (
           <div style={{ padding: '0 var(--space-4)', marginBottom: 'var(--space-2)' }}>
             <div className="sidebar-section-label" style={{ marginBottom: '4px' }}>Model</div>
-            <select 
-              value={model} 
-              onChange={(e) => setModel(e.target.value)}
-              style={{
-                width: '100%',
-                background: 'var(--color-surface)',
-                color: 'var(--color-text-secondary)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-sm)',
-                padding: '4px 8px',
-                fontSize: '11px',
-                outline: 'none',
-                cursor: 'pointer'
-              }}
-            >
-              {availableModels.length > 0 ? (
-                availableModels.map((group) => (
-                  <optgroup key={group.provider.id} label={group.provider.name}>
-                    {group.models.map((m) => (
-                      <option key={m.id} value={m.id}>{m.name}</option>
-                    ))}
-                  </optgroup>
-                ))
-              ) : (
-                <option value={model}>{model}</option>
-              )}
-            </select>
+            <ModelPicker variant="sidebar" />
           </div>
         )}
 

@@ -52,6 +52,15 @@ vi.mock('../utils/api', () => {
       update: vi.fn(),
       testApiKey: vi.fn(),
       getAvailableModels: vi.fn(() => Promise.resolve({ groups: [], providers: [] })),
+      refreshModels: vi.fn(() => Promise.resolve({ groups: [], providers: [], errors: {} })),
+    },
+    endpointsApi: {
+      list: vi.fn(() => Promise.resolve([])),
+      create: vi.fn(() => Promise.resolve({})),
+      update: vi.fn(() => Promise.resolve({})),
+      delete: vi.fn(() => Promise.resolve({ success: true })),
+      test: vi.fn(() => Promise.resolve({ ok: true, modelCount: 0 })),
+      refreshModels: vi.fn(() => Promise.resolve({ models: [] })),
     },
     decksApi: {
       list: vi.fn(() => Promise.resolve(mockDecks)),
@@ -136,7 +145,7 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
 
     // Verify UI shows connected
     await waitFor(() => {
-      expect(screen.getByText('Connected — AI features enabled')).toBeInTheDocument()
+      expect(screen.getByText('Connected')).toBeInTheDocument()
     })
 
     // 2. Click Remove Gemini Key
@@ -149,7 +158,7 @@ describe('Challenger Phase 2 Adversarial Stress Tests', () => {
 
     // State becomes disconnected in frontend
     await waitFor(() => {
-      expect(screen.queryByText('Connected — AI features enabled')).not.toBeInTheDocument()
+      expect(screen.queryByText('Connected')).not.toBeInTheDocument()
     })
 
     // Assert that API call was made to backend configApi.update to clear the key

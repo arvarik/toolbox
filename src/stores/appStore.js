@@ -38,7 +38,7 @@ applyTheme(initialTheme)
  * Global application store using Zustand.
  * Manages sidebar state, active views, theme, and shared UI state.
  */
-const useAppStore = create((set) => ({
+const useAppStore = create((set, get) => ({
   // Theme
   theme: initialTheme,
   toggleTheme: () =>
@@ -90,9 +90,30 @@ const useAppStore = create((set) => ({
   fetchAvailableModels: async () => {
     try {
       const data = await configApi.getAvailableModels()
-      set({ availableModels: data.groups || [] })
+      get().applyModelGroups(data.groups || [])
     } catch {
       // Silently fail — models will just show as empty
+    }
+  },
+
+  // Trigger a live re-sync with all providers/endpoints, then apply the result
+  refreshModels: async () => {
+    const data = await configApi.refreshModels()
+    get().applyModelGroups(data.groups || [])
+    return data
+  },
+
+  /**
+   * Apply a fresh set of model groups.
+   * Safe fallback: when the active model disappears (key removed,
+   * endpoint deleted, model no longer served), the selection resets to
+   * the first available model so AI features keep working.
+   */
+  applyModelGroups: (groups) => {
+    set({ availableModels: groups })
+    const allIds = groups.flatMap((g) => g.models.map((m) => m.id))
+    if (allIds.length > 0 && !allIds.includes(get().model)) {
+      get().setModel(allIds[0])
     }
   },
 
