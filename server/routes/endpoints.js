@@ -10,7 +10,7 @@
 import { Router } from 'express'
 import { randomUUID } from 'crypto'
 import db from '../db.js'
-import { CustomEndpointProvider } from '../providers/custom.js'
+import { fetchEndpointModels } from '../providers/defs.js'
 import { getCustomEndpoint, listCustomEndpoints, loadCatalog } from '../providers/catalog.js'
 import { refreshEndpointCatalog, handleEndpointRemoved } from '../providers/index.js'
 import { maskSecret, isMaskedValue } from '../utils/mask.js'
@@ -74,7 +74,7 @@ router.post('/test', async (req, res) => {
   }
 
   try {
-    const models = await CustomEndpointProvider.fetchModels(effectiveKey, normalized)
+    const models = await fetchEndpointModels(effectiveKey, normalized)
     res.json({ ok: true, modelCount: models.length })
   } catch (err) {
     res.status(400).json({ ok: false, message: err.message || 'Could not reach the endpoint' })
@@ -107,7 +107,7 @@ router.post('/', async (req, res) => {
 
   try {
     // Pre-flight: the endpoint must respond before we save it
-    await CustomEndpointProvider.fetchModels(key, normalized)
+    await fetchEndpointModels(key, normalized)
   } catch (err) {
     return res.status(400).json({ message: err.message || 'Could not reach the endpoint' })
   }
@@ -151,7 +151,7 @@ router.put('/:id', async (req, res) => {
   }
 
   try {
-    await CustomEndpointProvider.fetchModels(nextKey, nextUrl)
+    await fetchEndpointModels(nextKey, nextUrl)
   } catch (err) {
     return res.status(400).json({ message: err.message || 'Could not reach the endpoint' })
   }

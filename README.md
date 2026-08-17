@@ -111,7 +111,7 @@ All user data lives in a single SQLite file — back it up by copying that file.
 
 ## 🛠️ Tech Stack
 
-React 19 · Vite · React Router · Zustand · Vanilla CSS · Node.js · Express · SQLite (`better-sqlite3`) · Google Gemini API · Docker
+React 19 · Vite · React Router · Zustand · Vanilla CSS · Node.js · Express · SQLite (`better-sqlite3`) · Vercel AI SDK (Gemini / Claude / OpenAI / BYOM) · Docker
 
 ---
 

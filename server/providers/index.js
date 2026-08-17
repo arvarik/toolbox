@@ -1,31 +1,23 @@
 /**
- * @fileoverview AI Provider Registry and Factory.
+ * @fileoverview Provider registry.
  *
- * Central entry point for the provider abstraction layer.
- * Resolves model IDs to provider instances, manages the discovered
- * model catalog, and orchestrates catalog refreshes.
+ * Central lookup layer over the provider definitions (defs.js):
+ * resolves model IDs to provider IDs, stores/reads API keys, and
+ * orchestrates model-catalog refreshes. The AI SDK engine
+ * (server/ai/engine.js) uses this registry to build model instances.
  *
  * ┌────────────────────────────────────────────────────────────────┐
- * │  Model resolution order (getProvider)                          │
+ * │  Model → provider resolution (getProviderIdForModel)           │
  * │                                                                │
- * │  1. `custom:<endpointId>:<model>` → CustomEndpointProvider     │
- * │  2. Static catalog exact match                                 │
- * │  3. Discovered (cached) catalog match                          │
- * │  4. Provider namespace heuristics (ownsModelId)                │
- * │  5. First registered provider (backward compatibility)         │
+ * │  1. Static catalog exact match                                 │
+ * │  2. Discovered (cached) catalog match                          │
+ * │  3. Provider namespace heuristics (ownsModelId)                │
+ * │  4. null (callers surface a clear "unknown model" error)       │
  * └────────────────────────────────────────────────────────────────┘
- *
- * Catalogs: each provider ships a small static fallback list, replaced
- * by live discovery (the provider's model listing API) as soon as a key
- * is verified or a refresh runs. Discovered lists persist in SQLite via
- * providers/catalog.js.
  */
 
 import db from '../db.js'
-import { GeminiProvider } from './gemini.js'
-import { ClaudeProvider } from './claude.js'
-import { OpenAIProvider } from './openai.js'
-import { CustomEndpointProvider, CUSTOM_ENDPOINT_COLOR, parseCustomModelId } from './custom.js'
+import { PROVIDER_DEFS, fetchEndpointModels, CUSTOM_ENDPOINT_COLOR } from './defs.js'
 import {
   saveCatalog,
   loadCatalog,
@@ -33,48 +25,32 @@ import {
   buildProviderCatalogEntries,
   buildEndpointCatalogEntries,
   listCustomEndpoints,
-  getCustomEndpoint,
 } from './catalog.js'
 import logger from '../utils/logger.js'
 
-// ═══════════════════════════════════════════════════════════════
-// Provider Registration
-//
-// To add a new key-based provider:
-//   1. Create server/providers/<name>.js extending AIProvider
-//   2. Add the class to this array
-//   3. Done — everything else auto-discovers it
-// ═══════════════════════════════════════════════════════════════
-
-const PROVIDER_CLASSES = [
-  GeminiProvider,
-  ClaudeProvider,
-  OpenAIProvider,
-]
-
-// ═══════════════════════════════════════════════════════════════
-// Auto-built lookup maps (derived from provider static metadata)
-// ═══════════════════════════════════════════════════════════════
-
-/** Map: providerId → ProviderClass */
-const PROVIDERS = Object.fromEntries(
-  PROVIDER_CLASSES.map(P => [P.providerId, P])
-)
+/** Map: providerId → definition */
+const PROVIDERS = Object.fromEntries(PROVIDER_DEFS.map((p) => [p.id, p]))
 
 /** Map: modelId → providerId (static fallback catalogs) */
 const MODEL_TO_PROVIDER = {}
-for (const ProviderClass of PROVIDER_CLASSES) {
-  for (const model of ProviderClass.models) {
-    MODEL_TO_PROVIDER[model.id] = ProviderClass.providerId
+for (const def of PROVIDER_DEFS) {
+  for (const model of def.models) {
+    MODEL_TO_PROVIDER[model.id] = def.id
   }
 }
 
-// Cache provider instances per API key to avoid re-creating on every request
-const providerCache = new Map()
+// ═══════════════════════════════════════════════════════════════
+// Core lookups
+// ═══════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════
-// Core API
-// ═══════════════════════════════════════════════════════════════
+/**
+ * Get a provider definition by ID.
+ * @param {string} providerId
+ * @returns {Object|undefined}
+ */
+export function getProviderDef(providerId) {
+  return PROVIDERS[providerId]
+}
 
 /**
  * Get the API key for a given provider from the database config.
@@ -82,111 +58,54 @@ const providerCache = new Map()
  * @returns {string|null} The API key or null if not configured
  */
 export function getApiKeyForProvider(providerId) {
-  const ProviderClass = PROVIDERS[providerId]
-  if (!ProviderClass) return null
-
-  const config = db.prepare("SELECT value FROM config WHERE key = ?").get(ProviderClass.configKey)
+  const def = PROVIDERS[providerId]
+  if (!def) return null
+  const config = db.prepare('SELECT value FROM config WHERE key = ?').get(def.configKey)
   return config?.value || null
 }
 
 /**
  * Determine which provider a model ID belongs to.
  * Checks static catalogs, then discovered catalogs, then namespace
- * heuristics.
+ * heuristics. Returns null when no provider matches — callers must
+ * surface a clear error instead of guessing.
  *
  * @param {string} modelId - e.g. 'gemini-3.5-flash' or 'claude-sonnet-4-6'
- * @returns {string} Provider ID
+ * @returns {string|null} Provider ID or null
  */
 export function getProviderIdForModel(modelId) {
-  // Exact match from the static model catalogs
   if (MODEL_TO_PROVIDER[modelId]) {
     return MODEL_TO_PROVIDER[modelId]
   }
-  // Match against discovered (cached) catalogs
-  for (const ProviderClass of PROVIDER_CLASSES) {
-    const cached = loadCatalog(ProviderClass.providerId)
-    if (cached?.models?.some(m => m.id === modelId)) {
-      return ProviderClass.providerId
+  for (const def of PROVIDER_DEFS) {
+    const cached = loadCatalog(def.id)
+    if (cached?.models?.some((m) => m.id === modelId)) {
+      return def.id
     }
   }
-  // Namespace heuristics (e.g. 'gpt-*' → openai, 'gemma-*' → gemini)
-  for (const ProviderClass of PROVIDER_CLASSES) {
-    if (ProviderClass.ownsModelId(modelId)) {
-      return ProviderClass.providerId
+  for (const def of PROVIDER_DEFS) {
+    if (def.ownsModelId(modelId)) {
+      return def.id
     }
   }
-  // Default to first registered provider for backward compatibility
-  return PROVIDER_CLASSES[0].providerId
+  return null
 }
 
 /**
- * Get a provider instance for a given model ID.
- * Resolves the correct provider class and API key, returns a ready-to-use
- * instance. Custom endpoint models (`custom:<endpointId>:<model>`)
- * resolve to a CustomEndpointProvider bound to that endpoint.
- *
- * @param {string} modelId - The model ID
- * @returns {AIProvider} A provider instance
- * @throws {Error} If the provider's API key or endpoint is not configured
+ * Verify an API key by listing the provider's model catalog.
+ * Costs no tokens and fails fast on an invalid key.
+ * @param {string} providerId
+ * @param {string} apiKey
+ * @returns {Promise<true>}
+ * @throws {Error} When the provider is unknown or the key is invalid
  */
-export function getProvider(modelId) {
-  // Custom endpoint models
-  const custom = parseCustomModelId(modelId)
-  if (custom) {
-    const endpoint = getCustomEndpoint(custom.endpointId)
-    if (!endpoint) {
-      throw new Error('Custom endpoint not found. It may have been removed — pick another model in Settings.')
-    }
-    const cacheKey = `custom:${endpoint.id}:${endpoint.base_url}:${(endpoint.api_key || '').slice(0, 8)}`
-    if (providerCache.has(cacheKey)) {
-      return providerCache.get(cacheKey)
-    }
-    const instance = new CustomEndpointProvider(endpoint)
-    providerCache.set(cacheKey, instance)
-    logger.info(`[providers] Created custom endpoint provider for "${endpoint.name}"`)
-    return instance
-  }
-
-  const providerId = getProviderIdForModel(modelId)
-  const ProviderClass = PROVIDERS[providerId]
-
-  if (!ProviderClass) {
-    throw new Error(`Unknown provider for model "${modelId}"`)
-  }
-
-  const apiKey = getApiKeyForProvider(providerId)
-  if (!apiKey) {
-    throw new Error(
-      `${ProviderClass.displayName} API key not configured. Please add your key in Settings.`
-    )
-  }
-
-  // Cache by provider + key hash to handle key changes
-  const cacheKey = `${providerId}:${apiKey.slice(0, 8)}`
-  if (providerCache.has(cacheKey)) {
-    return providerCache.get(cacheKey)
-  }
-
-  const instance = new ProviderClass(apiKey)
-  providerCache.set(cacheKey, instance)
-  logger.info(`[providers] Created ${ProviderClass.displayName} provider instance`)
-  return instance
-}
-
-/**
- * Get a provider instance by provider ID (not model ID).
- * Used for key testing where we know the provider but not a specific model.
- *
- * @param {string} providerId - e.g. 'gemini', 'claude', 'openai'
- * @param {string} apiKey - The API key to use
- * @returns {AIProvider} A provider instance (not cached)
- */
-export function getProviderByIdWithKey(providerId, apiKey) {
-  const ProviderClass = PROVIDERS[providerId]
-  if (!ProviderClass) {
+export async function testProviderKey(providerId, apiKey) {
+  const def = PROVIDERS[providerId]
+  if (!def) {
     throw new Error(`Unknown provider: "${providerId}"`)
   }
-  return new ProviderClass(apiKey)
+  await def.fetchModels(apiKey)
+  return true
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -204,19 +123,19 @@ export function getProviderByIdWithKey(providerId, apiKey) {
  * @throws {Error} When no key is configured or discovery fails
  */
 export async function refreshProviderCatalog(providerId, apiKeyOverride) {
-  const ProviderClass = PROVIDERS[providerId]
-  if (!ProviderClass) {
+  const def = PROVIDERS[providerId]
+  if (!def) {
     throw new Error(`Unknown provider: "${providerId}"`)
   }
   const apiKey = apiKeyOverride || getApiKeyForProvider(providerId)
   if (!apiKey) {
-    throw new Error(`${ProviderClass.displayName} API key not configured.`)
+    throw new Error(`${def.name} API key not configured.`)
   }
 
-  const rawModels = await ProviderClass.fetchModels(apiKey)
+  const rawModels = await def.fetchModels(apiKey)
   const entries = buildProviderCatalogEntries(providerId, rawModels)
   saveCatalog(providerId, entries)
-  logger.info(`[providers] Discovered ${entries.length} ${ProviderClass.displayName} models`)
+  logger.info(`[providers] Discovered ${entries.length} ${def.name} models`)
   return entries
 }
 
@@ -228,7 +147,7 @@ export async function refreshProviderCatalog(providerId, apiKeyOverride) {
  * @throws {Error} When the endpoint is unreachable
  */
 export async function refreshEndpointCatalog(endpoint) {
-  const rawModels = await CustomEndpointProvider.fetchModels(endpoint.api_key || '', endpoint.base_url)
+  const rawModels = await fetchEndpointModels(endpoint.api_key || '', endpoint.base_url)
   const entries = buildEndpointCatalogEntries(endpoint, rawModels)
   saveCatalog(`custom:${endpoint.id}`, entries)
   logger.info(`[providers] Discovered ${entries.length} models on custom endpoint "${endpoint.name}"`)
@@ -245,15 +164,14 @@ export async function refreshAllCatalogs() {
   const refreshed = []
   const errors = {}
 
-  for (const ProviderClass of PROVIDER_CLASSES) {
-    const providerId = ProviderClass.providerId
-    if (!getApiKeyForProvider(providerId)) continue
+  for (const def of PROVIDER_DEFS) {
+    if (!getApiKeyForProvider(def.id)) continue
     try {
-      await refreshProviderCatalog(providerId)
-      refreshed.push(providerId)
+      await refreshProviderCatalog(def.id)
+      refreshed.push(def.id)
     } catch (err) {
-      errors[providerId] = err.message
-      logger.warn(`[providers] Catalog refresh failed for ${providerId}: ${err.message}`)
+      errors[def.id] = err.message
+      logger.warn(`[providers] Catalog refresh failed for ${def.id}: ${err.message}`)
     }
   }
 
@@ -272,27 +190,20 @@ export async function refreshAllCatalogs() {
 }
 
 /**
- * Clean up after a provider's API key is removed:
- * drop its discovered catalog and cached provider instances.
+ * Clean up after a provider's API key is removed: drop its discovered catalog.
  * @param {string} providerId
  */
 export function handleProviderKeyRemoved(providerId) {
   clearCatalog(providerId)
-  for (const key of providerCache.keys()) {
-    if (key.startsWith(`${providerId}:`)) providerCache.delete(key)
-  }
 }
 
 /**
  * Clean up after a custom endpoint is removed or edited:
- * drop its discovered catalog and cached provider instances.
+ * drop its discovered catalog.
  * @param {string} endpointId
  */
 export function handleEndpointRemoved(endpointId) {
   clearCatalog(`custom:${endpointId}`)
-  for (const key of providerCache.keys()) {
-    if (key.startsWith(`custom:${endpointId}:`)) providerCache.delete(key)
-  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -309,24 +220,19 @@ export function handleEndpointRemoved(endpointId) {
 export function getAvailableModels() {
   const result = []
 
-  for (const ProviderClass of PROVIDER_CLASSES) {
-    const providerId = ProviderClass.providerId
-    const apiKey = getApiKeyForProvider(providerId)
+  for (const def of PROVIDER_DEFS) {
+    const apiKey = getApiKeyForProvider(def.id)
     if (!apiKey) continue
 
-    const cached = loadCatalog(providerId)
-    const models = (cached?.models?.length ? cached.models : ProviderClass.models)
+    const cached = loadCatalog(def.id)
+    const models = cached?.models?.length ? cached.models : def.models
 
     result.push({
-      provider: {
-        id: providerId,
-        name: ProviderClass.displayName,
-        color: ProviderClass.brandColor,
-      },
-      models: models.map(m => ({
+      provider: { id: def.id, name: def.name, color: def.color },
+      models: models.map((m) => ({
         ...m,
-        providerId,
-        providerName: ProviderClass.displayName,
+        providerId: def.id,
+        providerName: def.name,
       })),
     })
   }
@@ -340,7 +246,7 @@ export function getAvailableModels() {
         color: CUSTOM_ENDPOINT_COLOR,
         isCustom: true,
       },
-      models: (cached?.models || []).map(m => ({
+      models: (cached?.models || []).map((m) => ({
         ...m,
         providerId: `custom:${endpoint.id}`,
         providerName: endpoint.name,
@@ -357,9 +263,8 @@ export function getAvailableModels() {
  */
 export function getApiKeyStatus() {
   const status = {}
-  for (const ProviderClass of PROVIDER_CLASSES) {
-    const config = db.prepare("SELECT value FROM config WHERE key = ?").get(ProviderClass.configKey)
-    status[ProviderClass.providerId] = !!(config?.value)
+  for (const def of PROVIDER_DEFS) {
+    status[def.id] = !!getApiKeyForProvider(def.id)
   }
   return status
 }
@@ -371,16 +276,16 @@ export function getApiKeyStatus() {
  * @returns {Array<{ id, name, shortName, configKey, color, keyPlaceholder, keyHelpUrl, keyHelpLabel, capabilities }>}
  */
 export function getProviderDefinitions() {
-  return PROVIDER_CLASSES.map(P => ({
-    id: P.providerId,
-    name: P.displayName,
-    shortName: P.shortName,
-    configKey: P.configKey,
-    color: P.brandColor,
-    keyPlaceholder: P.keyPlaceholder,
-    keyHelpUrl: P.keyHelpUrl,
-    keyHelpLabel: P.keyHelpLabel,
-    capabilities: P.capabilities,
+  return PROVIDER_DEFS.map((def) => ({
+    id: def.id,
+    name: def.name,
+    shortName: def.shortName,
+    configKey: def.configKey,
+    color: def.color,
+    keyPlaceholder: def.keyPlaceholder,
+    keyHelpUrl: def.keyHelpUrl,
+    keyHelpLabel: def.keyHelpLabel,
+    capabilities: def.capabilities,
   }))
 }
 
@@ -390,7 +295,7 @@ export function getProviderDefinitions() {
  * @returns {string[]}
  */
 export function getApiKeyFields() {
-  return PROVIDER_CLASSES.map(P => P.configKey)
+  return PROVIDER_DEFS.map((def) => def.configKey)
 }
 
 /**
@@ -399,26 +304,26 @@ export function getApiKeyFields() {
  * @returns {string|null}
  */
 export function getProviderIdForConfigKey(configKey) {
-  const ProviderClass = PROVIDER_CLASSES.find(P => P.configKey === configKey)
-  return ProviderClass ? ProviderClass.providerId : null
+  const def = PROVIDER_DEFS.find((p) => p.configKey === configKey)
+  return def ? def.id : null
 }
 
 /**
  * Seed API keys from environment variables for all registered providers.
- * Called during database initialization.
+ * Called during server startup.
  */
 export function seedApiKeysFromEnv() {
-  for (const ProviderClass of PROVIDER_CLASSES) {
-    const envValue = process.env[ProviderClass.envKey]
+  for (const def of PROVIDER_DEFS) {
+    const envValue = process.env[def.envKey]
     if (envValue) {
-      const existing = db.prepare("SELECT value FROM config WHERE key = ?").get(ProviderClass.configKey)
+      const existing = db.prepare('SELECT value FROM config WHERE key = ?').get(def.configKey)
       if (!existing?.value) {
         db.prepare(`
           INSERT INTO config (key, value, updated_at)
           VALUES (?, ?, datetime('now'))
           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-        `).run(ProviderClass.configKey, envValue)
-        logger.info(`[db] Seeded ${ProviderClass.displayName} API key from environment`)
+        `).run(def.configKey, envValue)
+        logger.info(`[db] Seeded ${def.name} API key from environment`)
       }
     }
   }
