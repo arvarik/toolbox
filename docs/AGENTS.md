@@ -17,8 +17,9 @@
 | Layer | Choice | Why |
 |-------|--------|-----|
 | Frontend | React 19 + Vite | Established in project |
-| Routing | React Router DOM v6 | Established in project |
+| Routing | React Router DOM v7 | Established in project |
 | State | Zustand (persisted stores) | Established in project |
+| Diagrams | React Flow (`@xyflow/react`) + dagre | Whiteboard canvas + knowledge-graph layout |
 | Styling | **Vanilla CSS only** | See CSS rules below |
 | Icons | `lucide-react` only | Consistent icon set |
 | Backend | Node.js + Express | Simple, matches dev experience |
@@ -242,3 +243,7 @@ The Vite proxy config in `vite.config.js` forwards `/api/*` to the backend autom
 5. **Mobile detection**: Don't use CSS-only responsive tricks for conditional rendering. Use the `isMobile` state pattern (window resize listener) that's established in each page component.
 
 6. **Toast notifications**: Use `addToast({ type: 'success'|'error'|'info', message: '...' })` from `useAppStore` for user feedback. Never use `alert()`.
+
+7. **Two board shapes**: The app store holds whiteboard state in the React Flow shape (`position: {x,y}`, `data: {...}`, `source`/`target`). The database, the templates, and the server keep the legacy shape (`x`/`y`, `from`/`to`, anchors). Convert ONLY at the boundaries with `src/components/builder/boardModel.js` — never persist the React Flow shape.
+
+8. **Global `svg { max-width: 100% }` reset**: React Flow's edge SVGs collapse to zero width under it. The `.react-flow svg { max-width: none }` override in `index.css` protects them — keep it if you touch the reset.

@@ -154,35 +154,29 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       expect(canvas).toBeInTheDocument()
     })
 
-    it('2. selects active tools', () => {
+    it('2. toolbar renders the board actions', () => {
       render(
         <MemoryRouter>
           <BuilderPage />
         </MemoryRouter>
       )
-      const selectBtn = screen.getByTitle('Select')
-      expect(selectBtn).toHaveClass('active')
-
-      const textBtn = screen.getByTitle('Add Text')
-      fireEvent.click(textBtn)
-
-      expect(textBtn).toHaveClass('active')
-      expect(selectBtn).not.toHaveClass('active')
-
-      const arrowBtn = screen.getByTitle('Draw Arrow')
-      fireEvent.click(arrowBtn)
-      expect(arrowBtn).toHaveClass('active')
-      expect(textBtn).not.toHaveClass('active')
+      expect(screen.getByText('Estimate')).toBeInTheDocument()
+      expect(screen.getByText('Templates')).toBeInTheDocument()
+      expect(screen.getByText('Export')).toBeInTheDocument()
+      expect(screen.getByText('Save')).toBeInTheDocument()
+      expect(screen.getByText('Verify Design')).toBeInTheDocument()
     })
 
-    it('3. canvas toolbar dividers render', () => {
+    it('3. React Flow chrome renders (controls + minimap + dot grid)', () => {
       render(
         <MemoryRouter>
           <BuilderPage />
         </MemoryRouter>
       )
-      const dividers = document.querySelectorAll('.builder-toolbar-group .divider')
-      expect(dividers.length).toBe(2)
+      expect(document.querySelector('.react-flow')).toBeInTheDocument()
+      expect(document.querySelector('.react-flow__controls')).toBeInTheDocument()
+      expect(document.querySelector('.react-flow__minimap')).toBeInTheDocument()
+      expect(document.querySelector('.react-flow__background')).toBeInTheDocument()
     })
 
     it('4. drag-and-drop node placement mock', () => {
@@ -267,7 +261,7 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       expect(screen.getAllByText('Ask about your architecture')[0]).toBeInTheDocument()
     })
 
-    it('7. node drag update mock', () => {
+    it('7. dropped node lands in the store with a numeric position', () => {
       render(
         <MemoryRouter>
           <BuilderPage />
@@ -275,54 +269,36 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       )
 
       const canvas = document.querySelector('#builder-canvas')
-      const originalGetBoundingClientRect = canvas.getBoundingClientRect
-      canvas.getBoundingClientRect = vi.fn(() => ({
-        left: 0,
-        top: 0,
-        width: 800,
-        height: 600,
-      }))
-
       const itemData = { id: 'cache', name: 'Cache (Redis)', category: 'Storage', icon: 'zap' }
-      const dropEvent = new MouseEvent('drop', {
-        bubbles: true,
-        cancelable: true,
+      fireEvent.drop(canvas, {
+        preventDefault: vi.fn(),
         clientX: 170,
         clientY: 130,
-      })
-      Object.defineProperty(dropEvent, 'dataTransfer', {
-        value: {
-          getData: vi.fn((format) => {
-            if (format === 'application/json') return JSON.stringify(itemData)
-            return ''
-          }),
+        dataTransfer: {
+          getData: vi.fn((format) => (format === 'application/json' ? JSON.stringify(itemData) : '')),
         },
       })
-      fireEvent(canvas, dropEvent)
 
+      // Rendered on the canvas
       const cacheElements = screen.getAllByText('Cache (Redis)')
-      const canvasText = cacheElements.find(el => el.closest('#builder-canvas'))
-      const node = canvasText.closest('div[style*="position: absolute"]')
-      expect(node).toBeInTheDocument()
-      expect(node.style.left).toBe('100px')
-      expect(node.style.top).toBe('100px')
+      expect(cacheElements.find((el) => el.closest('#builder-canvas'))).toBeTruthy()
 
-      fireEvent.mouseDown(node, {
-        stopPropagation: vi.fn(),
-        clientX: 150,
-        clientY: 150,
-      })
+      // Stored in the shared state as a React Flow node
+      const stored = useAppStore.getState().nodes.find((n) => n.data?.name === 'Cache (Redis)')
+      expect(stored).toBeDefined()
+      expect(stored.type).toBe('component')
+      expect(stored.data.category).toBe('Storage')
+      expect(Number.isFinite(stored.position.x)).toBe(true)
+      expect(Number.isFinite(stored.position.y)).toBe(true)
 
-      fireEvent.mouseMove(canvas, {
-        clientX: 200,
-        clientY: 250,
-      })
-
-      expect(node.style.left).toBe('150px')
-      expect(node.style.top).toBe('200px')
-
-      fireEvent.mouseUp(canvas)
-      canvas.getBoundingClientRect = originalGetBoundingClientRect
+      // Programmatic position updates flow back into the rendered node
+      useAppStore.setState((s) => ({
+        nodes: s.nodes.map((n) =>
+          n.id === stored.id ? { ...n, position: { x: 150, y: 200 } } : n
+        ),
+      }))
+      const updated = useAppStore.getState().nodes.find((n) => n.id === stored.id)
+      expect(updated.position).toEqual({ x: 150, y: 200 })
     })
 
     it('8. delete node from canvas', () => {

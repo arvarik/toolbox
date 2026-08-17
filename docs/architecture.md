@@ -60,15 +60,16 @@ Toolbox is a **self-contained, single-binary-deployable** web application with n
 | Layer | Technology | Version | Role |
 |-------|-----------|---------|------|
 | **Frontend Framework** | React | 19 | UI rendering |
-| **Build Tool** | Vite | 6 | Dev server, bundler |
-| **Routing** | React Router DOM | 6 | Client-side routing |
-| **State Management** | Zustand | 4 | Global state (persisted) |
+| **Build Tool** | Vite | 8 | Dev server, bundler |
+| **Routing** | React Router DOM | 7 | Client-side routing |
+| **State Management** | Zustand | 5 | Global state (persisted) |
+| **Diagrams** | React Flow (`@xyflow/react`) + dagre | 12 / 3 | Whiteboard canvas + layered knowledge-graph layout |
 | **Styling** | Vanilla CSS | — | CSS Variables design system |
 | **Icons** | lucide-react | — | SVG icon library |
 | **Markdown** | react-markdown + remark-gfm + KaTeX | — | Rendered AI responses |
-| **Backend** | Node.js + Express | 18+ / 5 | API server |
-| **Database** | better-sqlite3 (SQLite) | — | Synchronous SQLite bindings |
-| **AI Client** | Google Generative AI SDK | — | Gemini API integration |
+| **Backend** | Node.js + Express | 22+ / 5 | API server |
+| **Database** | better-sqlite3 (SQLite) | 13 | Synchronous SQLite bindings |
+| **AI Client** | Vercel AI SDK | — | Gemini / Claude / OpenAI / BYOM integration |
 | **Container** | Docker (Alpine Linux) | — | Production container |
 | **Testing** | Vitest + React Testing Library | — | Unit and integration tests |
 
@@ -113,7 +114,8 @@ src/
 │   │   └── PillarNav.jsx      # Topic navigation within a pillar
 │   │
 │   ├── builder/             # Architecture whiteboard components
-│   │   ├── Canvas.jsx         # SVG canvas with pan/zoom and node/edge rendering
+│   │   ├── Canvas.jsx         # React Flow canvas (drag, connect, minimap, controls)
+│   │   ├── boardModel.js      # Persisted board shape ↔ React Flow converters + icon/color maps
 │   │   ├── Toolbox.jsx        # Component palette sidebar
 │   │   ├── BoardList.jsx      # Board tab bar
 │   │   └── TemplateGallery.jsx # Pre-built template picker

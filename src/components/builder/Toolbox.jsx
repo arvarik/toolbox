@@ -1,38 +1,6 @@
-import {
-  Database, Zap, Globe, Monitor, Smartphone, Shield,
-  AlertTriangle, FileText, BarChart, Radio, Activity, HardDrive,
-  Archive, Search, Brain, Cpu, ExternalLink, Mail, Box, Cog,
-  Split, DoorOpen,
-} from 'lucide-react'
+import { Box } from 'lucide-react'
 import { BUILDER_COMPONENTS } from '../../utils/constants'
-
-/**
- * Icon mapper for builder toolbox items.
- */
-const iconMap = {
-  split: Split,
-  'door-open': DoorOpen,
-  box: Box,
-  zap: Zap,
-  cog: Cog,
-  mail: Mail,
-  radio: Radio,
-  activity: Activity,
-  database: Database,
-  'hard-drive': HardDrive,
-  archive: Archive,
-  search: Search,
-  brain: Brain,
-  globe: Globe,
-  monitor: Monitor,
-  smartphone: Smartphone,
-  cpu: Cpu,
-  'external-link': ExternalLink,
-  shield: Shield,
-  'alert-triangle': AlertTriangle,
-  'file-text': FileText,
-  'bar-chart': BarChart,
-}
+import { BUILDER_ICONS } from './boardModel'
 
 /**
  * Builder component toolbox — categorized palette of draggable system components.
@@ -62,7 +30,7 @@ export default function Toolbox() {
         <div className="toolbox-section" key={group.category}>
           <div className="toolbox-section-title">{group.category}</div>
           {group.items.map((item) => {
-            const Icon = iconMap[item.icon] || Box
+            const Icon = BUILDER_ICONS[item.icon] || Box
             return (
               <div
                 key={item.id}
