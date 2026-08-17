@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
   MessageSquare, Save, Undo, Redo, ZoomIn, ZoomOut,
-  MousePointer, Type, ArrowRight, Palette, Layout, Download,
+  MousePointer, Type, ArrowRight, Palette, Layout, Download, Calculator,
 } from 'lucide-react'
 import Toolbox from '../components/builder/Toolbox'
 import Canvas from '../components/builder/Canvas'
@@ -17,6 +18,8 @@ const AUTO_SAVE_DELAY = 3000
 
 export default function BuilderPage() {
   const toggleChat = useAppStore((s) => s.toggleChat)
+  const setCalcModalOpen = useAppStore((s) => s.setCalcModalOpen)
+  const [searchParams] = useSearchParams()
   const nodes = useAppStore((s) => s.nodes || [])
   const edges = useAppStore((s) => s.edges || [])
   const setNodes = useAppStore((s) => s.setNodes)
@@ -46,7 +49,10 @@ export default function BuilderPage() {
       if (cancelled) return
       if (list && list.length > 0) {
         setBoards(list)
-        setActiveBoard(list[0].id)
+        // Deep link support: /builder?board=<id> (e.g. from the Knowledge Graph)
+        const requested = searchParams.get('board')
+        const match = requested && list.find((b) => b.id === requested)
+        setActiveBoard(match ? match.id : list[0].id)
       } else {
         // No saved boards — create a default local board
         const newBoard = { id: `local-${Date.now()}`, name: 'Untitled Board' }
@@ -63,6 +69,8 @@ export default function BuilderPage() {
     })
 
     return () => { cancelled = true }
+    // Initial load runs once; the ?board= param only matters on entry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // ─── Load board data when activeBoard changes ───
@@ -484,6 +492,15 @@ export default function BuilderPage() {
           </div>
 
           <div className="builder-toolbar-group">
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setCalcModalOpen(true)}
+              title="BotE Calculator (⌘E)"
+              id="builder-calc-btn"
+            >
+              <Calculator size={14} />
+              Estimate
+            </button>
             <button
               className="btn btn-ghost btn-sm"
               onClick={() => setShowTemplates((prev) => !prev)}

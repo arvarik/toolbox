@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock, Keyboard, BookOpen } from 'lucide-react'
+import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock, Keyboard, BookOpen, Wrench } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { flashcardsApi, chatApi } from '../../utils/api'
 import { BLUEPRINT_SECTIONS } from '../../utils/constants'
@@ -133,7 +133,21 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
     try {
       // API call to update the card in database
       const updatedCardData = await flashcardsApi.review(targetDeckId, currentCard.id, quality, confidence)
-      
+
+      // Let live views (Knowledge Graph heatmap) refresh without a reload
+      useAppStore.getState().bumpSrsVersion()
+
+      // The adaptive engine queued prerequisite cards after this lapse
+      if (updatedCardData?.remediation?.length > 0) {
+        const names = updatedCardData.remediation
+          .map((r) => r.nodeName)
+          .filter(Boolean)
+        useAppStore.getState().addToast({
+          type: 'info',
+          message: `Foundation checkup queued: ${updatedCardData.remediation.length} prerequisite card${updatedCardData.remediation.length === 1 ? '' : 's'}${names.length > 0 ? ` (${[...new Set(names)].join(', ')})` : ''} added to your next session`,
+        })
+      }
+
       if (quality === 5 && !skipInterceptor) {
         useAppStore.getState().triggerAhaMoment()
       }
@@ -374,9 +388,23 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
         </div>
       </div>
 
+      {/* Foundational checkup banner — this card was queued by the
+          knowledge graph after a lapse on a dependent concept */}
+      {reviewMode && currentCard?.is_remediation === 1 && (
+        <div className="remediation-banner" id="remediation-banner">
+          <Wrench size={13} />
+          <span className="remediation-banner-title">
+            Foundation Checkup{currentCard.remediation_node ? ` · ${currentCard.remediation_node}` : ''}
+          </span>
+          {currentCard.remediation_reason && (
+            <span className="remediation-banner-reason">{currentCard.remediation_reason}</span>
+          )}
+        </div>
+      )}
+
       {/* Card */}
-      <div 
-        className={`flashcard${flipped ? ' flipped' : ''}`} 
+      <div
+        className={`flashcard${flipped ? ' flipped' : ''}`}
         onClick={handleFlip}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}

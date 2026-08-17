@@ -248,9 +248,16 @@ stream: async (payload, onChunk, onDone, signal) => {
 server/
 ├── index.js              # Express app setup, middleware, route mounting
 ├── db.js                 # SQLite connection, schema creation, migrations
+├── srs/
+│   └── scheduler.js      # SM-2 scheduling (shared by decks + graph routes)
+├── graph/
+│   ├── health.js         # Knowledge-graph node health from SRS state (pure)
+│   └── remediation.js    # Prerequisite remediation planning (pure)
 └── routes/
     ├── chat.js           # AI chat endpoints (streaming + starters)
-    ├── decks.js          # Flashcard deck + card CRUD + SRS logic
+    ├── decks.js          # Flashcard deck + card CRUD + SRS review + remediation queue
+    ├── graph.js          # Knowledge graph: health, node detail, study sessions
+    ├── calculator.js     # BotE Calculator AI audit
     ├── boards.js         # Whiteboard board CRUD
     ├── guide_content.js  # Guide section content CRUD
     ├── config.js         # API key management
@@ -288,6 +295,8 @@ The full API reference is in **[`docs/api.md`](api.md)**. Quick summary of route
 | `search.js` | `/api/search` | Cross-domain full-text search |
 | `study_sessions.js` | `/api/study_sessions` | Study heatmap data |
 | `system.js` | `/api/system` | Stats, cache flush, DB download |
+| `graph.js` | `/api/graph` | Knowledge graph with live SRS health, node detail, track/node study sessions |
+| `calculator.js` | `/api/calculator` | "Audit My Math" structured AI critique |
 
 ---
 

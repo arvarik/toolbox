@@ -23,8 +23,9 @@ RUN npm ci --omit=dev
 # Copy server code
 COPY server/ ./server/
 
-# Copy shared constants for server use
+# Copy shared modules the server imports from src/
 COPY src/utils/constants.js ./src/utils/constants.js
+COPY src/utils/knowledgeGraph.js ./src/utils/knowledgeGraph.js
 
 # Copy built frontend
 COPY --from=builder /app/dist ./dist

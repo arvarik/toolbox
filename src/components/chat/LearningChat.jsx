@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
 import {
   Send, Sparkles, Copy, Check, Trash2, GitCommit,
-  Plus, ChevronDown, Edit2, RotateCcw, Square, Map, Layers, MoreHorizontal
+  Plus, ChevronDown, Edit2, RotateCcw, Square, Map, Layers, MoreHorizontal, Calculator
 } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
@@ -503,6 +503,26 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   // Focus input on mount
   useEffect(() => { inputRef.current?.focus() }, [])
 
+  // Pick up a draft handed over by the BotE Calculator export
+  // (sessionStorage 'toolbox_chat_draft' + 'toolbox-chat-draft' event).
+  useEffect(() => {
+    const importDraft = () => {
+      try {
+        const draft = sessionStorage.getItem('toolbox_chat_draft')
+        if (draft) {
+          sessionStorage.removeItem('toolbox_chat_draft')
+          setInput(draft)
+          inputRef.current?.focus()
+        }
+      } catch {
+        // Session storage unavailable — nothing to import
+      }
+    }
+    importDraft()
+    window.addEventListener('toolbox-chat-draft', importDraft)
+    return () => window.removeEventListener('toolbox-chat-draft', importDraft)
+  }, [])
+
   // Handle text selection for flashcard generation (works on both desktop mouseup and mobile touch selection)
   const checkSelection = useCallback((e) => {
     if (e?.target?.closest?.('#flashcard-popup') || e?.target?.closest?.('input') || e?.target?.closest?.('textarea') || e?.target?.closest?.('.flashcard-modal-ignore')) return
@@ -893,6 +913,15 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
+          <button
+            className="btn btn-ghost btn-icon"
+            onClick={() => useAppStore.getState().setCalcModalOpen(true)}
+            title="BotE Calculator (⌘E)"
+            aria-label="Open BotE Calculator"
+            id="chat-calc-btn"
+          >
+            <Calculator size={16} />
+          </button>
           {messages.length > 0 && (
             <div style={{ position: 'relative' }} ref={actionsMenuRef}>
               <button

@@ -11,10 +11,16 @@ import useAppStore from '../stores/appStore'
  *   ⌘2 / Ctrl+2 → Guide
  *   ⌘3 / Ctrl+3 → Builder
  *   ⌘4 / Ctrl+4 → Flashcards
+ *   ⌘5 / Ctrl+5 → Feynman
+ *   ⌘6 / Ctrl+6 → Interleaved
+ *   ⌘7 / Ctrl+7 → Knowledge Graph
+ *   ⌘8 / Ctrl+8 → BotE Calculator
  *   ⌘, / Ctrl+, → Settings
  *
  * Actions:
  *   ⌘K / Ctrl+K → Toggle chat panel for current page
+ *   ⌘E / Ctrl+E → Toggle quick BotE Calculator modal
+ *   ⌘9 / Ctrl+9 → Toggle Pomodoro
  *   ⌘B / Ctrl+B → Toggle sidebar
  *   ⌘S / Ctrl+S → Save board (on builder page)
  *   ⌘D / Ctrl+D → Toggle dark/light mode
@@ -25,6 +31,7 @@ export default function useKeyboardShortcuts() {
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
   const toggleChat = useAppStore((s) => s.toggleChat)
   const toggleTheme = useAppStore((s) => s.toggleTheme)
+  const toggleCalcModal = useAppStore((s) => s.toggleCalcModal)
 
   useEffect(() => {
     const handler = (e) => {
@@ -63,7 +70,22 @@ export default function useKeyboardShortcuts() {
           break
         case '7':
           e.preventDefault()
+          navigate('/graph')
+          break
+        case '8':
+          e.preventDefault()
+          navigate('/calculator')
+          break
+        case '9':
+          e.preventDefault()
           window.dispatchEvent(new CustomEvent('toggle-pomodoro'))
+          break
+        case 'e':
+        case 'E':
+          if (!isEditable) {
+            e.preventDefault()
+            toggleCalcModal()
+          }
           break
         case ',':
           e.preventDefault()
@@ -106,5 +128,5 @@ export default function useKeyboardShortcuts() {
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [navigate, location, toggleSidebar, toggleChat, toggleTheme])
+  }, [navigate, location, toggleSidebar, toggleChat, toggleTheme, toggleCalcModal])
 }

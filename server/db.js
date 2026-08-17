@@ -227,6 +227,25 @@ function migrate() {
       // Column already exists
     }
   }
+
+  // Prerequisite remediation queue (Knowledge Graph adaptive engine).
+  // A row = "surface this card in the next review session because a
+  // dependent concept lapsed". Rows resolve when the card is reviewed.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS remediation_queue (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      card_id TEXT NOT NULL,
+      source_card_id TEXT NOT NULL,
+      node_id TEXT DEFAULT NULL,
+      node_name TEXT DEFAULT NULL,
+      reason TEXT DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      resolved_at TEXT DEFAULT NULL,
+      FOREIGN KEY (card_id) REFERENCES flashcards(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_remediation_open
+      ON remediation_queue (card_id) WHERE resolved_at IS NULL;
+  `)
 }
 
 migrate()
