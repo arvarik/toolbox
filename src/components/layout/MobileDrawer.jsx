@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, MessageSquare } from 'lucide-react'
+import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, MessageSquare, Waypoints, Calculator } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import PomodoroWidget from './PomodoroWidget'
 import useAppStore from '../../stores/appStore'
@@ -11,6 +11,8 @@ const navItems = [
   { to: '/study', icon: GraduationCap, label: 'Flashcards' },
   { to: '/feynman', icon: BrainCircuit, label: 'Feynman' },
   { to: '/interleaved', icon: Shuffle, label: 'Interleaved' },
+  { to: '/graph', icon: Waypoints, label: 'Graph' },
+  { to: '/calculator', icon: Calculator, label: 'Calculator' },
 ]
 
 export default function MobileDrawer({ open, onClose }) {

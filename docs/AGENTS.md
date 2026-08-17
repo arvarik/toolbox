@@ -55,10 +55,11 @@ import { FaArrowRight } from 'react-icons/fa'
 ### 3. Global State: Use Existing Zustand Stores
 
 For features requiring cross-page persistence, use the existing stores:
-- `src/stores/appStore.js` — Theme, sidebar, chat panels, API key, whiteboard nodes/edges, toasts
+- `src/stores/appStore.js` — Theme, sidebar, chat panels, API key, whiteboard nodes/edges, toasts, calculator modal, `srsVersion` sync counter
 - `src/stores/useTimerStore.js` — Pomodoro timer state
+- `src/stores/useCalcStore.js` — BotE Calculator inputs, scenario, and latency budget (persisted to localStorage)
 
-Do not create new top-level stores unless the feature genuinely requires it and doesn't fit in either existing store.
+Do not create new top-level stores unless the feature genuinely requires it and doesn't fit in an existing store.
 
 ### 4. Backend Changes: Update Both db.js and Routes
 
@@ -145,8 +146,15 @@ server/
 | Flashcards + SRS | `/study` | `StudyPage.jsx`, `FlashcardView.jsx`, `DeckEditor.jsx`, `CardBrowser.jsx`, `StatsDashboard.jsx` |
 | Feynman Simulator | `/feynman` | `FeynmanPage.jsx` |
 | Interleaved Review | `/interleaved` | `InterleavedPage.jsx` |
+| Knowledge Graph | `/graph` | `GraphPage.jsx`, `components/graph/*`, `src/utils/knowledgeGraph.js`, `server/routes/graph.js`, `server/graph/*` |
+| BotE Calculator | `/calculator` + global `⌘E` modal | `CalculatorPage.jsx`, `components/calculator/*`, `src/utils/bote.js`, `useCalcStore.js`, `server/routes/calculator.js` |
 | Pomodoro Timer | Global modal | `PomodoroModal.jsx`, `PomodoroWidget.jsx`, `useTimerStore.js` |
 | Settings | `/settings` | `SettingsPage.jsx` |
+
+Cross-cutting modules:
+- `src/utils/knowledgeGraph.js` — pure graph data + algorithms, imported by BOTH client and server. Keep it dependency-free. Edges must stay acyclic — `validateGraph()` runs at server boot and in tests.
+- `server/srs/scheduler.js` — the SM-2 scheduler (`calculateNextSrsState`), shared by decks and graph routes.
+- `server/graph/health.js` / `server/graph/remediation.js` — pure functions; the route layer owns all DB access.
 
 ---
 

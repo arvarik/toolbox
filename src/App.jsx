@@ -8,10 +8,13 @@ import StudyPage from './pages/StudyPage'
 import SettingsPage from './pages/SettingsPage'
 import FeynmanPage from './pages/FeynmanPage'
 import InterleavedPage from './pages/InterleavedPage'
+import CalculatorPage from './pages/CalculatorPage'
+import GraphPage from './pages/GraphPage'
 import { processSyncQueue } from './utils/db'
 import AhaMoment from './components/shared/AhaMoment'
 import CommitModal from './components/chat/CommitModal'
 import TaskWorkingBar from './components/shared/TaskWorkingBar'
+import CalculatorModal from './components/calculator/CalculatorModal'
 
 export default function App() {
   useEffect(() => {
@@ -43,12 +46,15 @@ export default function App() {
           <Route path="/study" element={<StudyPage />} />
           <Route path="/feynman" element={<FeynmanPage />} />
           <Route path="/interleaved" element={<InterleavedPage />} />
+          <Route path="/calculator" element={<CalculatorPage />} />
+          <Route path="/graph" element={<GraphPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Routes>
       <AhaMoment />
       <CommitModal />
       <TaskWorkingBar />
+      <CalculatorModal />
     </>
   )
 }

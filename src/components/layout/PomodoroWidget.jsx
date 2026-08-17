@@ -89,7 +89,7 @@ export default function PomodoroWidget() {
 
         {/* Shortcut or Controls */}
         {!collapsed && !isActive && (
-          <span className="sidebar-shortcut hide-on-mobile">⌘7</span>
+          <span className="sidebar-shortcut hide-on-mobile">⌘9</span>
         )}
         
         {!collapsed && isActive && (

@@ -12,6 +12,8 @@ All request bodies are JSON (`Content-Type: application/json`) unless noted. All
 - [Chat & AI](#chat--ai)
 - [Flashcard Decks](#flashcard-decks)
 - [Flashcards](#flashcards)
+- [Knowledge Graph](#knowledge-graph)
+- [BotE Calculator](#bote-calculator)
 - [Whiteboard Boards](#whiteboard-boards)
 - [Guide Content](#guide-content)
 - [User Profile (Shadow Memory)](#user-profile-shadow-memory)
@@ -465,7 +467,7 @@ All fields are optional. SRS state fields (`ease_factor`, `interval`, etc.) are 
 
 ### `PUT /api/decks/:deckId/cards/:cardId/review`
 
-Submit a review rating for a card. Runs the SM-2 SRS algorithm and persists the next state. Also increments the study session heatmap counter for today.
+Submit a review rating for a card. Runs the SM-2 SRS algorithm and persists the next state. Also increments the study session heatmap counter for today. (`POST` is accepted as an alias for older clients and queued offline mutations.)
 
 **Request Body**
 ```json
@@ -482,6 +484,27 @@ Submit a review rating for a card. Runs the SM-2 SRS algorithm and persists the 
 
 **Response `200`** — Updated card object with recalculated SRS fields and fresh `srs_previews`.
 
+Side effects tied to the Knowledge Graph remediation engine:
+
+- Reviewing a card resolves its open `remediation_queue` rows.
+- On failure (`quality < 3`), the engine finds the card's graph nodes, checks their direct prerequisite nodes for shaky cards (new, learning, lapsed, overdue, or low ease), and queues up to 3 of them for the next session. The response includes the plan:
+
+```json
+{
+  "...": "updated card fields",
+  "remediation": [
+    {
+      "cardId": "uuid",
+      "front": "What is replication lag?",
+      "nodeName": "Replication (Leader / Follower)",
+      "reason": "Foundation for CAP & PACELC"
+    }
+  ]
+}
+```
+
+Queued cards lead the next due-card session (single-deck and interleaved) tagged with `is_remediation: 1`, `remediation_node`, and `remediation_reason`.
+
 ---
 
 ### `DELETE /api/decks/:deckId/cards/:cardId`
@@ -489,6 +512,104 @@ Submit a review rating for a card. Runs the SM-2 SRS algorithm and persists the 
 Delete a single card.
 
 **Response `204`** — No content.
+
+---
+
+## Knowledge Graph
+
+The graph itself (nodes, prerequisite edges, learning tracks) is defined in `src/utils/knowledgeGraph.js` and validated (unique ids, no dangling edges, acyclic) at server boot. These endpoints combine it with live flashcard SRS state.
+
+### `GET /api/graph`
+
+The full graph with live memory health per node.
+
+**Response `200`**
+```json
+{
+  "nodes": [
+    {
+      "id": "consistent-hashing",
+      "name": "Consistent Hashing",
+      "pillarId": "distributed-mechanics",
+      "pillarName": "Distributed Data Mechanics",
+      "pillarColor": "#a78bfa",
+      "topicId": "partitioning-sharding",
+      "summary": "The hash ring: adding a node only remaps the arc it owns.",
+      "health": "decayed",
+      "strength": 0.35,
+      "counts": { "total": 2, "new": 1, "learning": 0, "lapsed": 1, "due": 0, "maturing": 0, "mastered": 0 },
+      "ready": false,
+      "locked": false
+    }
+  ],
+  "edges": [{ "from": "partitioning", "to": "consistent-hashing" }],
+  "tracks": [
+    { "id": "senior-distributed", "name": "Senior Distributed Systems", "emoji": "🧠", "description": "...", "nodeIds": ["..."], "nodeCount": 23, "masteredCount": 2 }
+  ],
+  "stats": { "mastered": 4, "due": 20, "decayed": 2, "unseen": 33 },
+  "remediationCount": 1
+}
+```
+
+Health buckets: `mastered` (every graded card at ease ≥ 2.5 and interval > 21 d), `due` (learning, new, or scheduled within 48 h), `decayed` (a lapse, a queued remediation, or crushed ease), `unseen` (no linked cards). Cards link to nodes by keyword phrases, with the card's source guide topic as the fallback.
+
+---
+
+### `GET /api/graph/nodes/:id`
+
+Detail payload for the slide-over panel: linked cards with SRS state, prerequisite/dependent nodes with health, the linked Guide topic (with filled-section count), and whiteboards containing the node's builder components.
+
+**Response `200`** — `{ node, cards, prereqs, dependents, guide, boards }`.
+
+---
+
+### `POST /api/graph/nodes/:id/session`
+
+Build a study session from one node's studyable cards (due, learning, or new), capped at 20.
+
+**Response `200`** — `{ cards, nodeName }`. Cards carry `deckName`, `nodeName`, and `srs_previews`.
+
+---
+
+### `POST /api/graph/tracks/:id/session`
+
+Build a study session for a curated learning track. Cards are ordered by the track's topological (prerequisite-first) node order, due cards before new within each node, capped at 30.
+
+**Response `200`** — `{ cards, trackName, nodeOrder }`.
+
+---
+
+## BotE Calculator
+
+All sizing math runs client-side in `src/utils/bote.js`. The server's only calculator endpoint is the AI sanity check.
+
+### `POST /api/calculator/audit`
+
+"Audit My Math" — sends the current assumptions and computed results to the AI and returns a structured critique.
+
+**Request Body**
+```json
+{
+  "scenario": { "id": "url-shortener", "name": "URL Shortener", "description": "..." },
+  "inputs": { "dau": 10000000, "readRatio": 100, "...": "..." },
+  "results": { "peakTotalQps": "463", "retainedWithReplication": "1.08 TB", "...": "..." },
+  "model": "gemini-3.5-flash"
+}
+```
+
+**Response `200`**
+```json
+{
+  "verdict": "revisit",
+  "summary": "Two or three sentences on the estimate's quality.",
+  "findings": [
+    { "severity": "warning", "area": "Storage", "finding": "...", "suggestion": "..." }
+  ],
+  "omittedFactors": ["Database index overhead", "CDN offload of media egress"]
+}
+```
+
+`verdict` is `"sound"` or `"revisit"`. `severity` is `"critical"`, `"warning"`, or `"info"`.
 
 ---
 

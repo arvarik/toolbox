@@ -1,6 +1,6 @@
 
 import { useParams } from 'react-router-dom'
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, Calculator } from 'lucide-react'
 import PillarNav from '../components/guide/PillarNav'
 import BlueprintShell from '../components/guide/BlueprintShell'
 import ChatPanel from '../components/shared/ChatPanel'
@@ -21,6 +21,7 @@ export default function GuidePage() {
   const { pillarId } = useParams()
   const chatOpen = useAppStore((s) => s.chatOpen.guide)
   const toggleChat = useAppStore((s) => s.toggleChat)
+  const setCalcModalOpen = useAppStore((s) => s.setCalcModalOpen)
 
   const isMobile = useIsMobile()
 
@@ -33,14 +34,28 @@ export default function GuidePage() {
       {/* Center: Blueprint content (or library overview if no pillar) */}
       <div className="guide-content">
         {/* Floating Ask AI button — only in blueprint view on desktop */}
-        {!isMobile && !chatOpen && pillarId && (
-          <button
-            className="btn btn-primary floating-chat-btn"
-            onClick={() => toggleChat('guide')}
-          >
-            <MessageSquare size={16} />
-            Ask AI
-          </button>
+        {!isMobile && pillarId && (
+          <div className="guide-float-actions">
+            {/* Quick BotE calculator for scaling-estimate sections */}
+            <button
+              className="btn btn-secondary floating-calc-btn"
+              onClick={() => setCalcModalOpen(true)}
+              title="BotE Calculator (⌘E)"
+              aria-label="Open BotE Calculator"
+              id="guide-calc-btn"
+            >
+              <Calculator size={16} />
+            </button>
+            {!chatOpen && (
+              <button
+                className="btn btn-primary floating-chat-btn"
+                onClick={() => toggleChat('guide')}
+              >
+                <MessageSquare size={16} />
+                Ask AI
+              </button>
+            )}
+          </div>
         )}
 
         <BlueprintShell />

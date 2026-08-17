@@ -128,6 +128,16 @@ const useAppStore = create((set, get) => ({
       toasts: s.toasts.filter((t) => t.id !== id),
     })),
 
+  // BotE Calculator quick-access modal (available on every page)
+  calcModalOpen: false,
+  setCalcModalOpen: (open) => set({ calcModalOpen: open }),
+  toggleCalcModal: () => set((s) => ({ calcModalOpen: !s.calcModalOpen })),
+
+  // SRS sync counter — bumps after every card review so open views
+  // (e.g. the Knowledge Graph heatmap) can refresh without a reload.
+  srsVersion: 0,
+  bumpSrsVersion: () => set((s) => ({ srsVersion: s.srsVersion + 1 })),
+
   // Canvas Whiteboard Nodes
   nodes: [],
   setNodes: (nodes) => set({ nodes }),

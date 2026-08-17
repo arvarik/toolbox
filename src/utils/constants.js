@@ -34,6 +34,7 @@ export const PILLARS = [
       { id: 'relational-oltp', name: 'Relational Databases (OLTP)' },
       { id: 'analytical-olap', name: 'Analytical Databases (OLAP)' },
       { id: 'kv-stores', name: 'Key-Value / In-Memory Stores' },
+      { id: 'caching-strategies', name: 'Caching Strategies & Invalidation' },
       { id: 'object-blob-storage', name: 'Object & Blob Storage' },
       { id: 'full-text-search', name: 'Full-Text Search (Inverted Indexes)' },
       { id: 'vector-indexes', name: 'Vector & Semantic Indexes' },
@@ -93,6 +94,7 @@ export const PILLARS = [
       { id: 'partitioning-sharding', name: 'Partitioning & Sharding' },
       { id: 'replication-strategies', name: 'Replication Strategies' },
       { id: 'consistency-models', name: 'Consistency Models (CAP/PACELC)' },
+      { id: 'consensus-coordination', name: 'Consensus & Coordination' },
     ],
   },
   {

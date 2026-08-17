@@ -14,9 +14,11 @@ A complete guide to all features of the Toolbox system design interview preparat
 6. [Flashcards — Spaced Repetition](#flashcards--spaced-repetition)
 7. [Feynman Simulator](#feynman-simulator)
 8. [Interleaved Review](#interleaved-review)
-9. [Pomodoro Timer](#pomodoro-timer)
-10. [Settings & Configuration](#settings--configuration)
-11. [Keyboard Shortcuts](#keyboard-shortcuts)
+9. [Knowledge Graph](#knowledge-graph)
+10. [BotE Calculator](#bote-calculator)
+11. [Pomodoro Timer](#pomodoro-timer)
+12. [Settings & Configuration](#settings--configuration)
+13. [Keyboard Shortcuts](#keyboard-shortcuts)
 
 ---
 
@@ -42,7 +44,9 @@ The left sidebar provides access to all sections:
 | **Flashcards** | `⌘4` | Spaced repetition study decks |
 | **Feynman** | `⌘5` | Feynman Technique simulator |
 | **Interleaved** | `⌘6` | Cross-deck review session |
-| **Pomodoro** | `⌘7` | Focus timer with plant gamification |
+| **Graph** | `⌘7` | Knowledge Graph with live retention heatmap |
+| **Calculator** | `⌘8` | Back-of-the-envelope capacity estimation sandbox |
+| **Pomodoro** | `⌘9` | Focus timer with plant gamification |
 | **Settings** | `⌘,` | API key, model, and data management |
 
 The sidebar can be collapsed with `⌘B` to maximize your working area.
@@ -272,9 +276,74 @@ Access it from the sidebar (`⌘6`) or navigate to `/interleaved`.
 
 ---
 
+## Knowledge Graph
+
+The Graph page (`/graph`, `⌘7`) turns your flashcards and guide notes into an interactive **prerequisite map** of ~60 system design concepts, grouped by the 7 pillars. An edge means "learn this first" — for example *Consistent Hashing → Distributed KV Stores → Virtual Nodes*.
+
+### Retention Heatmap
+
+Node colors track your live SM-2 memory health, updating immediately after every graded card — no reload needed:
+
+- 🟢 **Mastered** — every linked card sits at ease ≥ 2.5 with an interval over 21 days
+- 🟡 **Learning / Due** — something is new, learning, or scheduled within 48 hours
+- 🔴 **Decayed / Fragile** — a card lapsed, has crushed ease, or waits in the remediation queue
+- ⚪ **Not started** — no cards link to this concept yet
+
+Cards link to concepts automatically: keyword phrases in the card text match first; the card's source guide topic is the fallback.
+
+### Exploring
+
+- **Hover** a node to light up its full lineage — prerequisites in indigo, everything it unlocks in teal.
+- **Click** a node to open the slide-over panel: memory strength, linked flashcards with their SRS states, prerequisite and dependent concepts, plus deep links to the Guide topic, related whiteboards, and a one-click **Study N cards** session.
+- **Search**, **pillar chips**, and the readiness filter (*Ready to Learn / Needs Review / Mastered*) narrow the view. "Ready to Learn" surfaces untouched concepts whose prerequisites you have already graduated.
+
+### Learning Tracks
+
+Pick a curated track (e.g. *Senior Distributed Systems*, *Storage & Consistency*, *Caching & Read Performance*) to number its concepts in prerequisite order on the canvas. **Start Track Session** builds a study queue from those concepts — due cards first, foundations before capstones.
+
+### Adaptive Prerequisite Remediation
+
+When you rate an advanced card **Again**, the engine checks whether the failure stems from a broken foundation. It inspects the concept's direct prerequisites for *shaky* cards — never studied, still learning, lapsed, overdue, or low ease — and queues up to three of them into your next review session. They appear first, marked with a red **Foundation Checkup** banner explaining which concept they support. Rock-solid foundations produce no remediation: the system only intervenes when the foundation is actually the problem.
+
+---
+
+## BotE Calculator
+
+The Calculator page (`/calculator`, `⌘8`) is a back-of-the-envelope capacity estimation sandbox. Every result recalculates instantly as you drag sliders — no mental math friction between an assumption and its consequence.
+
+It is also available everywhere as a quick modal: press `⌘E`, or use the calculator buttons in the Chat header, the Guide, and the Builder toolbar. The modal and the full page share the same state, which persists across navigation and restarts.
+
+### Inputs
+
+Daily Active Users, requests per user, read:write ratio, peak multiplier, payload size, media percentage and size, retention, and replication factor. **Advanced assumptions** adds index/metadata overhead, cache working-set percentage, target QPS per server, CPU utilization target, and storage per shard. Scenario presets (URL Shortener, Video Streaming, E-Commerce Flash Sale, Chat, Social Feed, Ride Sharing) load realistic numbers in one click.
+
+### Outputs
+
+- **Traffic** — average read/write QPS and peak QPS
+- **Storage** — ingestion rate, per-day, per-year, and retained total with replication and overhead
+- **Cache & Memory** — the 80/20 working-set cache size and the Redis-class node count
+- **Bandwidth** — peak ingress and egress
+- **Hardware** — app server count from target CPU saturation, and database shard count
+
+Every stat shows the formula that produced it, with your actual numbers substituted in.
+
+### Numbers Every Engineer Should Know
+
+The reference section carries the canonical latency table (L1 cache 0.5 ns → cross-continent RTT 150 ms) and a powers-of-two table. Click any latency row to add it to the **Latency Budget** composer — stack up a request path (e.g. 1 cross-AZ round trip + 2 NVMe reads) and compare the total against a 200 ms API SLO.
+
+### Audit My Math
+
+One click sends your assumptions and results to the AI, which reviews them against the selected scenario and returns a structured critique: a verdict, severity-ranked findings with concrete fixes, and real-world factors the estimate omits (index overhead, compression, replication lag buffers, CDN offload, …).
+
+### Export
+
+The Export menu copies the summary as **Markdown with LaTeX formulas**, sends it into the **AI Chat** as a prefilled message, or appends it to any **Guide section**.
+
+---
+
 ## Pomodoro Timer
 
-The Pomodoro timer is accessible globally from the sidebar. Click **Pomodoro** (`⌘7`) to open the timer modal.
+The Pomodoro timer is accessible globally from the sidebar. Click **Pomodoro** (`⌘9`) to open the timer modal.
 
 ### Timer Features
 
@@ -359,8 +428,14 @@ View database statistics:
 | `⌘2` | Navigate to Guide |
 | `⌘3` | Navigate to Builder |
 | `⌘4` | Navigate to Flashcards |
+| `⌘5` | Navigate to Feynman |
+| `⌘6` | Navigate to Interleaved |
+| `⌘7` | Navigate to Knowledge Graph |
+| `⌘8` | Navigate to BotE Calculator |
+| `⌘9` | Toggle Pomodoro timer |
 | `⌘,` | Navigate to Settings |
 | `⌘K` | Toggle AI Chat panel (on Guide, Builder, Flashcards pages) |
+| `⌘E` | Toggle the quick BotE Calculator modal |
 | `⌘B` | Toggle sidebar collapse |
 | `⌘D` | Toggle Dark/Light Mode |
 | `⌘S` | Save board (in Builder) |

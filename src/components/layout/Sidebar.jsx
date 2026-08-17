@@ -9,7 +9,9 @@ import {
   PanelLeftClose,
   Layers,
   BrainCircuit,
-  Shuffle
+  Shuffle,
+  Waypoints,
+  Calculator
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import PomodoroWidget from './PomodoroWidget'
@@ -26,6 +28,8 @@ const navItems = [
       { to: '/study', icon: GraduationCap, label: 'Flashcards', shortcut: '⌘4' },
       { to: '/feynman', icon: BrainCircuit, label: 'Feynman', shortcut: '⌘5' },
       { to: '/interleaved', icon: Shuffle, label: 'Interleaved', shortcut: '⌘6' },
+      { to: '/graph', icon: Waypoints, label: 'Graph', shortcut: '⌘7' },
+      { to: '/calculator', icon: Calculator, label: 'Calculator', shortcut: '⌘8' },
     ],
   },
 ]

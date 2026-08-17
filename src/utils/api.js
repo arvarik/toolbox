@@ -111,7 +111,7 @@ export const flashcardsApi = {
   delete: (deckId, cardId) =>
     request(`/decks/${deckId}/cards/${cardId}`, { method: 'DELETE' }),
   review: (deckId, cardId, quality, confidence) =>
-    request(`/decks/${deckId}/cards/${cardId}/review`, { method: 'POST', body: { quality, confidence } }),
+    request(`/decks/${deckId}/cards/${cardId}/review`, { method: 'PUT', body: { quality, confidence } }),
   checkDuplicates: (deckId, cards) =>
     request(`/decks/${deckId}/cards/check-duplicates`, { method: 'POST', body: { cards } }),
 }
@@ -305,4 +305,22 @@ export const systemApi = {
 /* ---- Search ---- */
 export const searchApi = {
   query: (q) => request(`/search?q=${encodeURIComponent(q)}`),
+}
+
+/* ---- Knowledge Graph ---- */
+export const graphApi = {
+  /** Full graph: nodes with live SRS health, edges, tracks, stats */
+  get: () => request('/graph'),
+  /** Node detail for the slide-over panel */
+  getNode: (id) => request(`/graph/nodes/${id}`),
+  /** Study session built from one node's studyable cards */
+  nodeSession: (id) => request(`/graph/nodes/${id}/session`, { method: 'POST' }),
+  /** Study session for a curated learning track, in prerequisite order */
+  trackSession: (id) => request(`/graph/tracks/${id}/session`, { method: 'POST' }),
+}
+
+/* ---- BotE Calculator ---- */
+export const calculatorApi = {
+  /** AI sanity check. data: { scenario, inputs, results, model } */
+  audit: (data) => request('/calculator/audit', { method: 'POST', body: data }),
 }

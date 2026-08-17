@@ -164,6 +164,21 @@ This allows building concept dependency graphs inside a deck.
 
 ---
 
+## Knowledge-Graph Remediation
+
+Beyond per-card `prerequisite_id` links, the Knowledge Graph (`src/utils/knowledgeGraph.js`) defines a concept-level prerequisite DAG. Failing a card (`quality < 3`) triggers the remediation engine (`server/graph/remediation.js`):
+
+1. Map the failed card to its graph nodes (keyword phrases first, source guide topic as fallback).
+2. Collect the **direct** prerequisite nodes (one hop up, never transitive).
+3. Among those nodes' cards, keep the **shaky** ones: never studied, in Learning/Relearning, `ease_factor < 2.3`, `interval < 4` days, or overdue. Solid foundations produce no remediation — then the failure is treated as intrinsic to the card.
+4. Queue at most **3** cards (weakest ease first) into `remediation_queue`.
+
+Queued cards lead the next due-card session (before learning/review/new cards), flagged `is_remediation: 1` so the UI shows a Foundation Checkup banner. Reviewing a queued card — at any rating — resolves its queue row. Duplicate open rows for the same card are never created, so the queue cannot flood.
+
+Node health for the graph heatmap lives in `server/graph/health.js`: a node is **mastered** when every graded card has `ease ≥ 2.5` and `interval > 21` days with nothing due within 48 hours, **decayed** on any lapse/remediation/crushed ease, **due** otherwise, and **unseen** with no linked cards.
+
+---
+
 ## SRS Preview Labels
 
 The UI shows interval previews for all 4 buttons before the user picks. Formatting rules:
@@ -179,7 +194,7 @@ The UI shows interval previews for all 4 buttons before the user picks. Formatti
 
 ## Implementation Reference
 
-The full algorithm is a single pure function `calculateNextSrsState(card, quality, settings, confidence)` in [`server/routes/decks.js`](../server/routes/decks.js#L25). It returns a plain object with:
+The full algorithm is a single pure function `calculateNextSrsState(card, quality, settings, confidence)` in [`server/srs/scheduler.js`](../server/srs/scheduler.js) (shared by the decks and knowledge-graph routes). It returns a plain object with:
 
 ```js
 {

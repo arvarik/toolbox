@@ -15,6 +15,8 @@ import guideContentRoutes from './routes/guide_content.js'
 import profileRoutes from './routes/profile.js'
 import systemRoutes from './routes/system.js'
 import searchRoutes from './routes/search.js'
+import graphRoutes from './routes/graph.js'
+import calculatorRoutes from './routes/calculator.js'
 import { seedApiKeysFromEnv } from './providers/index.js'
 
 // Seed API keys from environment variables for all registered providers
@@ -42,6 +44,8 @@ app.use('/api/guide-content', guideContentRoutes)
 app.use('/api/profile', profileRoutes)
 app.use('/api/system', systemRoutes)
 app.use('/api/search', searchRoutes)
+app.use('/api/graph', graphRoutes)
+app.use('/api/calculator', calculatorRoutes)
 
 // Health check
 app.get('/api/health', (req, res) => {
