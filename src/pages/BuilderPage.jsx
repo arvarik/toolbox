@@ -1,9 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import {
-  MessageSquare, Save, Undo, Redo, ZoomIn, ZoomOut,
-  MousePointer, Type, ArrowRight, Palette, Layout, Download, Calculator,
-} from 'lucide-react'
+import { MessageSquare, Save, Layout, Download, Calculator } from 'lucide-react'
 import Toolbox from '../components/builder/Toolbox'
 import Canvas from '../components/builder/Canvas'
 import BoardList from '../components/builder/BoardList'
@@ -12,6 +9,12 @@ import ChatPanel from '../components/shared/ChatPanel'
 import useAppStore from '../stores/appStore'
 import useIsMobile from '../hooks/useIsMobile'
 import { boardsApi } from '../utils/api'
+import {
+  toFlowNodes,
+  toFlowEdges,
+  toBoardData,
+  categoryColor,
+} from '../components/builder/boardModel'
 
 // Auto-save debounce interval (ms)
 const AUTO_SAVE_DELAY = 3000
@@ -28,8 +31,6 @@ export default function BuilderPage() {
 
   const [boards, setBoards] = useState([])
   const [activeBoard, setActiveBoard] = useState(null)
-  const [activeTool, setActiveTool] = useState('select')
-  const [zoomLevel, setZoomLevel] = useState(100)
   const [showTemplates, setShowTemplates] = useState(false)
   const isMobile = useIsMobile()
   const autoSaveTimer = useRef(null)
@@ -91,12 +92,14 @@ export default function BuilderPage() {
       return
     }
 
-    // Load from server
+    // Load from server (persisted board shape → React Flow shape)
     boardsApi.get(activeBoard).then((board) => {
       if (board && board.data) {
-        setNodes(board.data.nodes || [])
-        setEdges(board.data.edges || [])
-        lastSavedData.current = JSON.stringify({ nodes: board.data.nodes || [], edges: board.data.edges || [] })
+        const boardNodes = board.data.nodes || []
+        const boardEdges = board.data.edges || []
+        setNodes(toFlowNodes(boardNodes))
+        setEdges(toFlowEdges(boardEdges, boardNodes))
+        lastSavedData.current = JSON.stringify({ nodes: boardNodes, edges: boardEdges })
       } else {
         setNodes([])
         setEdges([])
@@ -111,11 +114,14 @@ export default function BuilderPage() {
   }, [activeBoard])
 
   // ─── Auto-save: debounced save when nodes or edges change ───
+  // Compare and persist in the board shape, so selection/drag churn in
+  // the React Flow state never triggers a save on its own.
   useEffect(() => {
     // Skip local (unsaved) boards
     if (!activeBoard || unsavedIds.has(activeBoard)) return
 
-    const currentData = JSON.stringify({ nodes, edges })
+    const boardData = toBoardData(nodes, edges)
+    const currentData = JSON.stringify(boardData)
     if (currentData === lastSavedData.current) return
 
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current)
@@ -124,7 +130,7 @@ export default function BuilderPage() {
       const currentBoard = boards.find((b) => b.id === activeBoard)
       if (!currentBoard) return
       try {
-        await boardsApi.update(activeBoard, { name: currentBoard.name, data: { nodes, edges } })
+        await boardsApi.update(activeBoard, { name: currentBoard.name, data: boardData })
         lastSavedData.current = currentData
       } catch {
         // Silent fail for auto-save
@@ -151,7 +157,7 @@ export default function BuilderPage() {
     if (!currentBoard) return
 
     const name = currentBoard.name
-    const data = { nodes, edges }
+    const data = toBoardData(nodes, edges)
     const isLocal = unsavedIds.has(activeBoard)
 
     try {
@@ -279,21 +285,7 @@ export default function BuilderPage() {
 
   // ─── Canvas Handlers ───
 
-  const handleZoomIn = () => {
-    const canvas = document.getElementById('builder-canvas')
-    if (canvas?._zoomIn) canvas._zoomIn()
-  }
-
-  const handleZoomOut = () => {
-    const canvas = document.getElementById('builder-canvas')
-    if (canvas?._zoomOut) canvas._zoomOut()
-  }
-
-  const handleTransformChange = (t) => {
-    setZoomLevel(Math.round(t.scale * 100))
-  }
-
-  // Load template onto canvas
+  // Load template onto canvas (templates ship in the persisted board shape)
   const handleLoadTemplate = (template) => {
     const ts = Date.now()
     const idMap = {}
@@ -308,18 +300,19 @@ export default function BuilderPage() {
       from: idMap[e.from] || e.from,
       to: idMap[e.to] || e.to,
     }))
-    setNodes(newNodes)
-    setEdges(newEdges)
+    setNodes(toFlowNodes(newNodes))
+    setEdges(toFlowEdges(newEdges, newNodes))
     setShowTemplates(false)
     addToast({ type: 'success', message: `Loaded "${template.name}" template` })
   }
 
-  // Export board as PNG image
+  // Export board as PNG image (draws from the persisted board shape)
   const handleExportImage = useCallback(() => {
     const canvasEl = document.getElementById('builder-canvas')
     if (!canvasEl) return
 
     try {
+      const { nodes: boardNodes, edges: boardEdges } = toBoardData(nodes, edges)
       const rect = canvasEl.getBoundingClientRect()
       const canvas2d = document.createElement('canvas')
       const scale = 2
@@ -341,17 +334,10 @@ export default function BuilderPage() {
         }
       }
 
-      const catColors = {
-        Compute: '#818cf8',
-        Storage: '#34d399',
-        Clients: '#60a5fa',
-        Observability: '#fbbf24',
-      }
-
       ctx.scale(scale, scale)
 
-      nodes.forEach((node) => {
-        const color = catColors[node.category] || '#818cf8'
+      boardNodes.forEach((node) => {
+        const color = categoryColor(node.category)
         const x = node.x || 0
         const y = node.y || 0
         const w = 140
@@ -376,9 +362,9 @@ export default function BuilderPage() {
         ctx.fillText(node.name || 'Node', x + 14, y + h / 2)
       })
 
-      edges.forEach((edge) => {
-        const fromNode = nodes.find((n) => n.id === edge.from)
-        const toNode = nodes.find((n) => n.id === edge.to)
+      boardEdges.forEach((edge) => {
+        const fromNode = boardNodes.find((n) => n.id === edge.from)
+        const toNode = boardNodes.find((n) => n.id === edge.to)
         if (!fromNode || !toNode) return
 
         const fromX = (fromNode.x || 0) + 70
@@ -386,7 +372,7 @@ export default function BuilderPage() {
         const toX = (toNode.x || 0) + 70
         const toY = toNode.y || 0
 
-        const fromColor = catColors[fromNode.category] || '#818cf8'
+        const fromColor = categoryColor(fromNode.category)
         ctx.strokeStyle = fromColor + '88'
         ctx.lineWidth = 1.5
         ctx.beginPath()
@@ -410,13 +396,6 @@ export default function BuilderPage() {
     }
   }, [nodes, edges, boards, activeBoard, addToast])
 
-  const tools = [
-    { id: 'select', icon: MousePointer, label: 'Select' },
-    { id: 'text', icon: Type, label: 'Add Text' },
-    { id: 'arrow', icon: ArrowRight, label: 'Draw Arrow' },
-    { id: 'color', icon: Palette, label: 'Change Color' },
-  ]
-
   return (
     <div className="builder-layout" id="builder-page">
       {/* Left: Component toolbox */}
@@ -439,56 +418,10 @@ export default function BuilderPage() {
 
         {/* Toolbar */}
         <div className="builder-toolbar">
-          <div className="builder-toolbar-group">
-            {tools.map((tool) => {
-              const Icon = tool.icon
-              return (
-                <button
-                  key={tool.id}
-                  className={`btn btn-ghost btn-icon${activeTool === tool.id ? ' active' : ''}`}
-                  onClick={() => setActiveTool(tool.id)}
-                  title={tool.label}
-                  id={`tool-${tool.id}`}
-                  style={
-                    activeTool === tool.id
-                      ? {
-                          background: 'var(--color-accent-subtle)',
-                          color: 'var(--color-accent)',
-                        }
-                      : undefined
-                  }
-                >
-                  <Icon size={16} />
-                </button>
-              )
-            })}
-
-            <div className="divider" />
-
-            <button className="btn btn-ghost btn-icon" title="Undo" id="tool-undo">
-              <Undo size={16} />
-            </button>
-            <button className="btn btn-ghost btn-icon" title="Redo" id="tool-redo">
-              <Redo size={16} />
-            </button>
-
-            <div className="divider" />
-
-            <button className="btn btn-ghost btn-icon" title="Zoom In" id="tool-zoom-in" onClick={handleZoomIn}>
-              <ZoomIn size={16} />
-            </button>
-            <span style={{
-              fontSize: 'var(--text-xs)',
-              fontFamily: 'var(--font-mono)',
-              color: 'var(--color-text-tertiary)',
-              minWidth: 36,
-              textAlign: 'center',
-            }}>
-              {zoomLevel}%
+          <div className="builder-toolbar-group builder-toolbar-hint">
+            <span>
+              Drag to connect anchors · Click an edge to remove it · <kbd>⌫</kbd> deletes selection
             </span>
-            <button className="btn btn-ghost btn-icon" title="Zoom Out" id="tool-zoom-out" onClick={handleZoomOut}>
-              <ZoomOut size={16} />
-            </button>
           </div>
 
           <div className="builder-toolbar-group">
@@ -536,7 +469,7 @@ export default function BuilderPage() {
 
         {/* Canvas */}
         <div style={{ position: 'relative', flex: 1 }}>
-          <Canvas onTransformChange={handleTransformChange} />
+          <Canvas />
           {showTemplates && (
             <TemplateGallery
               onSelect={handleLoadTemplate}

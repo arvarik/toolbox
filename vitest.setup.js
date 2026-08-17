@@ -37,6 +37,29 @@ window.ResizeObserver = ResizeObserver
 // 3. Mock scrollIntoView (unsupported by jsdom, used in ChatPanel message scroll)
 Element.prototype.scrollIntoView = vi.fn()
 
+// 3b. React Flow (@xyflow/react) jsdom requirements — per the official
+// testing guide: DOMMatrixReadOnly, element dimensions, and SVG getBBox.
+class DOMMatrixReadOnlyMock {
+  constructor(transform) {
+    const scale = transform?.match(/scale\(([\d.]+)\)/)?.[1]
+    this.m22 = scale !== undefined ? +scale : 1
+  }
+}
+globalThis.DOMMatrixReadOnly = DOMMatrixReadOnlyMock
+
+Object.defineProperties(globalThis.HTMLElement.prototype, {
+  offsetHeight: {
+    get() { return parseFloat(this.style.height) || 1 },
+    configurable: true,
+  },
+  offsetWidth: {
+    get() { return parseFloat(this.style.width) || 1 },
+    configurable: true,
+  },
+})
+
+globalThis.SVGElement.prototype.getBBox = () => ({ x: 0, y: 0, width: 0, height: 0 })
+
 // 4. Mock global fetch API
 globalThis.fetch = vi.fn()
 

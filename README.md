@@ -21,9 +21,9 @@ Toolbox is a self-hosted web app that brings together everything you need to pre
 |---------|-------------|
 | 🤖 **AI Learning Chat** | Session-based chat with 4 AI personas (Socratic, ELI5, Strict, Devil's Advocate), topic-specific starter prompts, and concept map generation |
 | 📖 **Knowledge Guide** | 7-pillar structured library with AI-assisted Commit flow to save learnings from chat sessions |
-| 🎨 **Architecture Builder** | Drag-and-drop whiteboard with 20+ components, bezier connections, templates, and AI design verification |
+| 🎨 **Architecture Builder** | React Flow-powered whiteboard with 25+ components, drag-to-connect anchors, minimap, multi-select, templates, and AI design verification |
 | 📚 **Flashcards + SRS** | SM-2 spaced repetition system with per-deck settings, card browser, deck stats, and a study activity heatmap |
-| 🕸️ **Knowledge Graph** | Interactive prerequisite map of ~60 system design concepts with a live SM-2 retention heatmap, readiness filters, curated learning tracks, and deep links into Guide, Builder, and Flashcards |
+| 🕸️ **Knowledge Graph** | Layered prerequisite map of ~60 system design concepts (React Flow + dagre) with a live SM-2 retention heatmap, lineage highlighting, readiness filters, curated learning tracks, and deep links into Guide, Builder, and Flashcards |
 | 🧱 **Adaptive Remediation** | Fail an advanced card and the SRS engine detects shaky foundations, then queues the prerequisite cards into your next review session |
 | 🧮 **BotE Calculator** | Back-of-the-envelope sizing sandbox: live QPS/storage/cache/bandwidth/hardware math, scenario presets, an interactive latency cheat-sheet with a budget composer, AI "Audit My Math", and 1-click Markdown export |
 | 🧠 **Feynman Simulator** | Voice-enabled Feynman technique: explain a concept, get structured AI feedback on gaps |
@@ -123,7 +123,7 @@ All user data lives in a single SQLite file — back it up by copying that file.
 
 ## 🛠️ Tech Stack
 
-React 19 · Vite · React Router · Zustand · Vanilla CSS · d3-force · Node.js · Express · SQLite (`better-sqlite3`) · Vercel AI SDK (Gemini / Claude / OpenAI / BYOM) · Docker
+React 19 · Vite · React Router · Zustand · React Flow (`@xyflow/react`) · dagre · Vanilla CSS · Node.js · Express · SQLite (`better-sqlite3`) · Vercel AI SDK (Gemini / Claude / OpenAI / BYOM) · Docker
 
 ---
 

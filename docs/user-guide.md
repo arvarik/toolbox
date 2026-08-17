@@ -126,33 +126,32 @@ While viewing a topic, click **Ask AI** to open a contextual chat panel on the r
 
 ## Builder — Architecture Whiteboard
 
-The Builder (`/builder`) is an interactive canvas for practicing architecture diagrams.
+The Builder (`/builder`) is an interactive canvas for practicing architecture diagrams, powered by **React Flow**.
 
 ### Canvas
 
 - **Drag and drop** components from the left toolbox onto the canvas
-- **Connect** components by dragging from connection dots (appear on hover)
-- **Pan** by clicking and dragging the canvas background
-- **Zoom** with `⌘+`/`⌘-` or the zoom controls in the toolbar
+- **Connect** components by dragging between the anchor dots on any side of a card — any side connects to any side
+- **Remove** an edge with a single click on it, or select nodes/edges and press `Backspace`/`Delete`
+- **Pan** by dragging the canvas background; **zoom** with the mouse wheel or the on-canvas controls
+- **Multi-select** by dragging a selection box on empty canvas
+- The **minimap** (bottom-left) shows the whole board with category colors — click or drag it to jump around large diagrams
+- **Fit view** (the frame icon in the canvas controls) re-centers everything
 
 ### Component Library
 
 The toolbox organizes components by category:
 - **Compute** — Load Balancer, API Gateway, Microservice, Serverless Function, Background Worker, Message Queue, Event Bus, Stream Processor, Batch Processor, CDN/Edge Node
-- **Storage** — SQL Database, NoSQL Database, Cache (Redis), Object Storage (S3/GCS), Full-Text Search (Elasticsearch)
-- **Clients** — Web Client, Mobile Client
-- **Observability** — Monitoring & Alerting
+- **Storage** — SQL Database, NoSQL Database, Cache (Redis), Object Storage (S3/GCS), Full-Text Search (Elasticsearch), Vector Database
+- **Clients** — Web Client, Mobile Client, IoT Device, 3rd Party Service
+- **Resiliency** — Rate Limiter, Circuit Breaker, Retry/Backoff Handler, Load Shedder
+- **Observability** — Log Aggregator, Metrics Collector, Distributed Tracer
 
 ### Toolbar Features
 
 | Tool | Function |
 |------|----------|
-| **Select** | Click and drag nodes, resize canvas |
-| **Text** | Add free-form text labels |
-| **Arrow** | Draw directional arrows |
-| **Color** | Change component accent colors |
-| **Undo / Redo** | Step through changes |
-| **Zoom In / Out** | Adjust canvas zoom |
+| **Estimate** | Open the quick BotE Calculator modal |
 | **Templates** | Load pre-built architecture templates |
 | **Export** | Download board as a PNG image |
 | **Save** | Persist the board to the database (`⌘S`) |
@@ -278,7 +277,7 @@ Access it from the sidebar (`⌘6`) or navigate to `/interleaved`.
 
 ## Knowledge Graph
 
-The Graph page (`/graph`, `⌘7`) turns your flashcards and guide notes into an interactive **prerequisite map** of ~60 system design concepts, grouped by the 7 pillars. An edge means "learn this first" — for example *Consistent Hashing → Distributed KV Stores → Virtual Nodes*.
+The Graph page (`/graph`, `⌘7`) turns your flashcards and guide notes into an interactive **prerequisite map** of ~60 system design concepts, grouped by the 7 pillars. An edge means "learn this first" — for example *Consistent Hashing → Distributed KV Stores → Virtual Nodes*. A layered layout (dagre) places every prerequisite in an earlier column than its dependents, so learning always flows left → right. A minimap and canvas controls handle navigation on the large map.
 
 ### Retention Heatmap
 

@@ -175,11 +175,12 @@ function ChatPanelContent({ page, title = 'Ask AI', placeholder = 'Ask a questio
       const contextString = (() => {
         if (context) return context
         if (page === 'builder' && canvasNodes.length > 0) {
-          const nodeNames = canvasNodes.map((n) => `${n.name} (${n.category})`).join(', ')
+          // Canvas state is React Flow-shaped: data.{name,category}, source/target
+          const nodeNames = canvasNodes.map((n) => `${n.data?.name} (${n.data?.category})`).join(', ')
           const edgeDescs = canvasEdges.map((e) => {
-            const fromNode = canvasNodes.find((n) => n.id === e.from)
-            const toNode = canvasNodes.find((n) => n.id === e.to)
-            return `${fromNode?.name || 'Unknown'} → ${toNode?.name || 'Unknown'}`
+            const fromNode = canvasNodes.find((n) => n.id === e.source)
+            const toNode = canvasNodes.find((n) => n.id === e.target)
+            return `${fromNode?.data?.name || 'Unknown'} → ${toNode?.data?.name || 'Unknown'}`
           }).join(', ')
           let desc = `The user is designing a system architecture with ${canvasNodes.length} components: ${nodeNames}.`
           if (canvasEdges.length > 0) {

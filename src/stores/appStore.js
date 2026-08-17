@@ -138,23 +138,12 @@ const useAppStore = create((set, get) => ({
   srsVersion: 0,
   bumpSrsVersion: () => set((s) => ({ srsVersion: s.srsVersion + 1 })),
 
-  // Canvas Whiteboard Nodes
+  // Whiteboard canvas state (React Flow node/edge shape; the persisted
+  // board format is converted at the boundary — see builder/boardModel.js)
   nodes: [],
   setNodes: (nodes) => set({ nodes }),
-
-  // Canvas Whiteboard Edges
   edges: [],
-  setEdges: (edges) => {
-    if (typeof edges === 'function') {
-      set((s) => ({ edges: edges(s.edges) }))
-    } else {
-      set({ edges })
-    }
-  },
-  addEdge: (edge) =>
-    set((s) => ({ edges: [...s.edges, edge] })),
-  removeEdge: (id) =>
-    set((s) => ({ edges: s.edges.filter((e) => e.id !== id) })),
+  setEdges: (edges) => set({ edges }),
   // Aha! Moment micro-interaction
   ahaMomentActive: false,
   triggerAhaMoment: () => {

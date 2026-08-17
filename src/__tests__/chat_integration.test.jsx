@@ -605,10 +605,8 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
 
       expect(screen.getAllByText('Load Balancer').length).toBeGreaterThan(0)
 
-      // Verify active tool highlights
-      const drawArrowTool = screen.getByRole('button', { name: 'Draw Arrow' })
-      fireEvent.click(drawArrowTool)
-      expect(drawArrowTool.className).toContain('active')
+      // The dropped component lands in the shared store (React Flow shape)
+      expect(useAppStore.getState().nodes.some((n) => n.data?.name === 'Load Balancer')).toBe(true)
 
       // Trigger verify design action
       const verifyBtn = document.querySelector('#builder-chat-btn')
