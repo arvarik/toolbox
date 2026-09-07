@@ -11,7 +11,9 @@ import {
   BrainCircuit,
   Shuffle,
   Waypoints,
-  Calculator
+  Calculator,
+  Sun,
+  Moon
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import PomodoroWidget from './PomodoroWidget'
@@ -41,6 +43,8 @@ const bottomItems = [
 export default function Sidebar() {
   const collapsed = useAppStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useAppStore((s) => s.toggleSidebar)
+  const theme = useAppStore((s) => s.theme)
+  const toggleTheme = useAppStore((s) => s.toggleTheme)
   const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
   const location = useLocation()
 
@@ -124,8 +128,20 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Collapse toggle */}
+      {/* Collapse & theme toggles */}
       <div className="sidebar-footer">
+        <button
+          className="sidebar-collapse-btn"
+          onClick={toggleTheme}
+          aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          title={theme === 'dark' ? 'Switch to light theme (⌘D)' : 'Switch to dark theme (⌘D)'}
+          id="theme-toggle-btn"
+          data-testid="theme-toggle"
+          style={{ marginBottom: '4px' }}
+        >
+          {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          {!collapsed && <span className="sidebar-link-label">{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>}
+        </button>
         <button
           className="sidebar-collapse-btn"
           onClick={toggleSidebar}

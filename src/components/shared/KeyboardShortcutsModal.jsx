@@ -1,6 +1,19 @@
+import { useEffect } from 'react'
 import { X, Keyboard } from 'lucide-react'
 
 export default function KeyboardShortcutsModal({ open, onClose }) {
+  useEffect(() => {
+    if (!open) return
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        onClose?.()
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [open, onClose])
+
   if (!open) return null
 
   const shortcuts = [

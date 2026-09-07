@@ -142,6 +142,28 @@ export default function StudyHeatmap({ sessions = [] }) {
         </div>
       </div>
 
+      {totalReviews === 0 && (
+        <div
+          id="study-heatmap-empty-tip"
+          style={{
+            marginBottom: 'var(--space-4)',
+            padding: 'var(--space-2) var(--space-3)',
+            background: 'var(--color-bg-tertiary)',
+            borderRadius: 'var(--radius-md)',
+            fontSize: 'var(--text-xs)',
+            color: 'var(--color-text-secondary)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-2)',
+          }}
+        >
+          <span>🌱</span>
+          <span>
+            <strong>First time here?</strong> Complete your first review session to start tracking your daily study streak and retention heatmap!
+          </span>
+        </div>
+      )}
+
       <div style={{ overflowX: 'auto', paddingBottom: 'var(--space-2)' }}>
         <div style={{ 
           display: 'flex', 

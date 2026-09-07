@@ -219,8 +219,8 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
     if (!reviewMode || isDone || !currentCard || isReviewing) return
 
     const handleKeyDown = (e) => {
-      const tag = e.target.tagName.toLowerCase()
-      if (tag === 'input' || tag === 'textarea' || e.target.isContentEditable) return
+      const tag = e.target?.tagName ? e.target.tagName.toLowerCase() : ''
+      if (tag === 'input' || tag === 'textarea' || Boolean(e.target?.isContentEditable)) return
 
       if (e.key === ' ' || e.key === 'Enter') {
         e.preventDefault()
