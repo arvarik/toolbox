@@ -18,8 +18,9 @@ export default function KeyboardShortcutsModal({ open, onClose }) {
         { label: 'Quick Calculator', keys: ['⌘', 'E'] },
         { label: 'Toggle Pomodoro', keys: ['⌘', '9'] },
         { label: 'Settings', keys: ['⌘', ','] },
-        { label: 'Global Search', keys: ['⌘', '/'] },
-        { label: 'Toggle Sidebar', keys: ['⌘', '\\'] },
+        { label: 'Command Palette / Search', keys: ['⌘', 'K'] },
+        { label: 'Contextual Chat Panel', keys: ['⌘', 'J'] },
+        { label: 'Toggle Sidebar', keys: ['⌘', 'B'] },
       ]
     },
     {

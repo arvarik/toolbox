@@ -18,7 +18,9 @@ import useAppStore from '../stores/appStore'
  *   ⌘, / Ctrl+, → Settings
  *
  * Actions:
- *   ⌘K / Ctrl+K → Toggle chat panel for current page
+ *   ⌘K / Ctrl+K → Open Command Palette / Global Search
+ *   ⌘J / Ctrl+J → Toggle chat panel for current page
+ *   ⌘/ / Ctrl+/ → Open Command Palette / Global Search
  *   ⌘E / Ctrl+E → Toggle quick BotE Calculator modal
  *   ⌘9 / Ctrl+9 → Toggle Pomodoro
  *   ⌘B / Ctrl+B → Toggle sidebar
@@ -32,6 +34,7 @@ export default function useKeyboardShortcuts() {
   const toggleChat = useAppStore((s) => s.toggleChat)
   const toggleTheme = useAppStore((s) => s.toggleTheme)
   const toggleCalcModal = useAppStore((s) => s.toggleCalcModal)
+  const toggleSearch = useAppStore((s) => s.toggleSearch)
 
   useEffect(() => {
     const handler = (e) => {
@@ -93,8 +96,13 @@ export default function useKeyboardShortcuts() {
           break
         case 'k':
         case 'K':
+        case '/':
           e.preventDefault()
-          // Chat page has its own full-page chat, no toggle needed
+          toggleSearch()
+          break
+        case 'j':
+        case 'J':
+          e.preventDefault()
           if (location.pathname.startsWith('/guide')) toggleChat('guide')
           else if (location.pathname.startsWith('/builder')) toggleChat('builder')
           else if (location.pathname.startsWith('/study')) toggleChat('study')
@@ -128,5 +136,5 @@ export default function useKeyboardShortcuts() {
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [navigate, location, toggleSidebar, toggleChat, toggleTheme, toggleCalcModal])
+  }, [navigate, location, toggleSidebar, toggleChat, toggleTheme, toggleCalcModal, toggleSearch])
 }

@@ -4,20 +4,35 @@ import { useNavigate } from 'react-router-dom'
 import { PILLARS } from '../../utils/constants'
 import { searchApi } from '../../utils/api'
 
-// Build default list from pillars
-const defaultTopics = PILLARS.flatMap((pillar) =>
-  pillar.topics.map((topic) => ({
-    id: topic.id,
-    name: topic.name,
-    pillarName: pillar.shortName,
-    pillarColor: pillar.color,
-    path: `/guide/${pillar.id}/${topic.id}`,
-  }))
-)
+const QUICK_COMMANDS = [
+  { id: 'cmd-chat', name: 'Open AI Chat', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/chat', shortcut: '⌘1' },
+  { id: 'cmd-guide', name: 'Knowledge Guide', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/guide', shortcut: '⌘2' },
+  { id: 'cmd-builder', name: 'Architecture Whiteboard', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/builder', shortcut: '⌘3' },
+  { id: 'cmd-study', name: 'Flashcards & SRS', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/study', shortcut: '⌘4' },
+  { id: 'cmd-feynman', name: 'Feynman Simulator', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/feynman', shortcut: '⌘5' },
+  { id: 'cmd-interleaved', name: 'Interleaved Review', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/interleaved', shortcut: '⌘6' },
+  { id: 'cmd-graph', name: 'Knowledge Graph', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/graph', shortcut: '⌘7' },
+  { id: 'cmd-calculator', name: 'BotE Calculator', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/calculator', shortcut: '⌘8' },
+  { id: 'cmd-settings', name: 'Settings & Providers', pillarName: 'Navigation', pillarColor: '#818cf8', path: '/settings', shortcut: '⌘,' },
+]
+
+// Build default list from quick commands + pillars
+const defaultTopics = [
+  ...QUICK_COMMANDS,
+  ...PILLARS.flatMap((pillar) =>
+    pillar.topics.map((topic) => ({
+      id: topic.id,
+      name: topic.name,
+      pillarName: pillar.shortName,
+      pillarColor: pillar.color,
+      path: `/guide/${pillar.id}/${topic.id}`,
+    }))
+  ),
+]
 
 /**
  * SearchDialog — command-palette-style search overlay for all guide topics.
- * Opens with ⌘/ (Ctrl+/) or the search button.
+ * Opens with ⌘K / Ctrl+K, ⌘/ (Ctrl+/), or the search button.
  */
 export default function SearchDialog({ open, onClose }) {
   const [query, setQuery] = useState('')
@@ -34,10 +49,15 @@ export default function SearchDialog({ open, onClose }) {
       return () => clearTimeout(timer)
     }
 
+    const q = query.trim().toLowerCase()
+    const matchingCommands = QUICK_COMMANDS.filter((c) =>
+      c.name.toLowerCase().includes(q) || c.pillarName.toLowerCase().includes(q)
+    )
+
     const fetchSearch = async () => {
       try {
         const res = await searchApi.query(query)
-        const combined = []
+        const combined = [...matchingCommands]
 
         res.guideContent.forEach(item => {
           combined.push({
@@ -133,7 +153,7 @@ export default function SearchDialog({ open, onClose }) {
           <input
             ref={inputRef}
             type="text"
-            placeholder="Search topics, pillars..."
+            placeholder="Search topics, notes, flashcards, or commands (⌘K)..."
             value={query}
             onChange={(e) => {
               setQuery(e.target.value)
@@ -180,6 +200,11 @@ export default function SearchDialog({ open, onClose }) {
                   <div className="search-result-name" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{topic.name}</div>
                   <div className="search-result-pillar">{topic.pillarName}</div>
                 </div>
+                {topic.shortcut && (
+                  <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)', background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)', padding: '2px 6px', borderRadius: 'var(--radius-sm)', marginRight: '6px' }}>
+                    {topic.shortcut}
+                  </span>
+                )}
                 <ArrowRight size={12} style={{ color: 'var(--color-text-disabled)' }} />
               </button>
             ))

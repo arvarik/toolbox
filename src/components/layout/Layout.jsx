@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 import Sidebar from './Sidebar'
 import MobileHeader from './MobileHeader'
@@ -18,7 +18,8 @@ export default function Layout() {
   const location = useLocation()
   const isMobile = useIsMobile()
   const [menuOpen, setMenuOpen] = useState(false)
-  const [searchOpen, setSearchOpen] = useState(false)
+  const searchOpen = useAppStore((s) => s.searchOpen)
+  const setSearchOpen = useAppStore((s) => s.setSearchOpen)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const setApiKeyConfigured = useAppStore((s) => s.setApiKeyConfigured)
   const addToast = useAppStore((s) => s.addToast)
@@ -68,7 +69,7 @@ export default function Layout() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [setSearchOpen])
 
 
 
@@ -100,7 +101,13 @@ export default function Layout() {
       <main className="app-main">
         <div className="app-content">
           <ErrorBoundary>
-            <Outlet />
+            <Suspense fallback={
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '50vh', flexDirection: 'column', gap: 'var(--space-3)' }}>
+                <div style={{ width: 32, height: 32, border: '2px solid var(--color-border)', borderTopColor: 'var(--color-accent)', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+              </div>
+            }>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </div>
       </main>
