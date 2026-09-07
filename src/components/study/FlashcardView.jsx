@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock, Keyboard, BookOpen, Wrench } from 'lucide-react'
-import { Link } from 'react-router-dom'
+import { ChevronLeft, ChevronRight, RotateCcw, Shuffle, ArrowLeft, Clock, Keyboard, BookOpen, Wrench, MessageSquare, Layers } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
 import { flashcardsApi, chatApi } from '../../utils/api'
 import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 import StudySessionSummary from './StudySessionSummary'
@@ -11,6 +11,7 @@ function getCurrentTime() {
 }
 
 export default function FlashcardView({ cards = [], onBack, deckName, deckId, reviewMode = false, onCardReviewed }) {
+  const navigate = useNavigate()
   const [sessionQueue, setSessionQueue] = useState([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [flipped, setFlipped] = useState(false)
@@ -689,6 +690,57 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
           </span>
         </div>
       )}
+
+      {/* Cross-tool learning loop bar */}
+      <div
+        className="flashcard-cross-tool-bar"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 'var(--space-2)',
+          marginTop: 'var(--space-4)',
+          flexWrap: 'wrap',
+        }}
+      >
+        {currentCard?.source_pillar_id && currentCard?.source_topic_id ? (
+          <Link
+            to={`/guide/${currentCard.source_pillar_id}/${currentCard.source_topic_id}`}
+            className="btn btn-ghost btn-xs"
+            title="Open related guide topic blueprint and deep dive"
+            style={{ fontSize: '11px', gap: 4, color: 'var(--color-text-secondary)' }}
+          >
+            <BookOpen size={12} /> Guide Note
+          </Link>
+        ) : null}
+        <Link
+          to="/builder"
+          className="btn btn-ghost btn-xs"
+          title="Open Architecture Canvas"
+          style={{ fontSize: '11px', gap: 4, color: 'var(--color-text-secondary)' }}
+        >
+          <Layers size={12} /> Architecture Canvas
+        </Link>
+        <button
+          className="btn btn-ghost btn-xs"
+          title="Ask AI tutor for deep explanation & tradeoffs"
+          style={{ fontSize: '11px', gap: 4, color: 'var(--color-text-secondary)' }}
+          onClick={() => {
+            try {
+              sessionStorage.setItem(
+                'toolbox_chat_draft',
+                `Explain this system design concept and its production tradeoffs:\n\n**${currentCard?.front || ''}**\n\n${currentCard?.back || ''}`
+              )
+              window.dispatchEvent(new CustomEvent('toolbox-chat-draft'))
+              navigate('/chat')
+            } catch {
+              navigate('/chat')
+            }
+          }}
+        >
+          <MessageSquare size={12} /> Ask AI Tutor
+        </button>
+      </div>
 
       {/* Elaborative Interrogation Modal Overlay */}
       {interceptorActive && (

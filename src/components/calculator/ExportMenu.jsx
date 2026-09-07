@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Share2, Copy, MessageSquare, BookOpen, Check, Loader2 } from 'lucide-react'
+import { Share2, Copy, MessageSquare, BookOpen, Check, Loader2, Layers } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import { buildMarkdownSummary } from '../../utils/bote'
 import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
@@ -14,6 +14,7 @@ export const CHAT_DRAFT_KEY = 'toolbox_chat_draft'
  *  - Copy Markdown (with LaTeX formulas) to the clipboard
  *  - Send to Chat (prefills the AI chat input)
  *  - Append to a Guide section (pillar → topic → section picker)
+ *  - Export to Whiteboard Canvas (adds an Observability node with metrics)
  */
 export default function ExportMenu({ results, scenario, latencyBudget }) {
   const [open, setOpen] = useState(false)
@@ -63,6 +64,26 @@ export default function ExportMenu({ results, scenario, latencyBudget }) {
     navigate('/chat')
   }
 
+  const exportToWhiteboard = () => {
+    const existingNodes = useAppStore.getState().nodes || []
+    const label = `${scenario?.name || 'Estimate'}: ${results?.peakTotalQps || results?.readQps || 'Metrics'}`
+    const newNode = {
+      id: `calc-metrics-${Date.now()}`,
+      type: 'component',
+      position: { x: 260, y: 140 + (existingNodes.length % 6) * 60 },
+      data: {
+        name: label,
+        icon: 'bar-chart',
+        category: 'Observability',
+      },
+    }
+    useAppStore.getState().setNodes([...existingNodes, newNode])
+    addToast({ type: 'success', message: 'Estimate exported to Architecture Canvas' })
+    setOpen(false)
+    setCalcModalOpen(false)
+    navigate('/builder')
+  }
+
   return (
     <div className="calc-export" ref={menuRef}>
       <button
@@ -82,6 +103,9 @@ export default function ExportMenu({ results, scenario, latencyBudget }) {
           </button>
           <button role="menuitem" className="calc-export-item" onClick={sendToChat}>
             <MessageSquare size={14} /> Send to Chat
+          </button>
+          <button role="menuitem" className="calc-export-item" onClick={exportToWhiteboard} id="calc-export-canvas-btn">
+            <Layers size={14} /> Export to Canvas
           </button>
           <button
             role="menuitem"

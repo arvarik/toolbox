@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
-import { BrainCircuit, Play, Loader, CheckCircle, Mic, MicOff } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { BrainCircuit, Play, Loader, CheckCircle, Mic, MicOff, Square, MessageSquare, GraduationCap, RotateCcw } from 'lucide-react'
 import { chatApi } from '../utils/api'
 import useAppStore from '../stores/appStore'
 import MarkdownRenderer from '../components/shared/MarkdownRenderer'
 
 export default function FeynmanPage() {
+  const navigate = useNavigate()
   const [topic, setTopic] = useState('')
   const [explanation, setExplanation] = useState('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
@@ -14,6 +16,7 @@ export default function FeynmanPage() {
   const addToast = useAppStore(s => s.addToast)
   const feedbackEndRef = useRef(null)
   const recognitionRef = useRef(null)
+  const abortRef = useRef(null)
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -66,6 +69,43 @@ export default function FeynmanPage() {
     }
   }
 
+  useEffect(() => {
+    return () => {
+      if (abortRef.current) {
+        abortRef.current.abort()
+      }
+    }
+  }, [])
+
+  const handleStop = () => {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+      setIsAnalyzing(false)
+      addToast({ type: 'info', message: 'Analysis stopped' })
+    }
+  }
+
+  const handlePracticeInChat = () => {
+    try {
+      sessionStorage.setItem(
+        'toolbox_chat_draft',
+        `I practiced explaining "${topic}" via the Feynman technique simulator.\n\nMy explanation was:\n> ${explanation}\n\nThe feedback highlighted these gaps:\n\n${feedback}\n\nPlease help me master these missing points with Socratic questions!`
+      )
+      window.dispatchEvent(new CustomEvent('toolbox-chat-draft'))
+      navigate('/chat')
+    } catch {
+      navigate('/chat')
+    }
+  }
+
+  const handleReset = () => {
+    setTopic('')
+    setExplanation('')
+    setFeedback('')
+    setHasResult(false)
+  }
+
   const handleAnalyze = async () => {
     if (!topic.trim() || !explanation.trim()) {
       addToast({ type: 'error', message: 'Please provide both a topic and an explanation.' })
@@ -100,6 +140,7 @@ Format your response in Markdown with the exact following sections:
 ### Overall Assessment
 (A brief, constructive summary of their current comprehension level)`
 
+      abortRef.current = new AbortController()
       await chatApi.stream(
         { message: prompt, context: systemContext, history: [] },
         (chunk) => {
@@ -107,13 +148,18 @@ Format your response in Markdown with the exact following sections:
           if (feedbackEndRef.current) {
              feedbackEndRef.current.scrollIntoView({ behavior: 'smooth' })
           }
-        }
+        },
+        null,
+        abortRef.current.signal
       )
       setHasResult(true)
     } catch (err) {
-      addToast({ type: 'error', message: err.message || 'Failed to analyze explanation.' })
+      if (err.name !== 'AbortError') {
+        addToast({ type: 'error', message: err.message || 'Failed to analyze explanation.' })
+      }
     } finally {
       setIsAnalyzing(false)
+      abortRef.current = null
     }
   }
 
@@ -169,11 +215,21 @@ Format your response in Markdown with the exact following sections:
           />
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+          {isAnalyzing && (
+            <button
+              className="btn btn-secondary"
+              onClick={handleStop}
+              id="feynman-stop-btn"
+            >
+              <Square size={14} /> Stop
+            </button>
+          )}
           <button 
             className="btn btn-primary" 
             onClick={handleAnalyze} 
             disabled={isAnalyzing || !topic.trim() || !explanation.trim()}
+            id="feynman-analyze-btn"
           >
             {isAnalyzing ? <Loader className="spin" size={16} /> : <Play size={16} />}
             {isAnalyzing ? 'Analyzing...' : 'Analyze Explanation'}
@@ -191,6 +247,39 @@ Format your response in Markdown with the exact following sections:
             <MarkdownRenderer content={feedback || 'Waiting for AI...'} />
             <div ref={feedbackEndRef} />
           </div>
+
+          {hasResult && !isAnalyzing && (
+            <div style={{
+              display: 'flex',
+              gap: 'var(--space-2)',
+              flexWrap: 'wrap',
+              marginTop: 'var(--space-4)',
+              paddingTop: 'var(--space-4)',
+              borderTop: '1px solid var(--color-border)',
+            }}>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={handlePracticeInChat}
+                id="feynman-practice-chat-btn"
+              >
+                <MessageSquare size={13} /> Practice Gaps in Chat
+              </button>
+              <button
+                className="btn btn-secondary btn-sm"
+                onClick={() => navigate('/study')}
+                id="feynman-study-flashcards-btn"
+              >
+                <GraduationCap size={13} /> Study Flashcards
+              </button>
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={handleReset}
+                id="feynman-reset-btn"
+              >
+                <RotateCcw size={13} /> New Topic
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

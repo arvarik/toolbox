@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Plus, Trash2, Clock, Play, BarChart2, Search, MessageSquare, GraduationCap, Edit, Settings } from 'lucide-react'
+import { Plus, Trash2, Clock, Play, BarChart2, Search, MessageSquare, GraduationCap, Edit, Settings, Sparkles } from 'lucide-react'
 import Skeleton from '../components/shared/Skeleton'
 import PullToRefresh from '../components/shared/PullToRefresh'
 import DeckCard from '../components/study/DeckCard'
@@ -15,6 +15,7 @@ import DeckOptionsModal from '../components/study/DeckOptionsModal'
 import CardBrowser from '../components/study/CardBrowser'
 import StatsDashboard from '../components/study/StatsDashboard'
 import useIsMobile from '../hooks/useIsMobile'
+import { seedCuratedStarterDeck } from '../utils/starterDeck'
 
 const mapDeckFromApi = (d) => ({
   id: d.id,
@@ -60,6 +61,26 @@ export default function StudyPage() {
   const [deleteModal, setDeleteModal] = useState(null)
   const [optionsModalDeck, setOptionsModalDeck] = useState(null)
   const [studySessions, setStudySessions] = useState([])
+  const [isLoadingStarter, setIsLoadingStarter] = useState(false)
+
+  const handleSeedStarterDeck = async () => {
+    setIsLoadingStarter(true)
+    try {
+      await seedCuratedStarterDeck(decksApi, flashcardsApi)
+      await fetchDecks(true)
+      addToast({
+        type: 'success',
+        message: 'Loaded "System Design Foundations" starter deck with 15 curated cards!',
+      })
+    } catch (err) {
+      addToast({
+        type: 'error',
+        message: err.message || 'Failed to load starter deck',
+      })
+    } finally {
+      setIsLoadingStarter(false)
+    }
+  }
 
   const fetchDecks = useCallback(async (isRefresh = false) => {
     if (!isRefresh) setIsLoading(true)
@@ -83,7 +104,6 @@ export default function StudyPage() {
   }, [])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDecks()
   }, [fetchDecks])
 
@@ -703,12 +723,23 @@ export default function StudyPage() {
             <EmptyState
               icon={<GraduationCap size={24} />}
               title="No flashcard decks yet"
-              description="Create your first deck to start studying system design concepts, or use AI to auto-generate cards."
+              description="Create your first deck to start studying system design concepts, or load our curated starter deck with 15 high-yield architecture cards."
               action={
-                <button className="btn btn-primary" onClick={handleNewDeck}>
-                  <Plus size={14} />
-                  Create First Deck
-                </button>
+                <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', justifyContent: 'center' }}>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleSeedStarterDeck}
+                    disabled={isLoadingStarter}
+                    id="load-starter-deck-btn"
+                  >
+                    <Sparkles size={14} />
+                    {isLoadingStarter ? 'Loading Starter Deck...' : 'Load Curated Starter Deck'}
+                  </button>
+                  <button className="btn btn-secondary" onClick={handleNewDeck} id="create-first-deck-btn">
+                    <Plus size={14} />
+                    Create Blank Deck
+                  </button>
+                </div>
               }
             />
           ) : (
