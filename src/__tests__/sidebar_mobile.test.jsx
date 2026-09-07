@@ -228,6 +228,22 @@ describe('Sidebar Navigation & Mobile Responsiveness Test Suite', () => {
       fireEvent.click(toggleButton);
       expect(toggleButton.getAttribute('aria-label')).toBe('Collapse sidebar');
     });
+
+    it('10b. renders theme toggle button and toggles theme on click', () => {
+      render(
+        <MemoryRouter>
+          <Sidebar />
+        </MemoryRouter>
+      );
+
+      const themeButton = screen.getByTestId('theme-toggle');
+      expect(themeButton).toBeInTheDocument();
+      const initialTheme = useAppStore.getState().theme;
+      
+      fireEvent.click(themeButton);
+      const expectedTheme = initialTheme === 'dark' ? 'light' : 'dark';
+      expect(useAppStore.getState().theme).toBe(expectedTheme);
+    });
   });
 
   // ==========================================

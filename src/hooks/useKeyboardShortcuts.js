@@ -43,8 +43,8 @@ export default function useKeyboardShortcuts() {
       if (!mod) return
 
       // Skip if user is typing in an input/textarea
-      const tag = e.target.tagName.toLowerCase()
-      const isEditable = tag === 'input' || tag === 'textarea' || e.target.isContentEditable
+      const tag = e.target?.tagName ? e.target.tagName.toLowerCase() : ''
+      const isEditable = tag === 'input' || tag === 'textarea' || Boolean(e.target?.isContentEditable)
       
       switch (e.key) {
         case '1':

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, MessageSquare, Waypoints, Calculator } from 'lucide-react'
+import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, MessageSquare, Waypoints, Calculator, Sun, Moon } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import PomodoroWidget from './PomodoroWidget'
 import useAppStore from '../../stores/appStore'
@@ -18,6 +18,8 @@ const navItems = [
 export default function MobileDrawer({ open, onClose }) {
   const model = useAppStore((s) => s.model)
   const setModel = useAppStore((s) => s.setModel)
+  const theme = useAppStore((s) => s.theme)
+  const toggleTheme = useAppStore((s) => s.toggleTheme)
   const availableModels = useAppStore((s) => s.availableModels)
   const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
 
@@ -102,6 +104,16 @@ export default function MobileDrawer({ open, onClose }) {
             </div>
 
             <PomodoroWidget />
+
+            <button
+              onClick={toggleTheme}
+              className="mobile-drawer-link"
+              id="drawer-nav-theme"
+              style={{ background: 'none', border: 'none', width: '100%', cursor: 'pointer', textAlign: 'left', font: 'inherit' }}
+            >
+              {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+              <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+            </button>
 
             <NavLink
               to="/settings"

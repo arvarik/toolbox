@@ -34,7 +34,7 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
   useEffect(() => {
     const handleKeyDown = (e) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-        if (e.target.tagName.toLowerCase() === 'textarea') return
+        if (e.target?.tagName?.toLowerCase() === 'textarea') return
         document.getElementById('flashcard-save-all-btn')?.click()
       }
     }
