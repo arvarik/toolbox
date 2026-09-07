@@ -1,14 +1,16 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { MessageSquare, Save, Layout, Download, Calculator } from 'lucide-react'
+import { MessageSquare, Save, Layout, Download, Calculator, ShieldCheck } from 'lucide-react'
 import Toolbox from '../components/builder/Toolbox'
 import Canvas from '../components/builder/Canvas'
 import BoardList from '../components/builder/BoardList'
 import TemplateGallery from '../components/builder/TemplateGallery'
+import ArchitectureAuditModal from '../components/builder/ArchitectureAuditModal'
 import ChatPanel from '../components/shared/ChatPanel'
 import useAppStore from '../stores/appStore'
 import useIsMobile from '../hooks/useIsMobile'
 import { boardsApi } from '../utils/api'
+import { auditArchitecture } from '../utils/architectureLinter'
 import {
   toFlowNodes,
   toFlowEdges,
@@ -32,6 +34,8 @@ export default function BuilderPage() {
   const [boards, setBoards] = useState([])
   const [activeBoard, setActiveBoard] = useState(null)
   const [showTemplates, setShowTemplates] = useState(false)
+  const [showAuditModal, setShowAuditModal] = useState(false)
+  const auditReport = useMemo(() => auditArchitecture(nodes, edges), [nodes, edges])
   const isMobile = useIsMobile()
   const autoSaveTimer = useRef(null)
   const lastSavedData = useRef(null)
@@ -427,6 +431,32 @@ export default function BuilderPage() {
           <div className="builder-toolbar-group">
             <button
               className="btn btn-ghost btn-sm"
+              onClick={() => setShowAuditModal(true)}
+              title="Audit Architecture (Linter)"
+              id="builder-audit-btn"
+              style={{ position: 'relative' }}
+            >
+              <ShieldCheck size={14} />
+              Audit
+              {auditReport.stats.criticalCount > 0 && (
+                <span style={{
+                  position: 'absolute',
+                  top: -3,
+                  right: -3,
+                  background: '#ef4444',
+                  color: '#fff',
+                  fontSize: '9px',
+                  fontWeight: 800,
+                  borderRadius: 'var(--radius-full)',
+                  padding: '1px 5px',
+                  lineHeight: '12px',
+                }}>
+                  {auditReport.stats.criticalCount}
+                </span>
+              )}
+            </button>
+            <button
+              className="btn btn-ghost btn-sm"
               onClick={() => setCalcModalOpen(true)}
               title="BotE Calculator (⌘E)"
               id="builder-calc-btn"
@@ -476,6 +506,11 @@ export default function BuilderPage() {
               onClose={() => setShowTemplates(false)}
             />
           )}
+          <ArchitectureAuditModal
+            open={showAuditModal}
+            onClose={() => setShowAuditModal(false)}
+            audit={auditReport}
+          />
         </div>
       </div>
 

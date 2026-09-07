@@ -187,7 +187,7 @@ export default function BlueprintShell() {
 
   const handleGenerateFlashcards = async () => {
     // Build section-aware entries for tagged card generation
-    const sectionEntries = sections
+    let sectionEntries = sections
       .filter(s => sectionContent[s.id]?.content?.trim())
       .map(s => ({
         sectionId: s.id,
@@ -195,9 +195,13 @@ export default function BlueprintShell() {
         content: sectionContent[s.id].content,
       }))
 
+    // If topic has no saved notes yet, synthesize from blueprint curriculum
     if (sectionEntries.length === 0) {
-      addToast({ type: 'error', message: 'No content available to generate flashcards from.' })
-      return
+      sectionEntries = sections.map(s => ({
+        sectionId: s.id,
+        sectionName: s.name,
+        content: `Foundational system design principles, architectural mechanics, and tradeoffs for "${topic?.name || 'Topic'}" in ${s.name}: ${s.description || ''}`,
+      }))
     }
     
     setIsGeneratingCards(true)
