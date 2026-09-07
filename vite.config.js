@@ -20,6 +20,32 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            if (id.includes('@xyflow') || id.includes('@dagrejs')) {
+              return 'vendor-flow'
+            }
+            if (id.includes('katex') || id.includes('rehype-katex') || id.includes('remark-math')) {
+              return 'vendor-math'
+            }
+            if (id.includes('react-syntax-highlighter')) {
+              return 'vendor-syntax'
+            }
+            if (id.includes('lucide-react')) {
+              return 'vendor-icons'
+            }
+            if (id.includes('react-router')) {
+              return 'vendor-router'
+            }
+            if (id.includes('react') || id.includes('react-dom') || id.includes('zustand')) {
+              return 'vendor-react'
+            }
+          }
+        },
+      },
+    },
   },
   test: {
     globals: true,

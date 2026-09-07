@@ -1,13 +1,22 @@
 import { useEffect, useRef, useState, useId } from 'react'
-import mermaid from 'mermaid'
-import { Maximize2, Minimize2 } from 'lucide-react'
+import { Maximize2, Minimize2, Loader2 } from 'lucide-react'
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'dark',
-  securityLevel: 'loose',
-  fontFamily: 'Inter, system-ui, sans-serif'
-})
+let mermaidPromise = null
+function getMermaid() {
+  if (!mermaidPromise) {
+    mermaidPromise = import('mermaid').then((mod) => {
+      const instance = mod.default || mod
+      instance.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        securityLevel: 'loose',
+        fontFamily: 'Inter, system-ui, sans-serif',
+      })
+      return instance
+    })
+  }
+  return mermaidPromise
+}
 
 /**
  * @component MermaidRenderer
@@ -32,6 +41,7 @@ export default function MermaidRenderer({ chart }) {
 
     const renderChart = async () => {
       try {
+        const mermaid = await getMermaid()
         const { svg } = await mermaid.render(idRef.current, chart)
         if (isMounted) {
           setSvgContent(svg)
@@ -101,7 +111,7 @@ export default function MermaidRenderer({ chart }) {
 
       <div 
         ref={containerRef}
-        dangerouslySetInnerHTML={{ __html: svgContent }}
+        dangerouslySetInnerHTML={svgContent ? { __html: svgContent } : undefined}
         style={{
           width: '100%',
           height: isExpanded ? '100%' : 'auto',
@@ -110,7 +120,14 @@ export default function MermaidRenderer({ chart }) {
           justifyContent: 'center',
           alignItems: 'center',
         }}
-      />
+      >
+        {!svgContent && !error && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-tertiary)', padding: 'var(--space-4)', fontSize: 'var(--text-xs)' }}>
+            <Loader2 size={14} className="spin" />
+            <span>Rendering diagram...</span>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -133,6 +133,11 @@ const useAppStore = create((set, get) => ({
   setCalcModalOpen: (open) => set({ calcModalOpen: open }),
   toggleCalcModal: () => set((s) => ({ calcModalOpen: !s.calcModalOpen })),
 
+  // Command palette / global search dialog
+  searchOpen: false,
+  setSearchOpen: (open) => set({ searchOpen: open }),
+  toggleSearch: () => set((s) => ({ searchOpen: !s.searchOpen })),
+
   // SRS sync counter — bumps after every card review so open views
   // (e.g. the Knowledge Graph heatmap) can refresh without a reload.
   srsVersion: 0,

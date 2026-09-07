@@ -373,7 +373,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
   // 2. Cross-Feature Combinations - Tier 3
   // ==========================================
   describe('Cross-Feature Combinations - Tier 3', () => {
-    it('11. updates starter suggestions dynamically when route changes', () => {
+    it('11. updates starter suggestions dynamically when route changes', async () => {
       useAppStore.setState({ chatOpen: { chat: false, guide: true, builder: true, study: true } })
       
       render(
@@ -382,16 +382,16 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
         </MemoryRouter>
       )
 
-      expect(screen.getByText('Explain the CAP Theorem with real examples')).toBeInTheDocument()
+      expect(await screen.findByText('Explain the CAP Theorem with real examples')).toBeInTheDocument()
 
       // Navigate to builder page
       const builderNav = document.querySelector('#nav-builder')
       fireEvent.click(builderNav)
 
-      expect(screen.getByText('Help me design a URL shortener')).toBeInTheDocument()
+      expect(await screen.findByText('Help me design a URL shortener')).toBeInTheDocument()
     })
 
-    it('12. persists message history across route changes and navigations', () => {
+    it('12. persists message history across route changes and navigations', async () => {
       useAppStore.setState({ chatOpen: { chat: false, guide: true, builder: true, study: true } })
       
       render(
@@ -400,7 +400,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
         </MemoryRouter>
       )
 
-      const chatInput = screen.getByPlaceholderText('Ask about this component...')
+      const chatInput = await screen.findByPlaceholderText('Ask about this component...')
       fireEvent.change(chatInput, { target: { value: 'Persistent message' } })
 
       const sendBtn = screen.getByRole('button', { name: 'Send message' })
@@ -413,7 +413,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       fireEvent.click(builderNav)
 
       // Builder chat should not show the guide message but its own panel
-      expect(screen.getByTestId('chat-panel-container')).toBeInTheDocument()
+      expect(await screen.findByTestId('chat-panel-container')).toBeInTheDocument()
     })
 
     it('13. updates empty states instructions based on appStore apiKeyConfigured state', () => {
@@ -491,7 +491,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       expect(panel).toHaveStyle('width: 430px')
     })
 
-    it('17. changes chat title contextually based on the active page route', () => {
+    it('17. changes chat title contextually based on the active page route', async () => {
       useAppStore.setState({ chatOpen: { chat: false, guide: true, builder: true, study: true } })
 
       render(
@@ -500,11 +500,13 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
         </MemoryRouter>
       )
 
-      expect(screen.getByTestId('chat-title')).toHaveTextContent('Ask about System Design')
+      expect(await screen.findByTestId('chat-title')).toHaveTextContent('Ask about System Design')
 
       // Navigate to builder
       fireEvent.click(document.querySelector('#nav-builder'))
-      expect(screen.getByTestId('chat-title')).toHaveTextContent('Ask about your architecture')
+      await waitFor(() => {
+        expect(screen.getByTestId('chat-title')).toHaveTextContent('Ask about your architecture')
+      })
     })
   })
 
@@ -673,7 +675,7 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       )
 
       // Input API Key (use Gemini placeholder)
-      const apiKeyInput = screen.getByPlaceholderText('AIza...')
+      const apiKeyInput = await screen.findByPlaceholderText('AIza...')
       fireEvent.change(apiKeyInput, { target: { value: 'AIzaSecretKey' } })
 
       // Save & Verify (first save button is Gemini's)
@@ -689,7 +691,9 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       fireEvent.click(document.querySelector('#nav-builder'))
 
       // Verify API key is configured in state
-      expect(useAppStore.getState().apiKeyConfigured).toBe(true)
+      await waitFor(() => {
+        expect(useAppStore.getState().apiKeyConfigured).toBe(true)
+      })
     })
 
     it('22. Scenario 5 (End-to-End combination): go to settings, test remove key button, verify status changed, confirm chat panel empty state prompts key config', async () => {
@@ -723,10 +727,12 @@ describe('Chat Integration & Comprehensive App Workflows', () => {
       fireEvent.click(document.querySelector('#nav-builder'))
 
       // Open chat and verify prompt config empty state
-      const verifyBtn = document.querySelector('#builder-chat-btn')
+      const verifyBtn = await screen.findByRole('button', { name: /Verify Design/i })
       fireEvent.click(verifyBtn)
-      expect(screen.getByText('Configure API Key')).toBeInTheDocument()
-      expect(screen.getByText('Add your API key in Settings to enable AI features.')).toBeInTheDocument()
+      await waitFor(() => {
+        expect(screen.getByText('Configure API Key')).toBeInTheDocument()
+        expect(screen.getByText('Add your API key in Settings to enable AI features.')).toBeInTheDocument()
+      })
     })
   })
 })
