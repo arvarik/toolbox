@@ -137,7 +137,7 @@ export default function LibraryHomePage() {
         type: "success",
         message: "Added Official System Design Kit to your library",
       });
-      navigate(`/k/${encodeURIComponent(slug)}/guide`);
+      navigate(`/k/${encodeURIComponent(slug)}`);
     } catch (err) {
       addToast({
         type: "error",
@@ -254,7 +254,7 @@ export default function LibraryHomePage() {
               {showHeatmap ? "Hide Activity" : "Activity Heatmap"}
             </button>
             <Link
-              to="/interleaved"
+              to={totals.due > 0 ? "/review" : "/interleaved"}
               className="btn btn-primary"
               data-testid="cross-kit-review-btn"
             >
@@ -353,7 +353,7 @@ export default function LibraryHomePage() {
                       </span>
                       <div className="min-w-0">
                         <Link
-                          to={`/k/${encodeURIComponent(kit.slug)}/guide`}
+                          to={`/k/${encodeURIComponent(kit.slug)}`}
                           className="font-semibold text-base text-on-surface hover:underline truncate block"
                         >
                           {kit.name}
@@ -505,7 +505,7 @@ export default function LibraryHomePage() {
                   </div>
 
                   <Link
-                    to={`/k/${encodeURIComponent(kit.slug)}/guide`}
+                    to={`/k/${encodeURIComponent(kit.slug)}`}
                     className="btn btn-primary btn-sm"
                   >
                     Open Workspace
@@ -525,7 +525,7 @@ export default function LibraryHomePage() {
         onImported={(imported) => {
           void fetchKits();
           if (imported?.slug) {
-            navigate(`/k/${encodeURIComponent(imported.slug)}/guide`);
+            navigate(`/k/${encodeURIComponent(imported.slug)}`);
           }
         }}
       />

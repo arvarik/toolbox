@@ -35,7 +35,7 @@ const HANDLES = [
  */
 function ComponentNode({ id, data, selected }) {
   const Icon = BUILDER_ICONS[data.icon] || Box
-  const color = categoryColor(data.category)
+  const color = categoryColor(data.category, data.color)
 
   const removeNode = (e) => {
     e.stopPropagation()
@@ -79,7 +79,7 @@ function ComponentNode({ id, data, selected }) {
 
 const nodeTypes = { component: ComponentNode }
 
-function CanvasInner() {
+function CanvasInner({ defaultEdgeLabel = '', isConceptMode = false }) {
   const nodes = useAppStore((s) => s.nodes || [])
   const edges = useAppStore((s) => s.edges || [])
   const { screenToFlowPosition } = useReactFlow()
@@ -103,13 +103,18 @@ function CanvasInner() {
       )
       if (exists || connection.source === connection.target) return s
       const sourceNode = (s.nodes || []).find((n) => n.id === connection.source)
+      const label = typeof defaultEdgeLabel === 'string' ? defaultEdgeLabel.trim() : ''
       const edge = styleFlowEdge(
-        { ...connection, id: `edge-${Date.now()}` },
+        {
+          ...connection,
+          id: `edge-${Date.now()}`,
+          ...(label ? { label } : {}),
+        },
         sourceNode?.data?.category
       )
       return { edges: [...current, edge] }
     })
-  }, [])
+  }, [defaultEdgeLabel])
 
   // Clicking an edge removes it (the pre-migration behavior).
   const onEdgeClick = useCallback((event, edge) => {
@@ -136,7 +141,12 @@ function CanvasInner() {
           x: Number.isFinite(raw.x) ? raw.x - 84 : 120,
           y: Number.isFinite(raw.y) ? raw.y - 26 : 120,
         },
-        data: { name: data.name, icon: data.icon, category: data.category },
+        data: {
+          name: data.name,
+          icon: data.icon,
+          category: data.category,
+          ...(data.color ? { color: data.color } : {}),
+        },
       }
       useAppStore.setState((s) => ({ nodes: [...(s.nodes || []), node] }))
     } catch {
@@ -145,7 +155,7 @@ function CanvasInner() {
   }, [screenToFlowPosition])
 
   const minimapNodeColor = useMemo(
-    () => (node) => categoryColor(node.data?.category),
+    () => (node) => categoryColor(node.data?.category, node.data?.color),
     []
   )
 
@@ -183,7 +193,9 @@ function CanvasInner() {
         <div className="builder-canvas-empty">
           <Move size={32} style={{ margin: '0 auto var(--space-3)', color: 'var(--color-text-disabled)' }} />
           <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-disabled)' }}>
-            Drag components from the toolbox to start designing
+            {isConceptMode
+              ? 'Drag concept primitives or add a custom concept to start mapping'
+              : 'Drag components from the toolbox to start designing'}
           </div>
         </div>
       )}
@@ -192,14 +204,14 @@ function CanvasInner() {
 }
 
 /**
- * Architecture whiteboard canvas, powered by React Flow.
+ * Architecture & Concept-Map canvas, powered by React Flow.
  * State lives in the app store (React Flow shape); the persisted board
  * format is unchanged — see boardModel.js for the boundary converters.
  */
-export default function Canvas() {
+export default function Canvas({ defaultEdgeLabel = '', isConceptMode = false }) {
   return (
     <ReactFlowProvider>
-      <CanvasInner />
+      <CanvasInner defaultEdgeLabel={defaultEdgeLabel} isConceptMode={isConceptMode} />
     </ReactFlowProvider>
   )
 }

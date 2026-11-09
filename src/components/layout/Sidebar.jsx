@@ -17,6 +17,9 @@ import {
   LogOut,
   Globe,
   FolderKanban,
+  Compass,
+  Target,
+  Flame,
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import useKitStore, {
@@ -31,6 +34,7 @@ import { useAuth } from '../auth/AuthGate.tsx'
 
 const workspaceItems = [
   { to: '/', icon: FolderKanban, label: 'Library', navId: 'nav-library' },
+  { to: '/review', icon: Flame, label: 'Daily Review', navId: 'nav-review' },
   { to: '/shared', icon: Globe, label: 'Shared Kits', navId: 'nav-shared' },
 ]
 
@@ -40,10 +44,23 @@ const bottomItems = [
 
 export function buildStudyNavItems(prefix, capabilities) {
   const inKit = Boolean(prefix)
-  const items = [
+  const items = []
+
+  if (inKit) {
+    items.push({
+      to: prefix,
+      icon: Compass,
+      label: 'Path',
+      navId: 'nav-path',
+      exact: true,
+    })
+  }
+
+  items.push(
     { to: `${prefix}/chat`, icon: MessageSquare, label: 'Chat', shortcut: '⌘1', navId: 'nav-chat' },
     { to: `${prefix}/guide`, icon: BookOpen, label: 'Guide', shortcut: '⌘2', navId: 'nav-guide' },
-  ]
+    { to: `${prefix}/drills`, icon: Target, label: 'Drills', navId: 'nav-drills' },
+  )
 
   if (!inKit || capabilities?.canvas !== 'none') {
     const isConcept = inKit && capabilities?.canvas === 'concept'
@@ -109,9 +126,9 @@ export default function Sidebar() {
       navigate('/')
       return
     }
-    const subPath = location.pathname.replace(/^\/k\/[^/]+/, '') || '/guide'
-    const firstSeg = subPath.split('/').filter(Boolean)[0] || 'guide'
-    navigate(`/k/${encodeURIComponent(nextSlug)}/${firstSeg}`)
+    const subPath = location.pathname.replace(/^\/k\/[^/]+/, '')
+    const firstSeg = subPath.split('/').filter(Boolean)[0]
+    navigate(firstSeg ? `/k/${encodeURIComponent(nextSlug)}/${firstSeg}` : `/k/${encodeURIComponent(nextSlug)}`)
   }
 
   return (
@@ -179,13 +196,15 @@ export default function Sidebar() {
           </div>
           {studyItems.map((item) => {
             const Icon = item.icon
-            const isActive =
-              location.pathname === item.to ||
-              location.pathname.startsWith(item.to + '/')
+            const isActive = item.exact
+              ? location.pathname === item.to
+              : location.pathname === item.to ||
+                location.pathname.startsWith(item.to + '/')
             return (
               <NavLink
                 key={item.to}
                 to={item.to}
+                end={Boolean(item.exact)}
                 className={`sidebar-link${isActive ? ' active' : ''}`}
                 id={item.navId}
               >

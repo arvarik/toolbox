@@ -1,9 +1,14 @@
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ShieldCheck, AlertOctagon, AlertTriangle, Info, CheckCircle2,
-  MessageSquare
+  MessageSquare, Sparkles, RefreshCw,
 } from 'lucide-react'
 import Modal from '../shared/Modal'
+import RubricFeedbackCard from '../drills/RubricFeedbackCard'
+import useAppStore from '../../stores/appStore'
+import { useKitRoutePrefix } from '../../stores/useKitStore'
+import { canvasCritiqueApi } from '../../utils/pedagogyApi'
 
 const SEVERITY_CONFIG = {
   critical: {
@@ -29,14 +34,77 @@ const SEVERITY_CONFIG = {
   },
 }
 
-export default function ArchitectureAuditModal({ open, onClose, audit }) {
+export default function ArchitectureAuditModal({
+  open,
+  onClose,
+  audit,
+  mode = 'architecture',
+  boardId,
+  onEnsureSavedBoard,
+  boardData,
+}) {
   const navigate = useNavigate()
+  const prefix = useKitRoutePrefix()
+  const model = useAppStore((s) => s.model)
+  const isConcept = mode === 'concept'
+
+  const [critiqueGoal, setCritiqueGoal] = useState('')
+  const [critiqueLoading, setCritiqueLoading] = useState(false)
+  const [critiqueError, setCritiqueError] = useState('')
+  const [critiqueResult, setCritiqueResult] = useState(null)
+  const prevBoardIdRef = useRef(boardId)
+
+  useEffect(() => {
+    const prev = prevBoardIdRef.current
+    prevBoardIdRef.current = boardId
+    // Preserve critique result when a local-* board is promoted to its saved server ID
+    const promotedFromLocal =
+      prev &&
+      String(prev).startsWith('local-') &&
+      boardId &&
+      !String(boardId).startsWith('local-')
+    if (!promotedFromLocal && prev !== boardId) {
+      setCritiqueResult(null)
+      setCritiqueError('')
+    }
+  }, [boardId])
+
+  useEffect(() => {
+    setCritiqueResult(null)
+    setCritiqueError('')
+  }, [mode])
 
   if (!open || !audit) return null
 
   const { score, rating, color, findings, passes, stats } = audit
 
+  const handleRunAiCritique = async () => {
+    if (critiqueLoading) return
+    setCritiqueLoading(true)
+    setCritiqueError('')
+    try {
+      let targetBoardId = boardId
+      if ((!targetBoardId || String(targetBoardId).startsWith('local-')) && onEnsureSavedBoard) {
+        targetBoardId = await onEnsureSavedBoard()
+      }
+      if (!targetBoardId || String(targetBoardId).startsWith('local-')) {
+        throw new Error('Save the board first to run AI rubric critique.')
+      }
+      const res = await canvasCritiqueApi.critique(targetBoardId, {
+        model: model || undefined,
+        goal: critiqueGoal.trim() || undefined,
+        data: boardData,
+      })
+      setCritiqueResult(res)
+    } catch (err) {
+      setCritiqueError(err instanceof Error ? err.message : 'Failed to run AI rubric critique')
+    } finally {
+      setCritiqueLoading(false)
+    }
+  }
+
   const handleConsultAi = () => {
+    const targetPath = `${prefix}/chat`
     try {
       const findingSummaries = findings.map(
         (f) => `• [${f.severity.toUpperCase()}] ${f.title}: ${f.message}\n  Recommendation: ${f.recommendation}`
@@ -44,19 +112,25 @@ export default function ArchitectureAuditModal({ open, onClose, audit }) {
 
       sessionStorage.setItem(
         'toolbox_chat_draft',
-        `I ran the Architecture Linter on my system design whiteboard. My Architecture Health Score is ${score}/100 (${rating}).\n\nHere are the findings:\n${findingSummaries || 'No critical issues found.'}\n\nPlease review these tradeoffs and suggest concrete architectural patterns to improve resilience.`
+        isConcept
+          ? `I ran the Concept Map Linter on my concept map. My Structural Score is ${score}/100 (${rating}).\n\nFindings:\n${findingSummaries || 'No structural issues found.'}\n\nPlease help me refine my propositions and test for subtle domain misconceptions.`
+          : `I ran the Architecture Linter on my system design whiteboard. My Architecture Health Score is ${score}/100 (${rating}).\n\nHere are the findings:\n${findingSummaries || 'No critical issues found.'}\n\nPlease review these tradeoffs and suggest concrete architectural patterns to improve resilience.`
       )
       window.dispatchEvent(new CustomEvent('toolbox-chat-draft'))
       onClose()
-      navigate('/chat')
+      navigate(targetPath)
     } catch {
       onClose()
-      navigate('/chat')
+      navigate(targetPath)
     }
   }
 
   return (
-    <Modal open={open} onClose={onClose} title="Architecture Audit & Linter">
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={isConcept ? 'Concept Map Audit & AI Critique' : 'Architecture Audit & Linter'}
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-5)' }}>
         {/* Score Banner */}
         <div style={{
@@ -89,7 +163,9 @@ export default function ArchitectureAuditModal({ open, onClose, audit }) {
                 {rating}
               </div>
               <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
-                {stats.totalNodes} components · {stats.totalEdges} data edges
+                {isConcept
+                  ? `${stats.totalNodes} concepts · ${stats.totalEdges} propositions`
+                  : `${stats.totalNodes} components · ${stats.totalEdges} data edges`}
               </div>
             </div>
           </div>
@@ -137,7 +213,9 @@ export default function ArchitectureAuditModal({ open, onClose, audit }) {
             }}>
               <ShieldCheck size={20} />
               <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
-                Clean architecture! No critical antipatterns or single points of failure detected.
+                {isConcept
+                  ? 'Well-structured concept map! All propositions and nodes pass structural checks.'
+                  : 'Clean architecture! No critical antipatterns or single points of failure detected.'}
               </div>
             </div>
           )}
@@ -217,6 +295,76 @@ export default function ArchitectureAuditModal({ open, onClose, audit }) {
           </div>
         )}
 
+        {/* Grounded AI Rubric Critique */}
+        <div
+          style={{
+            padding: 'var(--space-4)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border)',
+            background: 'var(--color-bg-secondary)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--space-3)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--color-text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Sparkles size={14} style={{ color: 'var(--color-accent)' }} />
+                Falsification-First AI Rubric Critique
+              </div>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-tertiary)' }}>
+                Evaluates your {isConcept ? 'propositions & concept links' : 'system diagram'} against the active Kit rubric.
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => void handleRunAiCritique()}
+              disabled={critiqueLoading || stats.totalNodes === 0}
+              data-testid="run-ai-critique-btn"
+              id="run-ai-critique-btn"
+            >
+              {critiqueLoading ? <RefreshCw size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              {critiqueLoading ? 'Critiquing…' : 'AI Rubric Critique'}
+            </button>
+          </div>
+
+          <input
+            type="text"
+            value={critiqueGoal}
+            onChange={(e) => setCritiqueGoal(e.target.value)}
+            placeholder={
+              isConcept
+                ? 'Optional goal (e.g., "Explain how Rust ownership prevents data races")…'
+                : 'Optional target workload (e.g., "50k writes/sec multi-region checkout")…'
+            }
+            aria-label="Critique goal"
+            style={{
+              width: '100%',
+              fontSize: 'var(--text-xs)',
+              padding: '7px 10px',
+              borderRadius: 'var(--radius-sm)',
+              border: '1px solid var(--color-border)',
+              background: 'var(--color-surface)',
+              color: 'var(--color-text-primary)',
+            }}
+          />
+
+          {critiqueError && (
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-error, #ef4444)', fontWeight: 500 }}>
+              {critiqueError}
+            </div>
+          )}
+
+          {critiqueResult && (
+            <RubricFeedbackCard
+              result={critiqueResult}
+              title={isConcept ? 'AI Concept-Map Rubric Critique' : 'AI Architecture Rubric Critique'}
+            />
+          )}
+        </div>
+
         {/* Footer Actions */}
         <div style={{
           display: 'flex',
@@ -229,11 +377,11 @@ export default function ArchitectureAuditModal({ open, onClose, audit }) {
             Close
           </button>
           <button
-            className="btn btn-primary btn-sm"
+            className="btn btn-ghost btn-sm"
             onClick={handleConsultAi}
             id="audit-consult-ai-btn"
           >
-            <MessageSquare size={14} /> Consult AI on Architecture
+            <MessageSquare size={14} /> {isConcept ? 'Discuss Map in Chat' : 'Consult AI on Architecture'}
           </button>
         </div>
       </div>

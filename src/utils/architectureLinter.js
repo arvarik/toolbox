@@ -4,13 +4,149 @@
  * to detect production risks, single points of failure (SPOFs), and antipatterns.
  */
 
+function auditConceptMap(nodes, edges, incoming, outgoing) {
+  const findings = []
+  const passes = []
+
+  if (nodes.length === 1) {
+    findings.push({
+      id: 'single-concept',
+      severity: 'info',
+      title: 'Single Isolated Concept',
+      message: `Only "${nodes[0].data?.name || nodes[0].id}" is on the map. A concept map builds meaning through linked propositions (Concept A → verb → Concept B).`,
+      recommendation: 'Add related mechanisms, theorems, or concrete examples and connect them with explicit linking phrases.',
+      nodeIds: [nodes[0].id],
+    })
+  }
+
+  if (nodes.length > 1) {
+    const orphanNodes = nodes.filter(
+      (n) => (incoming.get(n.id)?.length === 0) && (outgoing.get(n.id)?.length === 0)
+    )
+    if (orphanNodes.length > 0) {
+      findings.push({
+        id: 'orphan-concepts',
+        severity: 'warning',
+        title: 'Disconnected / Orphan Concepts',
+        message: `${orphanNodes.length} concept(s) have no incoming or outgoing propositions: ${orphanNodes.map((n) => n.data?.name || n.id).join(', ')}.`,
+        recommendation: 'Link every concept into at least one proposition using a clear relational verb (e.g., "implies", "depends on", "example of").',
+        nodeIds: orphanNodes.map((n) => n.id),
+      })
+    } else {
+      passes.push('Connected Knowledge Network: Every concept participates in at least one proposition.')
+    }
+  }
+
+  if (edges.length > 0) {
+    const unlabeledEdges = edges.filter(
+      (e) => !String(e.label ?? e.protocol ?? e.data?.protocol ?? '').trim()
+    )
+    if (unlabeledEdges.length > 0) {
+      findings.push({
+        id: 'unlabeled-propositions',
+        severity: 'warning',
+        title: 'Unlabeled Edges (Missing Linking Phrases)',
+        message: `${unlabeledEdges.length} of ${edges.length} connection(s) lack a semantic linking phrase, leaving the relationship ambiguous.`,
+        recommendation: 'Select a linking phrase (such as "implies", "depends on", "causes", "contrasts with", or "example of") before or when connecting concepts.',
+        nodeIds: [...new Set(unlabeledEdges.flatMap((e) => [e.source || e.from, e.target || e.to].filter(Boolean)))],
+      })
+    } else {
+      passes.push('Explicit Propositions: All connections carry semantic linking phrases.')
+    }
+  }
+
+  const overloadedHubs = nodes.filter(
+    (n) => ((incoming.get(n.id)?.length || 0) + (outgoing.get(n.id)?.length || 0)) > 7
+  )
+  if (overloadedHubs.length > 0) {
+    findings.push({
+      id: 'star-hub-overload',
+      severity: 'warning',
+      title: 'Single-Hub Star Topology Overload',
+      message: `${overloadedHubs.map((n) => n.data?.name || n.id).join(', ')} connects directly to more than 7 nodes, flattening conceptual hierarchy into a spoke list.`,
+      recommendation: 'Introduce intermediate grouping concepts or cross-links between sub-concepts to express deeper structure.',
+      nodeIds: overloadedHubs.map((n) => n.id),
+    })
+  } else if (nodes.length >= 3 && edges.length >= 2) {
+    passes.push('Balanced Hierarchy: Concept degree distribution avoids flat star-hub overload.')
+  }
+
+  const hasGroundingAnchor = nodes.some((n) => {
+    const cat = String(n.data?.category || '').toLowerCase()
+    const name = String(n.data?.name || '').toLowerCase()
+    return (
+      cat === 'evidence' ||
+      cat === 'inquiry' ||
+      name.includes('example') ||
+      name.includes('counterexample') ||
+      name.includes('hypothesis')
+    )
+  })
+  if (nodes.length >= 4 && !hasGroundingAnchor) {
+    findings.push({
+      id: 'missing-concrete-anchoring',
+      severity: 'info',
+      title: 'No Concrete Example or Counterexample Anchor',
+      message: 'Abstract concepts are mapped without a concrete example, counterexample, or boundary question.',
+      recommendation: 'Drop a Concrete Example or Counterexample / Edge Case node to test the boundaries of your mental model.',
+      nodeIds: [],
+    })
+  } else if (hasGroundingAnchor) {
+    passes.push('Concrete Grounding: Includes concrete examples, counterexamples, or inquiry nodes.')
+  }
+
+  let score = 100
+  for (const f of findings) {
+    if (f.severity === 'critical') score -= 25
+    else if (f.severity === 'warning') score -= 10
+    else if (f.severity === 'info') score -= 5
+  }
+  score = Math.max(0, Math.min(100, score))
+
+  let rating = 'Well-Structured Concept Map'
+  let color = 'var(--color-success, #22c55e)'
+  if (score < 50) {
+    rating = 'Unstructured Concept Sketch'
+    color = 'var(--color-error, #ef4444)'
+  } else if (score < 75) {
+    rating = 'Fragmented Concept Map'
+    color = 'var(--color-warning, #f59e0b)'
+  } else if (score < 90) {
+    rating = 'Coherent Map with Refinement Gaps'
+    color = 'var(--color-info, #60a5fa)'
+  }
+
+  return {
+    score,
+    rating,
+    color,
+    findings,
+    passes,
+    stats: {
+      totalNodes: nodes.length,
+      totalEdges: edges.length,
+      criticalCount: findings.filter((f) => f.severity === 'critical').length,
+      warningCount: findings.filter((f) => f.severity === 'warning').length,
+      infoCount: findings.filter((f) => f.severity === 'info').length,
+    },
+  }
+}
+
 /**
- * Audit an architecture graph for production readiness, reliability risks, and antipatterns.
+ * Audit an architecture or concept graph for structural health, risks, and antipatterns.
  * @param {Array} nodes - React Flow nodes [{ id, data: { name, icon, category } }]
- * @param {Array} edges - React Flow edges [{ id, source, target }]
- * @returns {Object} { score, rating, findings, passes, stats }
+ * @param {Array} edges - React Flow edges [{ id, source, target, label? }]
+ * @param {{ mode?: 'architecture' | 'concept' }} [options]
+ * @returns {{
+ *   score: number,
+ *   rating: string,
+ *   color: string,
+ *   findings: Array<{ id: string, severity: string, title: string, message: string, recommendation: string, nodeIds: string[] }>,
+ *   passes: string[],
+ *   stats: { totalNodes: number, totalEdges: number, criticalCount: number, warningCount: number, infoCount: number }
+ * }}
  */
-export function auditArchitecture(nodes = [], edges = []) {
+export function auditArchitecture(nodes = [], edges = [], options = {}) {
   if (!nodes || nodes.length === 0) {
     return {
       score: 100,
@@ -35,8 +171,14 @@ export function auditArchitecture(nodes = [], edges = []) {
   }
 
   for (const e of edges) {
-    if (outgoing.has(e.source)) outgoing.get(e.source).push(e.target)
-    if (incoming.has(e.target)) incoming.get(e.target).push(e.source)
+    const src = e.source ?? e.from
+    const tgt = e.target ?? e.to
+    if (outgoing.has(src)) outgoing.get(src).push(tgt)
+    if (incoming.has(tgt)) incoming.get(tgt).push(src)
+  }
+
+  if (options?.mode === 'concept') {
+    return auditConceptMap(nodes, edges, incoming, outgoing)
   }
 
   // Component categories and types

@@ -8,6 +8,7 @@ import TemplateGallery from '../components/builder/TemplateGallery'
 import ArchitectureAuditModal from '../components/builder/ArchitectureAuditModal'
 import ChatPanel from '../components/shared/ChatPanel'
 import useAppStore from '../stores/appStore'
+import { useActiveKit } from '../stores/useKitStore'
 import useIsMobile from '../hooks/useIsMobile'
 import { boardsApi } from '../utils/api'
 import { auditArchitecture } from '../utils/architectureLinter'
@@ -16,6 +17,7 @@ import {
   toFlowEdges,
   toBoardData,
   categoryColor,
+  DEFAULT_CONCEPT_PROTOCOLS,
 } from '../components/builder/boardModel'
 
 // Auto-save debounce interval (ms)
@@ -30,12 +32,30 @@ export default function BuilderPage() {
   const setNodes = useAppStore((s) => s.setNodes)
   const setEdges = useAppStore((s) => s.setEdges)
   const addToast = useAppStore((s) => s.addToast)
+  const { kit, skeleton, capabilities } = useActiveKit()
+
+  const canvasMode = capabilities?.canvas === 'concept' ? 'concept' : 'architecture'
+  const isConceptMode = canvasMode === 'concept'
+
+  const protocolOptions = useMemo(() => {
+    const configured = skeleton?.canvasConfig?.protocols || []
+    if (configured.length > 0) return configured
+    return isConceptMode ? DEFAULT_CONCEPT_PROTOCOLS : []
+  }, [skeleton, isConceptMode])
+
+  const [activeEdgeLabel, setActiveEdgeLabel] = useState('')
+  useEffect(() => {
+    setActiveEdgeLabel(isConceptMode ? (protocolOptions[0] || 'implies') : '')
+  }, [isConceptMode, protocolOptions])
 
   const [boards, setBoards] = useState([])
   const [activeBoard, setActiveBoard] = useState(null)
   const [showTemplates, setShowTemplates] = useState(false)
   const [showAuditModal, setShowAuditModal] = useState(false)
-  const auditReport = useMemo(() => auditArchitecture(nodes, edges), [nodes, edges])
+  const auditReport = useMemo(
+    () => auditArchitecture(nodes, edges, { mode: canvasMode }),
+    [nodes, edges, canvasMode]
+  )
   const isMobile = useIsMobile()
   const autoSaveTimer = useRef(null)
   const lastSavedData = useRef(null)
@@ -46,7 +66,7 @@ export default function BuilderPage() {
   // Prevent the board-load effect from clearing canvas when we just dropped a node
   const skipNextLoad = useRef(false)
 
-  // ─── Initial Load ───
+  // ─── Initial Load (and reload when active Kit changes) ───
   useEffect(() => {
     let cancelled = false
 
@@ -60,23 +80,29 @@ export default function BuilderPage() {
         setActiveBoard(match ? match.id : list[0].id)
       } else {
         // No saved boards — create a default local board
-        const newBoard = { id: `local-${Date.now()}`, name: 'Untitled Board' }
+        const newBoard = {
+          id: `local-${Date.now()}`,
+          name: isConceptMode ? 'Untitled Concept Map' : 'Untitled Board',
+        }
         setBoards([newBoard])
         setActiveBoard(newBoard.id)
         setUnsavedIds(new Set([newBoard.id]))
       }
     }).catch(() => {
       if (cancelled) return
-      const newBoard = { id: `local-${Date.now()}`, name: 'Untitled Board' }
+      const newBoard = {
+        id: `local-${Date.now()}`,
+        name: isConceptMode ? 'Untitled Concept Map' : 'Untitled Board',
+      }
       setBoards([newBoard])
       setActiveBoard(newBoard.id)
       setUnsavedIds(new Set([newBoard.id]))
     })
 
     return () => { cancelled = true }
-    // Initial load runs once; the ?board= param only matters on entry.
+    // Reload boards if the active Kit changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [kit?.id])
 
   // ─── Load board data when activeBoard changes ───
   useEffect(() => {
@@ -156,39 +182,44 @@ export default function BuilderPage() {
     setActiveBoard(newId)
   }, [boards.length])
 
-  const handleSaveBoard = useCallback(async () => {
+  const ensureSavedBoard = useCallback(async ({ silent = false } = {}) => {
     const currentBoard = boards.find((b) => b.id === activeBoard)
-    if (!currentBoard) return
+    if (!currentBoard) return null
 
     const name = currentBoard.name
     const data = toBoardData(nodes, edges)
     const isLocal = unsavedIds.has(activeBoard)
 
+    if (isLocal) {
+      const saved = await boardsApi.create({ name, data })
+      setBoards((prev) =>
+        prev.map((b) => (b.id === activeBoard ? { ...b, id: saved.id, name: saved.name } : b))
+      )
+      setUnsavedIds((prev) => {
+        const next = new Set(prev)
+        next.delete(activeBoard)
+        return next
+      })
+      skipNextLoad.current = true
+      setActiveBoard(saved.id)
+      lastSavedData.current = JSON.stringify(data)
+      if (!silent) addToast({ type: 'success', message: 'Board created and saved' })
+      return saved.id
+    }
+
+    await boardsApi.update(activeBoard, { name, data })
+    lastSavedData.current = JSON.stringify(data)
+    if (!silent) addToast({ type: 'success', message: 'Board saved' })
+    return activeBoard
+  }, [activeBoard, boards, nodes, edges, unsavedIds, addToast])
+
+  const handleSaveBoard = useCallback(async () => {
     try {
-      if (isLocal) {
-        const saved = await boardsApi.create({ name, data })
-        // Replace the local board with the server board
-        setBoards((prev) =>
-          prev.map((b) => (b.id === activeBoard ? { ...b, id: saved.id, name: saved.name } : b))
-        )
-        setUnsavedIds((prev) => {
-          const next = new Set(prev)
-          next.delete(activeBoard)
-          return next
-        })
-        skipNextLoad.current = true
-        setActiveBoard(saved.id)
-        lastSavedData.current = JSON.stringify(data)
-        addToast({ type: 'success', message: 'Board created and saved' })
-      } else {
-        await boardsApi.update(activeBoard, { name, data })
-        lastSavedData.current = JSON.stringify(data)
-        addToast({ type: 'success', message: 'Board saved' })
-      }
+      await ensureSavedBoard({ silent: false })
     } catch (err) {
       addToast({ type: 'error', message: err.message || 'Failed to save board' })
     }
-  }, [activeBoard, boards, nodes, edges, unsavedIds, addToast])
+  }, [ensureSavedBoard, addToast])
 
   const handleRenameBoard = useCallback(async (id, newName) => {
     // Update local state immediately
@@ -429,10 +460,36 @@ export default function BuilderPage() {
           </div>
 
           <div className="builder-toolbar-group">
+            {protocolOptions.length > 0 && (
+              <select
+                aria-label={isConceptMode ? 'Linking phrase' : 'Edge protocol'}
+                value={activeEdgeLabel}
+                onChange={(e) => setActiveEdgeLabel(e.target.value)}
+                title={isConceptMode ? 'Default linking phrase for new propositions' : 'Default protocol label for new edges'}
+                style={{
+                  fontSize: 'var(--text-xs)',
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--color-border)',
+                  background: 'var(--color-surface)',
+                  color: 'var(--color-text-secondary)',
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="">
+                  {isConceptMode ? 'No linking phrase' : 'Protocol (optional)'}
+                </option>
+                {protocolOptions.map((proto) => (
+                  <option key={proto} value={proto}>
+                    {proto}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               className="btn btn-ghost btn-sm"
               onClick={() => setShowAuditModal(true)}
-              title="Audit Architecture (Linter)"
+              title={isConceptMode ? 'Audit Concept Map & Run AI Critique' : 'Audit Architecture (Linter & AI Critique)'}
               id="builder-audit-btn"
               style={{ position: 'relative' }}
             >
@@ -455,15 +512,17 @@ export default function BuilderPage() {
                 </span>
               )}
             </button>
-            <button
-              className="btn btn-ghost btn-sm"
-              onClick={() => setCalcModalOpen(true)}
-              title="BotE Calculator (⌘E)"
-              id="builder-calc-btn"
-            >
-              <Calculator size={14} />
-              Estimate
-            </button>
+            {capabilities?.calculator !== false && (
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setCalcModalOpen(true)}
+                title="BotE Calculator (⌘E)"
+                id="builder-calc-btn"
+              >
+                <Calculator size={14} />
+                Estimate
+              </button>
+            )}
             <button
               className="btn btn-ghost btn-sm"
               onClick={() => setShowTemplates((prev) => !prev)}
@@ -492,14 +551,14 @@ export default function BuilderPage() {
               id="builder-chat-btn"
             >
               <MessageSquare size={14} />
-              Verify Design
+              {isConceptMode ? 'Verify Map' : 'Verify Design'}
             </button>
           </div>
         </div>
 
         {/* Canvas */}
         <div style={{ position: 'relative', flex: 1 }}>
-          <Canvas />
+          <Canvas defaultEdgeLabel={activeEdgeLabel} isConceptMode={isConceptMode} />
           {showTemplates && (
             <TemplateGallery
               onSelect={handleLoadTemplate}
@@ -510,6 +569,10 @@ export default function BuilderPage() {
             open={showAuditModal}
             onClose={() => setShowAuditModal(false)}
             audit={auditReport}
+            mode={canvasMode}
+            boardId={activeBoard}
+            onEnsureSavedBoard={() => ensureSavedBoard({ silent: true })}
+            boardData={toBoardData(nodes, edges)}
           />
         </div>
       </div>
@@ -518,8 +581,12 @@ export default function BuilderPage() {
       {!isMobile && (
         <ChatPanel
           page="builder"
-          title="Verify Architecture"
-          placeholder="Describe your system for AI review..."
+          title={isConceptMode ? 'Verify Concept Map' : 'Verify Architecture'}
+          placeholder={
+            isConceptMode
+              ? 'Describe your concept map or ask to stress-test propositions...'
+              : 'Describe your system for AI review...'
+          }
         />
       )}
     </div>
