@@ -65,10 +65,7 @@ test.describe("MCP Streamable HTTP, Mobile Drawer & Accessibility", () => {
     // Start with a single 0-card Kit so the MCP-created flashcard is the exact due card in `/review`
     await resetLibrary(instance);
     await instance.api("POST", "/kits/import-kit", {
-      skeleton: buildEuclideanGeometryKit({
-        slug: "euclidean-geometry",
-        includeStarterContent: false,
-      }),
+      skeleton: buildEuclideanGeometryKit({ includeStarterContent: false }),
     });
 
     // 1. Verify MCP Settings UI (`/settings` -> `#mcp-settings-section`)

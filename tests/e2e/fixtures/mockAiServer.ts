@@ -5,21 +5,15 @@
  *   - `POST /v1/chat/completions` (both structured `json_schema` and SSE `stream: true`)
  */
 import http from "node:http";
-import type { Page } from "@playwright/test";
 import type { ToolboxInstance } from "./instance.ts";
 
 export interface RecordedAiRequest {
-  method: string;
-  url: string;
-  model: string;
   stream: boolean;
-  schemaProps: string[];
   systemPrompt: string;
   userPrompt: string;
 }
 
 export interface MockAiServer {
-  readonly baseURL: string;
   readonly v1URL: string;
   readonly modelId: string;
   readonly requests: RecordedAiRequest[];
@@ -625,15 +619,7 @@ export async function startMockAiServer(): Promise<MockAiServer> {
         const stream = body.stream === true;
         const model = body.model ?? MOCK_MODEL_ID;
 
-        requests.push({
-          method,
-          url,
-          model,
-          stream,
-          schemaProps,
-          systemPrompt,
-          userPrompt,
-        });
+        requests.push({ stream, systemPrompt, userPrompt });
 
         if (stream) {
           res.writeHead(200, {
@@ -734,11 +720,8 @@ export async function startMockAiServer(): Promise<MockAiServer> {
   if (!addr || typeof addr === "string") {
     throw new Error("Failed to bind mockAiServer to loopback port");
   }
-  const baseURL = `http://127.0.0.1:${addr.port}`;
-
   return {
-    baseURL,
-    v1URL: `${baseURL}/v1`,
+    v1URL: `http://127.0.0.1:${addr.port}/v1`,
     modelId: MOCK_MODEL_ID,
     requests,
     reset() {
@@ -753,64 +736,32 @@ export async function startMockAiServer(): Promise<MockAiServer> {
 
 /**
  * Registers `mockAi` as an instance-wide custom OpenAI-compatible endpoint and pins
- * `quick`, `deep`, and `research` capabilities to it on an open `ToolboxInstance`.
+ * `quick`, `deep`, and `research` capabilities to it. On a gated instance, pass an
+ * admin's session `Cookie` header so every user inherits the mock AI.
  */
 export async function configureInstanceMockAi(
   instance: ToolboxInstance,
   mockAi: MockAiServer,
-): Promise<{ endpointId: string; fullModelId: string }> {
-  const ep = await instance.api<{ id: string }>("POST", "/endpoints", {
-    name: "E2E Mock AI",
-    baseUrl: mockAi.v1URL,
-    apiKey: "mock-e2e-key",
-  });
-  const fullModelId = `custom:${ep.id}:${mockAi.modelId}`;
-  await instance.api("PUT", "/admin/ai-settings", {
-    capabilities: {
-      quick: { mode: "pinned", modelId: fullModelId },
-      deep: { mode: "pinned", modelId: fullModelId },
-      research: { mode: "pinned", modelId: fullModelId },
-    },
-  });
-  return { endpointId: ep.id, fullModelId };
-}
-
-/**
- * Registers `mockAi` as an instance-wide endpoint via an authenticated Admin's
- * Playwright `page.request` context (so all users on a `gated` instance inherit AI).
- */
-export async function configurePageMockAi(
-  page: Page,
-  mockAi: MockAiServer,
-): Promise<{ endpointId: string; fullModelId: string }> {
-  const createRes = await page.request.post("/api/endpoints", {
-    data: {
-      name: "E2E Mock AI",
-      baseUrl: mockAi.v1URL,
-      apiKey: "mock-e2e-key",
-    },
-  });
-  if (!createRes.ok()) {
-    throw new Error(
-      `POST /api/endpoints failed (${createRes.status()}): ${await createRes.text()}`,
-    );
-  }
-  const ep = (await createRes.json()) as { id: string };
-  const fullModelId = `custom:${ep.id}:${mockAi.modelId}`;
-
-  const pinRes = await page.request.put("/api/admin/ai-settings", {
-    data: {
+  headers?: Record<string, string>,
+): Promise<void> {
+  const ep = await instance.api<{ id: string }>(
+    "POST",
+    "/endpoints",
+    { name: "E2E Mock AI", baseUrl: mockAi.v1URL, apiKey: "mock-e2e-key" },
+    headers,
+  );
+  const modelId = `custom:${ep.id}:${mockAi.modelId}`;
+  await instance.api(
+    "PUT",
+    "/admin/ai-settings",
+    {
       capabilities: {
-        quick: { mode: "pinned", modelId: fullModelId },
-        deep: { mode: "pinned", modelId: fullModelId },
-        research: { mode: "pinned", modelId: fullModelId },
+        quick: { mode: "pinned", modelId },
+        deep: { mode: "pinned", modelId },
+        research: { mode: "pinned", modelId },
       },
     },
-  });
-  if (!pinRes.ok()) {
-    throw new Error(
-      `PUT /api/admin/ai-settings failed (${pinRes.status()}): ${await pinRes.text()}`,
-    );
-  }
-  return { endpointId: ep.id, fullModelId };
+    headers,
+  );
 }
+

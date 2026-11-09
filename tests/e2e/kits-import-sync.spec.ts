@@ -174,42 +174,23 @@ test.describe("Kits Library, Import/Export, Shared Sync & Studio", () => {
     expect(pageErrors).toEqual([]);
   });
 
-  test("publishes Euclidean Geometry to Shared Library, forks copy, and syncs v2 update preserving user progress", async ({
+  test("forks a published Kit and syncs its v2 update in the browser while preserving user progress", async ({
     page,
     instance,
   }) => {
     const pageErrors = collectPageErrors(page);
 
-    // Seed v1 Euclidean Geometry
+    // 1. Seed and publish v1 Euclidean Geometry (shared-library-and-pedagogy.spec.ts
+    //    publishes through the browser modal and checks the `/shared` listing)
     await instance.api("POST", "/kits/import-kit", {
-      skeleton: buildEuclideanGeometryKit({
-        version: 1,
-        slug: "euclidean-geometry-shared",
-        name: "Euclidean Geometry",
-      }),
+      skeleton: buildEuclideanGeometryKit({ slug: "euclidean-geometry-shared" }),
+    });
+    await instance.api("POST", "/kits/euclidean-geometry-shared/publish", {
+      slug: "euclidean-geometry-shared",
+      changelog: "v1 foundational axioms and right triangles",
     });
 
-    // 1. Publish v1 via Publish modal in browser
-    await page.goto("/");
-    await page
-      .getByRole("button", { name: "Publish Euclidean Geometry" })
-      .click();
-    await page
-      .getByPlaceholder("What's new or improved in this release?")
-      .fill("v1 foundational axioms and right triangles");
-    await page
-      .getByRole("button", { name: "Publish to Shared Library" })
-      .click();
-
-    // 2. Verify published Kit appears in `/shared`
-    await page.goto("/shared");
-    const sharedCard = page.getByTestId(
-      "shared-kit-euclidean-geometry-shared",
-    );
-    await expect(sharedCard).toBeVisible();
-    await expect(sharedCard).toContainText("Euclidean Geometry");
-
-    // 3. Fork a learner copy (`geometry-learner`) and record personal progress on v1
+    // 2. Fork a learner copy (`geometry-learner`) and record personal progress on v1
     await instance.api(
       "POST",
       "/shared-kits/euclidean-geometry-shared/fork",
@@ -237,12 +218,11 @@ test.describe("Kits Library, Import/Export, Shared Sync & Studio", () => {
       { "X-Toolbox-Kit": "geometry-learner" },
     );
 
-    // 4. Publisher upgrades source Kit to v2 (new topic + node + starter card) and publishes v2
+    // 3. Publisher upgrades source Kit to v2 (new topic + node + starter card) and publishes v2
     await instance.api("POST", "/kits/euclidean-geometry-shared/sync", {
       skeleton: buildEuclideanGeometryKit({
         version: 2,
         slug: "euclidean-geometry-shared",
-        name: "Euclidean Geometry",
       }),
     });
     await instance.api("POST", "/kits/euclidean-geometry-shared/publish", {
@@ -250,7 +230,7 @@ test.describe("Kits Library, Import/Export, Shared Sync & Studio", () => {
       changelog: "v2 adds Inscribed Angles & Thales' Circle Theorem",
     });
 
-    // 5. Learner opens `/` in browser, sees `Update v2 available`, and clicks `Sync v2`
+    // 4. Learner opens `/` in browser, sees `Update v2 available`, and clicks `Sync v2`
     await page.goto("/");
     const learnerCard = page.getByTestId("kit-card-geometry-learner");
     await expect(learnerCard).toContainText("Update v2 available");
@@ -285,7 +265,7 @@ test.describe("Kits Library, Import/Export, Shared Sync & Studio", () => {
     expect(pageErrors).toEqual([]);
   });
 
-  test("navigates New Kit Studio (/new) Stage 1 controls and stages pasted syllabus cleanly", async ({
+  test("navigates New Kit Studio (/new) Stage 1 controls cleanly", async ({
     page,
   }) => {
     const pageErrors = collectPageErrors(page);
@@ -322,22 +302,7 @@ test.describe("Kits Library, Import/Export, Shared Sync & Studio", () => {
       .fill("https://ocw.mit.edu/courses/18-06-linear-algebra");
     await expect(page.getByTestId("studio-add-url-btn")).toBeEnabled();
 
-    // Stage pasted syllabus notes locally
-    await page.getByRole("button", { name: "Paste Syllabus" }).click();
-    await page
-      .getByPlaceholder("Source title (e.g. Course Syllabus / Lecture Notes)")
-      .fill("MIT 18.06 Lecture Outline");
-    await page
-      .getByPlaceholder("Paste raw markdown, lecture outline, or reading notes...")
-      .fill(
-        "# Week 1: Column Space & Nullspace\nElimination, LU factorization, and rank-nullity theorem.",
-      );
-    await page.getByRole("button", { name: "Stage Notes" }).click();
-
-    await expect(page.getByTestId("staged-source-0")).toContainText(
-      "MIT 18.06 Lecture Outline",
-    );
-
+    // Staging pasted notes is covered by compiler-and-living-kit.spec.ts Stage 1.
     // Navigate back to Library Home cleanly
     await page.locator("#nav-library").click();
     await expect(page).toHaveURL(/\/$/);

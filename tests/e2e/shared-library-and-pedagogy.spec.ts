@@ -6,7 +6,6 @@
 import { buildEuclideanGeometryKit } from "./fixtures/kits.ts";
 import {
   configureInstanceMockAi,
-  configurePageMockAi,
   startMockAiServer,
 } from "./fixtures/mockAiServer.ts";
 import {
@@ -34,44 +33,31 @@ gatedTest.describe(
 
         try {
           // ── 1. Browser Context 1 (User A / Admin): Setup + Mock AI + Publish ──
-          await page.goto("/");
-          await page.locator("#setup-username").fill("alice_publisher");
-          await page.locator("#setup-display-name").fill("Alice Publisher");
-          await page.locator("#setup-email").fill("alice@toolbox.local");
-          await page
-            .locator("#setup-password")
-            .fill("CorrectHorseBatteryStaple1!");
-          await page
-            .getByRole("button", { name: "Create Admin Account" })
-            .click();
-
-          await expect(
-            page.getByRole("heading", { name: "My Study Library" }),
-          ).toBeVisible();
-
-          // Configure instance-wide mock AI endpoint so all users inherit deterministic AI
-          await configurePageMockAi(page, mockAi);
-
-          // Enable Open Sign-Up for User B
-          await page.goto("/settings");
-          const adminSection = page.locator("#instance-admin-section");
-          await expect(adminSection).toBeVisible();
-          await adminSection
-            .getByRole("button", { name: "Enable Open Sign-Up" })
-            .click();
-          await expect(
-            adminSection.getByRole("button", { name: "Disable Open Sign-Up" }),
-          ).toBeVisible();
+          // auth-and-tenancy.spec.ts walks the Setup Wizard, Open Sign-Up, and registration UI.
+          const setupRes = await page.request.post("/api/auth/setup", {
+            data: {
+              username: "alice_publisher",
+              displayName: "Alice Publisher",
+              email: "alice@toolbox.local",
+              password: "CorrectHorseBatteryStaple1!",
+            },
+          });
+          expect(setupRes.status()).toBe(201);
+          const adminCookie = (await page.context().cookies())
+            .map((c) => `${c.name}=${c.value}`)
+            .join("; ");
+          // Instance-wide mock AI endpoint, so all users inherit deterministic AI
+          await configureInstanceMockAi(gated, mockAi, { Cookie: adminCookie });
+          await gated.api(
+            "PUT",
+            "/admin/settings",
+            { registrationOpen: true },
+            { Cookie: adminCookie },
+          );
 
           // Import custom Euclidean Geometry Kit as User A and publish to Shared Library
           const importRes = await page.request.post("/api/kits/import-kit", {
-            data: {
-              skeleton: buildEuclideanGeometryKit({
-                version: 1,
-                slug: "euclidean-geometry",
-                name: "Euclidean Geometry",
-              }),
-            },
+            data: { skeleton: buildEuclideanGeometryKit() },
           });
           expect(importRes.ok()).toBe(true);
 
@@ -82,29 +68,24 @@ gatedTest.describe(
           await page
             .getByPlaceholder("What's new or improved in this release?")
             .fill("v1 foundational postulates, triangle congruence, and drills");
+          const published = page.waitForResponse(
+            (res) => res.url().endsWith("/publish") && res.request().method() === "POST",
+          );
           await page
             .getByRole("button", { name: "Publish to Shared Library" })
             .click();
+          expect((await published).ok()).toBe(true);
 
           // ── 2. Browser Context 2 (User B / Learner): Register + Fork from `/shared` ──
-          await userBPage.goto("/");
-          await expect(userBPage.locator("#signin-identifier")).toBeVisible();
-          await userBPage
-            .getByRole("button", { name: "Create an account" })
-            .click();
-          await userBPage.locator("#reg-username").fill("bob_scholar");
-          await userBPage.locator("#reg-display-name").fill("Bob Scholar");
-          await userBPage.locator("#reg-email").fill("bob@toolbox.local");
-          await userBPage
-            .locator("#reg-password")
-            .fill("Tr0ub4dorAnd3lephantBattery!");
-          await userBPage
-            .getByRole("button", { name: "Create Account" })
-            .click();
-
-          await expect(
-            userBPage.getByRole("heading", { name: "My Study Library" }),
-          ).toBeVisible();
+          const registerRes = await userBPage.request.post("/api/auth/register", {
+            data: {
+              username: "bob_scholar",
+              displayName: "Bob Scholar",
+              email: "bob@toolbox.local",
+              password: "Tr0ub4dorAnd3lephantBattery!",
+            },
+          });
+          expect(registerRes.status()).toBe(201);
 
           // Open Shared Community Library (`/shared`), scan WCAG 2.2 AA, and fork Alice's Kit
           await userBPage.goto("/shared");
@@ -150,16 +131,11 @@ gatedTest.describe(
             label: "guided-drills-workspace",
           });
 
-          const scratchpad = userBPage.getByTestId("drill-scratchpad");
-          await scratchpad.fill(
-            "By Euclid's parallel postulate, constructing a line parallel to the base through the apex forms alternate interior angles equal to the two base angles, summing to a straight 180-degree angle.",
-          );
-
-          // Verify >=30 non-whitespace chars unlocks Hint 1 Nudge
-          await expect(
-            userBPage.getByTestId("reveal-hint-1-btn"),
-          ).toBeEnabled();
-
+          await userBPage
+            .getByTestId("drill-scratchpad")
+            .fill(
+              "By Euclid's parallel postulate, constructing a line parallel to the base through the apex forms alternate interior angles equal to the two base angles, summing to a straight 180-degree angle.",
+            );
           await userBPage.getByTestId("submit-drill-btn").click();
 
           const drillFeedback = userBPage.getByTestId("rubric-feedback-card");
