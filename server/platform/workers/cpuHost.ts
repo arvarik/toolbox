@@ -341,7 +341,7 @@ export async function embedTextsLocal(
       "cpuHost",
       `Local ONNX embedder unavailable (${err instanceof Error ? err.message : String(err)}); using deterministic hash fallback.`,
     );
-    // ponytail: fallback to deterministic 384-dim hash projection when offline without prefetched ONNX weights; run `npm run fetch-models` to pre-stage real MiniLM weights.
+    // ponytail: fallback to deterministic 384-dim hash projection when offline without prefetched ONNX weights; run `node scripts/fetch-models.ts` to pre-stage real MiniLM weights.
     return deterministicHashEmbed(texts, dim);
   }
 }
