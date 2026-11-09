@@ -2,12 +2,15 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { nodesForCard } from '../../shared/kits/kitSkeleton'
+import { SYSTEM_DESIGN_KIT_SKELETON } from '../../shared/kits/systemDesignKit'
 import BoardList from '../components/builder/BoardList'
 import { readStoreNodes } from '../components/builder/boardModel'
 import FlashcardView from '../components/study/FlashcardView'
 import BuilderPage from '../pages/BuilderPage'
 import StudyPage from '../pages/StudyPage'
 import useAppStore from '../stores/appStore'
+import { CURATED_STARTER_CARDS, STARTER_DECK_META, seedCuratedStarterDeck } from '../utils/starterDeck'
 import { makeTestKit, resetKitStore } from './testHelpers'
 
 const MOCK_DECKS = [
@@ -342,5 +345,23 @@ describe('Builder Canvas, Concept Map Critique & Flashcard Decks', () => {
     render(<MemoryRouter><FlashcardView cards={[{ id: '1', front: 'Long Q', back: multiBack }]} deckName="Deck" onBack={vi.fn()} /></MemoryRouter>)
     fireEvent.click(q('.flashcard'))
     expect(screen.getByText(multiBack)).toHaveClass('flashcard-text')
+  })
+
+  it('seeds the curated starter deck: 15 complete cards that link to System Design graph nodes', async () => {
+    expect(CURATED_STARTER_CARDS).toHaveLength(15)
+    for (const card of CURATED_STARTER_CARDS) {
+      expect(card.front).toBeTruthy()
+      expect(card.back).toBeTruthy()
+      expect(card.source_pillar_id).toBeTruthy()
+      expect(card.source_topic_id).toBeTruthy()
+      expect(nodesForCard(card, SYSTEM_DESIGN_KIT_SKELETON.graph.nodes).length).toBeGreaterThan(0)
+    }
+
+    const createDeck = vi.fn().mockResolvedValue({ id: 'deck-123', name: STARTER_DECK_META.name })
+    const createCard = vi.fn().mockResolvedValue({ id: 'card-1' })
+    const deck = await seedCuratedStarterDeck({ create: createDeck }, { create: createCard })
+    expect(createDeck).toHaveBeenCalledWith(STARTER_DECK_META)
+    expect(createCard).toHaveBeenCalledTimes(15)
+    expect(deck.id).toBe('deck-123')
   })
 })
