@@ -49,6 +49,9 @@ jobs:
       - name: Dependency Security Audit
         run: npm audit
 
+      - name: Verify npm Registry Signatures & Provenance
+        run: npm audit signatures
+
       - name: Unit & Integration Tests with Coverage
         run: npm run test:coverage
 
@@ -111,3 +114,14 @@ jobs:
 
       - name: Boot container and verify health & auth endpoints
         run: bash .github/scripts/smoke-image.sh toolbox:smoke
+
+      # Blocks the merge on a fixed high or critical vulnerability. The same
+      # Grype settings scan the published image in docker-publish.yml.
+      - name: Scan the image for fixed high & critical vulnerabilities
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: toolbox:smoke
+          fail-build: true
+          only-fixed: true
+          severity-cutoff: high
+          output-format: table

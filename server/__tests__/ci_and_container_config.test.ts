@@ -137,6 +137,17 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
     expect(publish).toContain('--title "$TAG"');
   });
 
+  it("gates PRs on npm registry signatures and fixed high/critical image CVEs", () => {
+    const ci = workflows.find((w) => w.file === "ci.yml")?.body ?? "";
+    expect(ci).toContain("npm audit signatures");
+    for (const gate of ["fail-build: true", "only-fixed: true", "severity-cutoff: high"]) {
+      expect(ci).toContain(gate);
+    }
+    // The PR gate adds to the post-publish SARIF scan; it does not replace it.
+    const publish = workflows.find((w) => w.file === "docker-publish.yml")?.body ?? "";
+    expect(publish).toContain("output-format: sarif");
+  });
+
   it("keeps production dependencies exact: every server/shared/CLI external import is in dependencies and pure-client packages stay in devDependencies", () => {
     const pkg = JSON.parse(
       fs.readFileSync(path.join(ROOT, "package.json"), "utf8"),
