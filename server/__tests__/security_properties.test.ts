@@ -216,11 +216,14 @@ describe("Property tests for untrusted-input parsers (fast-check)", () => {
         `[::ffff:${hi}:${lo}]`,
         `[::ffff:0:${dotted}]`,
         `[64:ff9b::${dotted}]`,
+        // IPv4-compatible form. ::0.0.0.1 is the IPv6 loopback ::1, so that one address stays dotted.
+        ip === 1 ? dotted : `[::${dotted}]`,
+        `[2002:${hi}:${lo}::]`,
       ];
     };
 
     await fc.assert(
-      fc.asyncProperty(target, fc.integer({ min: 0, max: 8 }), async ({ ip, metadata }, k) => {
+      fc.asyncProperty(target, fc.integer({ min: 0, max: 10 }), async ({ ip, metadata }, k) => {
         const url = `http://${spellings(ip)[k]}/v1`;
         const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
         expect(isPrivateAddress(host)).toBe(true);
@@ -247,6 +250,9 @@ describe("Property tests for untrusted-input parsers (fast-check)", () => {
       }),
       RUNS,
     );
+    // Teredo is refused, and a public 2001: address is not.
+    expect(isPrivateAddress("2001:0:4136:e378:8000:63bf:3fff:fdd2")).toBe(true);
+    expect(isPrivateAddress("2001:4860:4860::8888")).toBe(false);
   });
 
   it("Host guard: an attacker-controlled DNS name is never an allowed Host; IP literals are; no input throws", () => {
