@@ -37,7 +37,7 @@ export interface AdminUserItem extends PublicUser {
   ownedCount?: number;
 }
 
-export class AuthApiError extends Error {
+class AuthApiError extends Error {
   readonly status: number;
   readonly code?: string;
   constructor(message: string, status: number, code?: string) {
@@ -116,11 +116,6 @@ export const authApi = {
       body: data,
     }),
   logout: () => authFetch<{ success: boolean }>("/auth/logout", { method: "POST" }),
-  checkInvitation: (token: string) =>
-    authFetch<{ ok: boolean }>("/auth/invitations/check", {
-      method: "POST",
-      body: { token },
-    }),
   acceptInvitation: (data: {
     token: string;
     email: string;
@@ -130,16 +125,6 @@ export const authApi = {
   }) =>
     authFetch<{ user: PublicUser }>("/auth/accept-invitation", {
       method: "POST",
-      body: data,
-    }),
-  updateProfile: (data: {
-    displayName?: string;
-    username?: string;
-    email?: string;
-    currentPassword?: string;
-  }) =>
-    authFetch<{ user: PublicUser; pendingEmail: string | null }>("/auth/me", {
-      method: "PATCH",
       body: data,
     }),
   changePassword: (data: { currentPassword: string; newPassword: string }) =>
@@ -215,25 +200,6 @@ export const authApi = {
 
 export const adminApi = {
   listUsers: () => authFetch<{ users: AdminUserItem[] }>("/admin/users"),
-  createUser: (data: {
-    email: string;
-    username: string;
-    displayName?: string;
-    role?: "admin" | "member";
-    temporaryPassword?: string;
-  }) =>
-    authFetch<{ user: AdminUserItem; temporaryPassword?: string }>(
-      "/admin/users",
-      { method: "POST", body: data },
-    ),
-  updateUser: (
-    id: string,
-    data: { role?: "admin" | "member"; displayName?: string },
-  ) =>
-    authFetch<{ user: AdminUserItem }>(
-      `/admin/users/${encodeURIComponent(id)}`,
-      { method: "PATCH", body: data },
-    ),
   disableUser: (id: string) =>
     authFetch<{ user: AdminUserItem }>(
       `/admin/users/${encodeURIComponent(id)}/disable`,
@@ -249,11 +215,6 @@ export const adminApi = {
       `/admin/users/${encodeURIComponent(id)}/reset-password`,
       { method: "POST" },
     ),
-  deleteUser: (id: string, purge = false) =>
-    authFetch<{ deleted: boolean }>(`/admin/users/${encodeURIComponent(id)}`, {
-      method: "DELETE",
-      body: purge ? { decision: "purge" } : {},
-    }),
 
   listInvitations: () =>
     authFetch<{ invitations: InvitationSummary[] }>("/admin/invitations"),

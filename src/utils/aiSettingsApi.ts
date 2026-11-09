@@ -7,14 +7,7 @@ import type {
   UserByokUpdate,
 } from "../../shared/platform/aiSettings.ts";
 
-export type {
-  AdminAiSettingsResponse,
-  AdminAiSettingsUpdate,
-  ClientCustomEndpoint,
-  CustomEndpointInput,
-  UserAiSettingsResponse,
-  UserByokUpdate,
-};
+export type { AdminAiSettingsResponse, UserAiSettingsResponse };
 
 async function aiJsonFetch<T>(
   path: string,
@@ -57,21 +50,11 @@ export const userAiSettingsApi = {
       "/ai-settings/test-key",
       { method: "POST", body: { provider, key } },
     ),
-  testEndpoint: (baseUrl: string, apiKey?: string) =>
-    aiJsonFetch<{ ok: boolean; modelCount: number }>(
-      "/ai-settings/endpoints/test",
-      { method: "POST", body: { baseUrl, apiKey } },
-    ),
   createEndpoint: (input: CustomEndpointInput) =>
     aiJsonFetch<ClientCustomEndpoint>("/ai-settings/endpoints", {
       method: "POST",
       body: input,
     }),
-  updateEndpoint: (id: string, input: CustomEndpointInput) =>
-    aiJsonFetch<ClientCustomEndpoint>(
-      `/ai-settings/endpoints/${encodeURIComponent(id)}`,
-      { method: "PUT", body: input },
-    ),
   deleteEndpoint: (id: string) =>
     aiJsonFetch<{ success: boolean }>(
       `/ai-settings/endpoints/${encodeURIComponent(id)}`,

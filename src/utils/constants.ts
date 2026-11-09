@@ -1,9 +1,9 @@
-export interface PillarTopicDef {
+interface PillarTopicDef {
   id: string
   name: string
 }
 
-export interface PillarDef {
+interface PillarDef {
   id: string
   number: number
   name: string
@@ -12,28 +12,22 @@ export interface PillarDef {
   topics: PillarTopicDef[]
 }
 
-export interface BlueprintSectionDef {
+interface BlueprintSectionDef {
   id: string
   name: string
   icon: string
 }
 
-export interface BuilderComponentItem {
+interface BuilderComponentItem {
   id: string
   name: string
   icon: string
 }
 
-export interface BuilderComponentCategory {
+interface BuilderComponentCategory {
   category: string
   color: string
   items: BuilderComponentItem[]
-}
-
-export interface ConnectionProtocolDef {
-  id: string
-  name: string
-  color: string
 }
 
 /**
@@ -239,12 +233,4 @@ export const BUILDER_COMPONENTS: BuilderComponentCategory[] = [
       { id: 'tracer', name: 'Distributed Tracer', icon: 'git-branch' },
     ],
   },
-]
-
-export const CONNECTION_PROTOCOLS: ConnectionProtocolDef[] = [
-  { id: 'http', name: 'HTTP/REST', color: '#60a5fa' },
-  { id: 'grpc', name: 'gRPC', color: '#818cf8' },
-  { id: 'websocket', name: 'WebSocket', color: '#34d399' },
-  { id: 'tcp', name: 'TCP/UDP', color: '#fbbf24' },
-  { id: 'pubsub', name: 'Pub/Sub', color: '#f472b6' },
 ]

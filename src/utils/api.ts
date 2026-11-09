@@ -14,7 +14,7 @@ export class ApiError extends Error {
   }
 }
 
-export interface ModelProviderInfo {
+interface ModelProviderInfo {
   id: string
   name: string
   color?: string
@@ -38,7 +38,7 @@ export interface AvailableModelsResponse {
   errors?: Record<string, string>
 }
 
-export interface ConfigResponse {
+interface ConfigResponse {
   api_key_configured?: boolean
   api_keys_configured?: Record<string, boolean>
   gemini_api_key?: string
@@ -47,7 +47,7 @@ export interface ConfigResponse {
   [key: string]: unknown
 }
 
-export interface DeckRecord {
+interface DeckRecord {
   id: string
   name: string
   description?: string
@@ -62,7 +62,7 @@ export interface DeckRecord {
   [key: string]: unknown
 }
 
-export interface FlashcardRecord {
+interface FlashcardRecord {
   id: string
   deck_id?: string
   front: string
@@ -81,7 +81,7 @@ export interface DuplicateMatchItem {
   similarity?: number
 }
 
-export interface SearchApiResponse {
+interface SearchApiResponse {
   guideContent: Array<{
     pillar_id: string
     topic_id: string
@@ -126,7 +126,7 @@ export interface ReverseCardDraft extends GeneratedFlashcardDraft {
   originalIndex: number
 }
 
-export interface SharedKitApiEntry {
+interface SharedKitApiEntry {
   id: string
   slug: string
   name: string
@@ -148,7 +148,7 @@ export interface SharedKitApiEntry {
   updatedAt: string
 }
 
-export interface SharedKitDetailApiEntry extends SharedKitApiEntry {
+interface SharedKitDetailApiEntry extends SharedKitApiEntry {
   versions: Array<{
     version: number
     changelog: string
@@ -290,7 +290,6 @@ export const decksApi = {
 
 /* ---- Flashcards ---- */
 export const flashcardsApi = {
-  list: (deckId: string) => request<FlashcardRecord[]>(`/decks/${deckId}/cards`),
   due: (deckId: string) => request<FlashcardRecord[]>(`/decks/${deckId}/cards/due`),
   dueAll: () => request<FlashcardRecord[]>('/decks/all/cards/due'),
   create: (deckId: string, data: object) =>
@@ -341,9 +340,6 @@ export const boardsApi = {
 
 /* ---- Chat ---- */
 export const chatApi = {
-  send: (data: Record<string, unknown>) =>
-    request<{ response: string }>('/chat', { method: 'POST', body: data }),
-
   /**
    * Stream a chat response via SSE.
    */
@@ -432,9 +428,6 @@ export const chatApi = {
     return fullText
   },
 
-  summarize: (data: Record<string, unknown>) =>
-    request<{ content: string }>('/chat/summarize', { method: 'POST', body: data }),
-
   evaluateInterceptor: (data: Record<string, unknown>) =>
     request<{ pass: boolean; feedback: string }>('/chat/evaluate-interceptor', {
       method: 'POST',
@@ -508,7 +501,6 @@ export const profileApi = {
   get: () => request<{ profileText: string }>('/profile'),
   update: (profileText: string) =>
     request('/profile', { method: 'PUT', body: { profileText } }),
-  clear: () => request('/profile', { method: 'DELETE' }),
 }
 
 /* ---- System ---- */
@@ -545,8 +537,6 @@ export const kitsApi = {
   list: () => request<{ kits?: Array<Record<string, unknown>> }>('/kits'),
   get: (idOrSlug: string) =>
     request<{ kit?: Record<string, unknown> }>(`/kits/${encodeURIComponent(idOrSlug)}`),
-  update: (idOrSlug: string, patch: Record<string, unknown>) =>
-    request(`/kits/${encodeURIComponent(idOrSlug)}`, { method: 'PATCH', body: patch }),
   delete: (idOrSlug: string) =>
     request(`/kits/${encodeURIComponent(idOrSlug)}`, { method: 'DELETE' }),
   touch: (idOrSlug: string) =>
@@ -565,11 +555,6 @@ export const kitsApi = {
     }),
   syncUpstream: (idOrSlug: string) =>
     request(`/kits/${encodeURIComponent(idOrSlug)}/sync-upstream`, { method: 'POST' }),
-  syncSkeleton: (idOrSlug: string, skeleton: unknown) =>
-    request(`/kits/${encodeURIComponent(idOrSlug)}/sync`, {
-      method: 'POST',
-      body: { skeleton },
-    }),
   publish: (
     idOrSlug: string,
     data: { changelog?: string; includeBaselineNotes?: boolean; slug?: string },
@@ -595,19 +580,6 @@ export const kitsApi = {
       body: fd,
     })
   },
-  exportUrl: (
-    idOrSlug: string,
-    {
-      mode = 'kit',
-      includeGuideNotes = false,
-    }: { mode?: 'kit' | 'backup'; includeGuideNotes?: boolean } = {},
-  ) => {
-    const params = new URLSearchParams({ mode })
-    if (mode === 'kit' && includeGuideNotes) {
-      params.set('includeGuideNotes', 'true')
-    }
-    return `${API_BASE}/kits/${encodeURIComponent(idOrSlug)}/export?${params.toString()}`
-  },
   downloadExport: async (
     idOrSlug: string,
     {
@@ -615,7 +587,11 @@ export const kitsApi = {
       includeGuideNotes = false,
     }: { mode?: 'kit' | 'backup'; includeGuideNotes?: boolean } = {},
   ): Promise<{ filename: string }> => {
-    const url = kitsApi.exportUrl(idOrSlug, { mode, includeGuideNotes })
+    const params = new URLSearchParams({ mode })
+    if (mode === 'kit' && includeGuideNotes) {
+      params.set('includeGuideNotes', 'true')
+    }
+    const url = `${API_BASE}/kits/${encodeURIComponent(idOrSlug)}/export?${params.toString()}`
     const res = await fetch(url, { headers: getActiveKitHeaders() })
     if (!res.ok) {
       const body = (await res
@@ -643,8 +619,6 @@ export const kitsApi = {
     setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
     return { filename }
   },
-  sourceFileUrl: (idOrSlug: string, sourceId: string) =>
-    `${API_BASE}/kits/${encodeURIComponent(idOrSlug)}/sources/${encodeURIComponent(sourceId)}/file`,
 }
 
 /* ---- Shared Community Library ---- */

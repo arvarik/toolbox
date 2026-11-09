@@ -4,15 +4,14 @@
  * so reviewing them automatically populates the SRS mastery heatmap!
  */
 
-export interface StarterCard extends Record<string, unknown> {
+interface StarterCard extends Record<string, unknown> {
   front: string
   back: string
   source_pillar_id: string
   source_topic_id: string
-  topicId?: string
 }
 
-export interface StarterDeckMeta {
+interface StarterDeckMeta {
   name: string
   description: string
   tags: string
@@ -42,7 +41,6 @@ export const CURATED_STARTER_CARDS: StarterCard[] = [
     front: 'Load Balancing (L4 vs L7) — What is the difference between Transport and Application layer balancing?',
     back: '• **Layer 4 (Transport)**: Operates at TCP/UDP level. Inspects IP address and port without decrypting or inspecting HTTP headers or body. Extremely fast with low CPU overhead (e.g., AWS NLB, IPVS).\n\n• **Layer 7 (Application)**: Operates at HTTP/HTTPS level. Terminates TLS, parses URL paths, headers, and cookies. Enables intelligent routing (e.g. `/api/v2` to microservice B), sticky sessions, and edge rate limiting (e.g., NGINX, Envoy, AWS ALB).',
     source_pillar_id: 'compute',
-    topicId: 'traffic-gateways',
     source_topic_id: 'traffic-gateways',
   },
   {

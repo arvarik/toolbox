@@ -6,7 +6,7 @@
 
 export type AuditSeverity = 'critical' | 'warning' | 'info'
 
-export interface AuditNodeData {
+interface AuditNodeData {
   name?: string
   icon?: string
   category?: string
@@ -31,7 +31,7 @@ export interface AuditEdge {
   [key: string]: unknown
 }
 
-export interface AuditFinding {
+interface AuditFinding {
   id: string
   severity: AuditSeverity
   title: string
@@ -40,7 +40,7 @@ export interface AuditFinding {
   nodeIds: string[]
 }
 
-export interface AuditStats {
+interface AuditStats {
   totalNodes: number
   totalEdges: number
   criticalCount: number
@@ -48,7 +48,7 @@ export interface AuditStats {
   infoCount: number
 }
 
-export interface AuditReport {
+interface AuditReport {
   score: number
   rating: string
   color: string
@@ -57,7 +57,7 @@ export interface AuditReport {
   stats: AuditStats
 }
 
-export interface AuditOptions {
+interface AuditOptions {
   mode?: 'architecture' | 'concept'
 }
 

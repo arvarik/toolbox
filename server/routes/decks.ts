@@ -1,7 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { Router, type Request, type Response } from "express";
-import { v4 as uuid } from "uuid";
 import db from "../db.ts";
-import { asyncHandler, NotFoundError } from "../platform/net/errors.ts";
+import {
+  asyncHandler,
+  getErrorMessage,
+  NotFoundError,
+} from "../platform/net/errors.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import { resolveActiveKit, resolveKitById } from "../kits/kitContext.ts";
 import {
@@ -76,6 +80,12 @@ function getOwnedDeck(scope: Scope, deckId: string): DeckRow | undefined {
     .get(scope.ownerId, deckId) as DeckRow | undefined;
 }
 
+function getOwnedCard(scope: Scope, cardId: string): FlashcardRow | undefined {
+  return db
+    .prepare("SELECT * FROM flashcards WHERE ownerId = ? AND id = ?")
+    .get(scope.ownerId, cardId) as FlashcardRow | undefined;
+}
+
 /**
  * Prerequisite gate that NEVER deadlocks if the prerequisite card was deleted:
  * unlocked when prerequisite_id is empty OR there is NO existing prerequisite
@@ -95,29 +105,16 @@ function applyRemediation<T extends FlashcardRow>(
   sessionCards: T[],
   deckId: string | null,
 ): Array<T | FlashcardRow> {
-  const rows = (
-    deckId
-      ? db
-          .prepare(
-            `SELECT f.*, r.reason AS remediation_reason, r.node_name AS remediation_node
-             FROM remediation_queue r
-             JOIN flashcards f ON f.ownerId = r.ownerId AND f.id = r.card_id
-             WHERE r.ownerId = ? AND r.resolved_at IS NULL AND f.deck_id = ?
-             ORDER BY r.created_at ASC
-             LIMIT 10`,
-          )
-          .all(scope.ownerId, deckId)
-      : db
-          .prepare(
-            `SELECT f.*, r.reason AS remediation_reason, r.node_name AS remediation_node
-             FROM remediation_queue r
-             JOIN flashcards f ON f.ownerId = r.ownerId AND f.id = r.card_id
-             WHERE r.ownerId = ? AND r.resolved_at IS NULL
-             ORDER BY r.created_at ASC
-             LIMIT 10`,
-          )
-          .all(scope.ownerId)
-  ) as FlashcardRow[];
+  const rows = db
+    .prepare(
+      `SELECT f.*, r.reason AS remediation_reason, r.node_name AS remediation_node
+       FROM remediation_queue r
+       JOIN flashcards f ON f.ownerId = r.ownerId AND f.id = r.card_id
+       WHERE r.ownerId = ? AND r.resolved_at IS NULL ${deckId ? "AND f.deck_id = ?" : ""}
+       ORDER BY r.created_at ASC
+       LIMIT 10`,
+    )
+    .all(...(deckId ? [scope.ownerId, deckId] : [scope.ownerId])) as FlashcardRow[];
 
   if (rows.length === 0) return sessionCards;
 
@@ -188,14 +185,12 @@ router.get("/", (req, res) => {
       cardCount > 0 ? Math.round((reviewedCount / cardCount) * 100) : 0;
 
     const { last_reviewed_raw, reviewed_count: _rev, ...deck } = row;
-    const settings = parseDeckSettings(row.settings);
-
     return {
       ...deck,
       new_count: row.new_count || 0,
       learn_count: row.learn_count || 0,
       due_count: row.due_count || 0,
-      settings,
+      settings: parseDeckSettings(row.settings),
       progress,
       last_studied: formatRelativeTime(last_reviewed_raw),
     };
@@ -216,8 +211,7 @@ function readOptionalKitSelector(req: Request): string | null {
       ? req.headers["x-toolbox-kit"].trim()
       : "";
   const raw = fromQuery || fromHeader;
-  if (!raw || raw === "all" || raw === "*") return null;
-  return raw;
+  return !raw || raw === "all" || raw === "*" ? null : raw;
 }
 
 function resolveOptionalKitId(
@@ -249,59 +243,37 @@ export function collectDueReviewQueue(
   opts: { kitSelector?: string | null } = {},
 ): Array<FlashcardRow & Record<string, unknown>> {
   const resolvedKitId = resolveOptionalKitId(scope, opts.kitSelector);
+  const kitParams = resolvedKitId ? [scope.ownerId, resolvedKitId] : [scope.ownerId];
 
-  const allDecks = (
-    resolvedKitId
-      ? db
-          .prepare(
-            `SELECT d.id, d.name, d.settings, d.kit_id,
-                    k.slug AS kit_slug, k.name AS kit_name, k.icon AS kit_icon, k.color AS kit_color
-             FROM decks d
-             JOIN kits k ON k.ownerId = d.ownerId AND k.id = d.kit_id
-             WHERE d.ownerId = ? AND d.kit_id = ?`,
-          )
-          .all(scope.ownerId, resolvedKitId)
-      : db
-          .prepare(
-            `SELECT d.id, d.name, d.settings, d.kit_id,
-                    k.slug AS kit_slug, k.name AS kit_name, k.icon AS kit_icon, k.color AS kit_color
-             FROM decks d
-             JOIN kits k ON k.ownerId = d.ownerId AND k.id = d.kit_id
-             WHERE d.ownerId = ?`,
-          )
-          .all(scope.ownerId)
-  ) as JoinedDeckRow[];
+  const allDecks = db
+    .prepare(
+      `SELECT d.id, d.name, d.settings, d.kit_id,
+              k.slug AS kit_slug, k.name AS kit_name, k.icon AS kit_icon, k.color AS kit_color
+       FROM decks d
+       JOIN kits k ON k.ownerId = d.ownerId AND k.id = d.kit_id
+       WHERE d.ownerId = ? ${resolvedKitId ? "AND d.kit_id = ?" : ""}`,
+    )
+    .all(...kitParams) as JoinedDeckRow[];
 
   if (allDecks.length === 0) return [];
 
-  const todayCounts = (
-    resolvedKitId
-      ? db
-          .prepare(
-            `SELECT f.deck_id,
-                    COALESCE(SUM(CASE WHEN f.repetitions = 1 THEN 1 ELSE 0 END), 0) AS new_today,
-                    COALESCE(SUM(CASE WHEN f.repetitions > 1 THEN 1 ELSE 0 END), 0) AS rev_today
-             FROM flashcards f
-             JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
-             WHERE f.ownerId = ? AND d.kit_id = ?
-               AND f.last_reviewed IS NOT NULL
-               AND date(f.last_reviewed, 'localtime') = date('now', 'localtime')
-             GROUP BY f.deck_id`,
-          )
-          .all(scope.ownerId, resolvedKitId)
-      : db
-          .prepare(
-            `SELECT deck_id,
-                    COALESCE(SUM(CASE WHEN repetitions = 1 THEN 1 ELSE 0 END), 0) AS new_today,
-                    COALESCE(SUM(CASE WHEN repetitions > 1 THEN 1 ELSE 0 END), 0) AS rev_today
-             FROM flashcards
-             WHERE ownerId = ?
-               AND last_reviewed IS NOT NULL
-               AND date(last_reviewed, 'localtime') = date('now', 'localtime')
-             GROUP BY deck_id`,
-          )
-          .all(scope.ownerId)
-  ) as Array<{ deck_id: string; new_today: number; rev_today: number }>;
+  const todayCounts = db
+    .prepare(
+      `SELECT f.deck_id,
+              COALESCE(SUM(CASE WHEN f.repetitions = 1 THEN 1 ELSE 0 END), 0) AS new_today,
+              COALESCE(SUM(CASE WHEN f.repetitions > 1 THEN 1 ELSE 0 END), 0) AS rev_today
+       FROM flashcards f
+       JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+       WHERE f.ownerId = ? ${resolvedKitId ? "AND d.kit_id = ?" : ""}
+         AND f.last_reviewed IS NOT NULL
+         AND date(f.last_reviewed, 'localtime') = date('now', 'localtime')
+       GROUP BY f.deck_id`,
+    )
+    .all(...kitParams) as Array<{
+    deck_id: string;
+    new_today: number;
+    rev_today: number;
+  }>;
 
   const countsByDeck = new Map<string, { newToday: number; revToday: number }>();
   for (const row of todayCounts) {
@@ -311,34 +283,23 @@ export function collectDueReviewQueue(
     });
   }
 
-  const candidateCards = (
-    resolvedKitId
-      ? db
-          .prepare(
-            `SELECT * FROM flashcards
-             WHERE ownerId = ?
-               AND deck_id IN (SELECT id FROM decks WHERE ownerId = ? AND kit_id = ?)
-               AND (
-                 (state IN (1, 3) AND (next_review IS NULL OR next_review <= datetime('now')))
-                 OR (state = 2 AND (next_review IS NULL OR next_review <= datetime('now')))
-                 OR ((state = 0 OR state IS NULL) AND next_review IS NULL)
-               )
-               AND ${PREREQ_UNLOCKED_SQL}`,
-          )
-          .all(scope.ownerId, scope.ownerId, resolvedKitId)
-      : db
-          .prepare(
-            `SELECT * FROM flashcards
-             WHERE ownerId = ?
-               AND (
-                 (state IN (1, 3) AND (next_review IS NULL OR next_review <= datetime('now')))
-                 OR (state = 2 AND (next_review IS NULL OR next_review <= datetime('now')))
-                 OR ((state = 0 OR state IS NULL) AND next_review IS NULL)
-               )
-               AND ${PREREQ_UNLOCKED_SQL}`,
-          )
-          .all(scope.ownerId)
-  ) as FlashcardRow[];
+  const candidateCards = db
+    .prepare(
+      `SELECT * FROM flashcards
+       WHERE ownerId = ?
+         ${resolvedKitId ? "AND deck_id IN (SELECT id FROM decks WHERE ownerId = ? AND kit_id = ?)" : ""}
+         AND (
+           (state IN (1, 3) AND (next_review IS NULL OR next_review <= datetime('now')))
+           OR (state = 2 AND (next_review IS NULL OR next_review <= datetime('now')))
+           OR ((state = 0 OR state IS NULL) AND next_review IS NULL)
+         )
+         AND ${PREREQ_UNLOCKED_SQL}`,
+    )
+    .all(
+      ...(resolvedKitId
+        ? [scope.ownerId, scope.ownerId, resolvedKitId]
+        : [scope.ownerId]),
+    ) as FlashcardRow[];
 
   const cardsByDeck = new Map<string, FlashcardRow[]>();
   for (const card of candidateCards) {
@@ -431,77 +392,45 @@ export function collectDueReviewQueue(
 
 router.get(["/all/cards/due", "/interleaved/due"], (req, res) => {
   const scope = scopeOf(req);
-  const kitSelector = readOptionalKitSelector(req);
-  res.json(collectDueReviewQueue(scope, { kitSelector }));
+  res.json(collectDueReviewQueue(scope, { kitSelector: readOptionalKitSelector(req) }));
 });
 
 router.get("/stats", (req, res) => {
   const scope = scopeOf(req);
   const resolvedKitId = resolveOptionalKitId(scope, readOptionalKitSelector(req));
 
-  const row = (
-    resolvedKitId
-      ? db
-          .prepare(
-            `SELECT
-               COUNT(DISTINCT d.id) AS deckCount,
-               COUNT(f.id) AS cardCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
-                   AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
-                 THEN 1 ELSE 0 END), 0) AS dueCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
-                 THEN 1 ELSE 0 END), 0) AS newCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.state IN (1, 3)
-                 THEN 1 ELSE 0 END), 0) AS learningCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.state = 2
-                 THEN 1 ELSE 0 END), 0) AS reviewCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.state = 2 AND COALESCE(f.interval, 0) >= 21
-                 THEN 1 ELSE 0 END), 0) AS masteredCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.last_reviewed IS NOT NULL
-                   AND date(f.last_reviewed, 'localtime') = date('now', 'localtime')
-                 THEN 1 ELSE 0 END), 0) AS reviewedTodayCount
-             FROM decks d
-             LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
-             WHERE d.ownerId = ? AND d.kit_id = ?`,
-          )
-          .get(scope.ownerId, resolvedKitId)
-      : db
-          .prepare(
-            `SELECT
-               COUNT(DISTINCT d.id) AS deckCount,
-               COUNT(f.id) AS cardCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
-                   AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
-                 THEN 1 ELSE 0 END), 0) AS dueCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
-                 THEN 1 ELSE 0 END), 0) AS newCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.state IN (1, 3)
-                 THEN 1 ELSE 0 END), 0) AS learningCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.state = 2
-                 THEN 1 ELSE 0 END), 0) AS reviewCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.state = 2 AND COALESCE(f.interval, 0) >= 21
-                 THEN 1 ELSE 0 END), 0) AS masteredCount,
-               COALESCE(SUM(CASE
-                 WHEN f.id IS NOT NULL AND f.last_reviewed IS NOT NULL
-                   AND date(f.last_reviewed, 'localtime') = date('now', 'localtime')
-                 THEN 1 ELSE 0 END), 0) AS reviewedTodayCount
-             FROM decks d
-             LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
-             WHERE d.ownerId = ?`,
-          )
-          .get(scope.ownerId)
-  ) as {
+  const row = db
+    .prepare(
+      `SELECT
+         COUNT(DISTINCT d.id) AS deckCount,
+         COUNT(f.id) AS cardCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
+             AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
+           THEN 1 ELSE 0 END), 0) AS dueCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
+           THEN 1 ELSE 0 END), 0) AS newCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND f.state IN (1, 3)
+           THEN 1 ELSE 0 END), 0) AS learningCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND f.state = 2
+           THEN 1 ELSE 0 END), 0) AS reviewCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND f.state = 2 AND COALESCE(f.interval, 0) >= 21
+           THEN 1 ELSE 0 END), 0) AS masteredCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND f.last_reviewed IS NOT NULL
+             AND date(f.last_reviewed, 'localtime') = date('now', 'localtime')
+           THEN 1 ELSE 0 END), 0) AS reviewedTodayCount
+       FROM decks d
+       LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
+       WHERE d.ownerId = ? ${resolvedKitId ? "AND d.kit_id = ?" : ""}`,
+    )
+    .get(
+      ...(resolvedKitId ? [scope.ownerId, resolvedKitId] : [scope.ownerId]),
+    ) as {
     deckCount: number;
     cardCount: number;
     dueCount: number;
@@ -529,15 +458,12 @@ router.get("/stats", (req, res) => {
 
 function handleCardOnlyReview(req: Request, res: Response): void {
   const scope = scopeOf(req);
-  const cardId = String(req.params.cardId);
-  const row = db
-    .prepare("SELECT deck_id FROM flashcards WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, cardId) as { deck_id: string } | undefined;
-  if (!row) {
+  const card = getOwnedCard(scope, String(req.params.cardId));
+  if (!card) {
     res.status(404).json({ message: "Card not found" });
     return;
   }
-  (req.params as Record<string, string>).deckId = row.deck_id;
+  (req.params as Record<string, string>).deckId = card.deck_id;
   handleReview(req, res);
 }
 
@@ -608,7 +534,7 @@ router.post("/", (req, res) => {
     return;
   }
 
-  const id = uuid();
+  const id = randomUUID();
   db.prepare(
     "INSERT INTO decks (id, ownerId, kit_id, name, description, color_index, tags) VALUES (?, ?, ?, ?, ?, ?, ?)",
   ).run(
@@ -621,8 +547,7 @@ router.post("/", (req, res) => {
     tags || "",
   );
 
-  const deck = getOwnedDeck(scope, id);
-  res.status(201).json(deck);
+  res.status(201).json(getOwnedDeck(scope, id));
 });
 
 router.put("/:id", (req, res) => {
@@ -633,8 +558,7 @@ router.put("/:id", (req, res) => {
     color_index?: number;
     tags?: string;
   };
-  const existing = getOwnedDeck(scope, req.params.id);
-  if (!existing) {
+  if (!getOwnedDeck(scope, req.params.id)) {
     res.status(404).json({ message: "Deck not found" });
     return;
   }
@@ -761,29 +685,17 @@ router.get("/:deckId/cards/due", (req, res) => {
 
   const settings = parseDeckSettings(deck.settings);
 
-  const newReviewedToday = (
-    db
-      .prepare(
-        `SELECT COUNT(*) as count FROM flashcards
-         WHERE ownerId = ? AND deck_id = ?
-           AND last_reviewed IS NOT NULL
-           AND date(last_reviewed, 'localtime') = date('now', 'localtime')
-           AND repetitions = 1`,
-      )
-      .get(scope.ownerId, deckId) as { count: number }
-  ).count;
-
-  const reviewsToday = (
-    db
-      .prepare(
-        `SELECT COUNT(*) as count FROM flashcards
-         WHERE ownerId = ? AND deck_id = ?
-           AND last_reviewed IS NOT NULL
-           AND date(last_reviewed, 'localtime') = date('now', 'localtime')
-           AND repetitions > 1`,
-      )
-      .get(scope.ownerId, deckId) as { count: number }
-  ).count;
+  const todayRow = db
+    .prepare(
+      `SELECT
+         COALESCE(SUM(CASE WHEN repetitions = 1 THEN 1 ELSE 0 END), 0) AS newToday,
+         COALESCE(SUM(CASE WHEN repetitions > 1 THEN 1 ELSE 0 END), 0) AS reviewsToday
+       FROM flashcards
+       WHERE ownerId = ? AND deck_id = ?
+         AND last_reviewed IS NOT NULL
+         AND date(last_reviewed, 'localtime') = date('now', 'localtime')`,
+    )
+    .get(scope.ownerId, deckId) as { newToday: number; reviewsToday: number };
 
   const learningCards = db
     .prepare(
@@ -796,7 +708,10 @@ router.get("/:deckId/cards/due", (req, res) => {
     )
     .all(scope.ownerId, deckId) as FlashcardRow[];
 
-  const remainingReviews = Math.max(0, settings.review_limit - reviewsToday);
+  const remainingReviews = Math.max(
+    0,
+    settings.review_limit - (todayRow.reviewsToday || 0),
+  );
   const reviewCards =
     remainingReviews > 0
       ? (db
@@ -812,7 +727,7 @@ router.get("/:deckId/cards/due", (req, res) => {
           .all(scope.ownerId, deckId, remainingReviews) as FlashcardRow[])
       : [];
 
-  const remainingNew = Math.max(0, settings.new_limit - newReviewedToday);
+  const remainingNew = Math.max(0, settings.new_limit - (todayRow.newToday || 0));
   const newCards =
     remainingNew > 0
       ? (db
@@ -834,13 +749,13 @@ router.get("/:deckId/cards/due", (req, res) => {
     deckId,
   );
 
-  const combinedWithPreviews = combined.map((c) => ({
-    ...c,
-    deckName: deck.name,
-    srs_previews: getCardPreviews(c, settings),
-  }));
-
-  res.json(combinedWithPreviews);
+  res.json(
+    combined.map((c) => ({
+      ...c,
+      deckName: deck.name,
+      srs_previews: getCardPreviews(c, settings),
+    })),
+  );
 });
 
 router.post("/:deckId/cards/check-duplicates", (req, res) => {
@@ -905,10 +820,10 @@ router.post("/:deckId/cards/check-duplicates", (req, res) => {
     let bestSimilarity = 0;
 
     for (const existing of existingTrigrams) {
-      const frontSim = jaccard(incomingFrontTri, existing.frontTri);
-      const combinedSim = jaccard(incomingCombinedTri, existing.combinedTri);
-      const maxSim = Math.max(frontSim, combinedSim);
-
+      const maxSim = Math.max(
+        jaccard(incomingFrontTri, existing.frontTri),
+        jaccard(incomingCombinedTri, existing.combinedTri),
+      );
       if (maxSim > bestSimilarity) {
         bestSimilarity = maxSim;
         bestMatch = existing.card;
@@ -977,7 +892,7 @@ router.post(
       return;
     }
 
-    const id = uuid();
+    const id = randomUUID();
     const maxPos = db
       .prepare(
         "SELECT MAX(position) as max FROM flashcards WHERE ownerId = ? AND deck_id = ?",
@@ -1029,10 +944,7 @@ router.post(
       content: `${frontText}\n${backText}`,
     });
 
-    const card = db
-      .prepare("SELECT * FROM flashcards WHERE ownerId = ? AND id = ?")
-      .get(scope.ownerId, id);
-    res.status(201).json(card);
+    res.status(201).json(getOwnedCard(scope, id));
   }),
 );
 
@@ -1090,9 +1002,7 @@ router.put(
       deckId,
     );
 
-    const card = db
-      .prepare("SELECT * FROM flashcards WHERE ownerId = ? AND id = ?")
-      .get(scope.ownerId, cardId) as FlashcardRow;
+    const card = getOwnedCard(scope, cardId)!;
 
     await upsertRagChunk(db, scope, {
       kitId: deck.kit_id,
@@ -1197,8 +1107,10 @@ function handleReview(req: Request, res: Response): void {
       }
       implicitCreditCount = creditedIds.size;
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("[decks/review] Implicit credit propagation failed:", msg);
+      logger.error(
+        "[decks/review] Implicit credit propagation failed:",
+        getErrorMessage(err),
+      );
     }
   }
 
@@ -1252,14 +1164,14 @@ function handleReview(req: Request, res: Response): void {
         });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("[decks/review] Remediation planning failed:", msg);
+      logger.error(
+        "[decks/review] Remediation planning failed:",
+        getErrorMessage(err),
+      );
     }
   }
 
-  const result = db
-    .prepare("SELECT * FROM flashcards WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, card.id) as FlashcardRow;
+  const result = getOwnedCard(scope, card.id)!;
 
   res.json({
     ...result,

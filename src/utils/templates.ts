@@ -3,9 +3,9 @@
  * Each template defines nodes and edges that create a complete architecture.
  */
 
-export type AnchorSide = 'top' | 'bottom' | 'left' | 'right'
+type AnchorSide = 'top' | 'bottom' | 'left' | 'right'
 
-export interface TemplateNode {
+interface TemplateNode {
   id: string
   name: string
   icon: string
@@ -14,7 +14,7 @@ export interface TemplateNode {
   y: number
 }
 
-export interface TemplateEdge {
+interface TemplateEdge {
   id: string
   from: string
   fromAnchor: AnchorSide
@@ -22,7 +22,7 @@ export interface TemplateEdge {
   toAnchor: AnchorSide
 }
 
-export interface ArchitectureTemplate {
+interface ArchitectureTemplate {
   id: string
   name: string
   description: string
