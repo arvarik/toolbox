@@ -124,6 +124,23 @@ function logCall(
   );
 }
 
+/** Logs a structured call, and refuses output that the token limit cut off. */
+function finishStructuredCall(
+  feature: string,
+  modelId: string,
+  result: { usage?: { inputTokens?: number; outputTokens?: number }; finishReason?: string },
+  startedAt: number,
+  maxOutputTokens: number,
+): void {
+  logCall(feature, modelId, result.usage, result.finishReason, startedAt);
+  if (result.finishReason === "length") {
+    throw new Error(
+      `The model response was cut off at ${maxOutputTokens} output tokens. ` +
+        "Retry with a shorter input or a higher output limit.",
+    );
+  }
+}
+
 function isReasoningExhausted(result: {
   text: string;
   finishReason?: string;
@@ -246,7 +263,9 @@ function shouldDowngradeStructuredRung(err: unknown): boolean {
   return e.cause ? shouldDowngradeStructuredRung(e.cause) : false;
 }
 
-function buildJsonSchemaInstruction(
+/** Appends the JSON Schema instruction to `system` (or uses it alone). */
+function withJsonSchemaInstruction(
+  system: string | undefined,
   schema: z.ZodType | undefined,
   element: z.ZodType | undefined,
   wrapArrayAsElements: boolean,
@@ -262,10 +281,10 @@ function buildJsonSchemaInstruction(
   } catch {
     jsonSchemaText = element ? '{"type":"array"}' : '{"type":"object"}';
   }
-  return (
+  const instruction =
     "Respond ONLY with valid JSON matching this exact JSON Schema (no markdown prose, no commentary):\n" +
-    jsonSchemaText
-  );
+    jsonSchemaText;
+  return system ? `${system}\n\n${instruction}` : instruction;
 }
 
 function extractJsonPayload(raw: string): unknown {
@@ -328,13 +347,7 @@ async function runOpenAiCompatibleStructured<T>({
         maxOutputTokens,
         abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
       });
-      logCall(feature, desc.modelId, result.usage, result.finishReason, startedAt);
-      if (result.finishReason === "length") {
-        throw new Error(
-          `The model response was cut off at ${maxOutputTokens} output tokens. ` +
-            "Retry with a shorter input or a higher output limit.",
-        );
-      }
+      finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
       rememberStructuredMode(cacheKey, "json_schema");
       return result.output as T;
     } catch (err) {
@@ -350,29 +363,15 @@ async function runOpenAiCompatibleStructured<T>({
   if (rung === "json_object") {
     try {
       const model = buildLanguageModelFromDescriptor(desc, false);
-      const schemaInstruction = buildJsonSchemaInstruction(
-        schema,
-        element,
-        true,
-      );
-      const augmentedSystem = system
-        ? `${system}\n\n${schemaInstruction}`
-        : schemaInstruction;
       const result = await generateText({
         model,
-        system: augmentedSystem,
+        system: withJsonSchemaInstruction(system, schema, element, true),
         prompt,
         output,
         maxOutputTokens,
         abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
       });
-      logCall(feature, desc.modelId, result.usage, result.finishReason, startedAt);
-      if (result.finishReason === "length") {
-        throw new Error(
-          `The model response was cut off at ${maxOutputTokens} output tokens. ` +
-            "Retry with a shorter input or a higher output limit.",
-        );
-      }
+      finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
       rememberStructuredMode(cacheKey, "json_object");
       return result.output as T;
     } catch (err) {
@@ -387,10 +386,7 @@ async function runOpenAiCompatibleStructured<T>({
 
   // Rung 3: Plain prompt JSON (zero response_format on the wire, e.g. LM Studio)
   const model = buildLanguageModelFromDescriptor(desc, false);
-  const schemaInstruction = buildJsonSchemaInstruction(schema, element, false);
-  const augmentedSystem = system
-    ? `${system}\n\n${schemaInstruction}`
-    : schemaInstruction;
+  const augmentedSystem = withJsonSchemaInstruction(system, schema, element, false);
 
   let result = await generateText({
     model,
@@ -414,13 +410,7 @@ async function runOpenAiCompatibleStructured<T>({
     }
   }
 
-  logCall(feature, desc.modelId, result.usage, result.finishReason, startedAt);
-  if (result.finishReason === "length") {
-    throw new Error(
-      `The model response was cut off at ${maxOutputTokens} output tokens. ` +
-        "Retry with a shorter input or a higher output limit.",
-    );
-  }
+  finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
 
   const parsedJson = extractJsonPayload(result.text);
   if (element) {
@@ -508,13 +498,7 @@ export async function runStructured<T = unknown>({
     throw err;
   }
 
-  logCall(feature, desc.modelId, result.usage, result.finishReason, startedAt);
-  if (result.finishReason === "length") {
-    throw new Error(
-      `The model response was cut off at ${maxOutputTokens} output tokens. ` +
-        "Retry with a shorter input or a higher output limit.",
-    );
-  }
+  finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
   return result.output as T;
 }
 

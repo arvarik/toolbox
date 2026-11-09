@@ -1,7 +1,4 @@
-import {
-  embedMany,
-  cosineSimilarity as aiCosineSimilarity,
-} from "ai";
+import { embedMany } from "ai";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
@@ -85,12 +82,4 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     logger.error(`[embeddings] Embedding call failed: ${msg}`);
     return [];
   }
-}
-
-export function cosineSimilarity(
-  vecA: number[] | Float32Array | null | undefined,
-  vecB: number[] | Float32Array | null | undefined,
-): number {
-  if (!vecA?.length || !vecB?.length || vecA.length !== vecB.length) return 0;
-  return aiCosineSimilarity(Array.from(vecA), Array.from(vecB));
 }

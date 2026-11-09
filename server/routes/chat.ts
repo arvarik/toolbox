@@ -4,6 +4,7 @@ import { tool, type ModelMessage, type ToolSet } from "ai";
 import { z } from "zod";
 import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import db from "../db.ts";
+import { getErrorMessage } from "../platform/net/errors.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import { runWebResearch } from "../platform/research/webResearch.ts";
 import { resolveActiveKit, type ActiveKitContext } from "../kits/kitContext.ts";
@@ -36,8 +37,6 @@ interface IncomingChatSession {
   createdAt?: string;
 }
 
-const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 function fail(
   res: Response,
   tag: string,
@@ -45,7 +44,7 @@ function fail(
   fallback: string,
   expose = false,
 ): void {
-  const msg = errMsg(err);
+  const msg = getErrorMessage(err);
   logger.error(`[${tag}] Error:`, { error: msg });
   res.status(500).json({ message: expose ? msg || fallback : fallback });
 }
@@ -521,7 +520,7 @@ router.post("/stream", async (req, res) => {
       } else if (part.type === "tool-call") {
         sendSse({ tool: `Running ${part.toolName}...` });
       } else if (part.type === "error") {
-        sendSse({ error: errMsg(part.error) });
+        sendSse({ error: getErrorMessage(part.error) });
       } else if (part.type === "abort" && !abortController.signal.aborted) {
         // A timeout, not the client, ended the stream: report it instead of a truncated [DONE].
         throw new Error("The AI provider stopped responding before the answer finished. Try again.");
@@ -547,11 +546,11 @@ router.post("/stream", async (req, res) => {
         message,
         generatedText,
       }).catch((err: unknown) =>
-        logger.error("[chat/memory] Error:", { error: errMsg(err) }),
+        logger.error("[chat/memory] Error:", { error: getErrorMessage(err) }),
       );
     }
   } catch (err) {
-    const msg = errMsg(err);
+    const msg = getErrorMessage(err);
     logger.error("[chat/stream] Error:", { error: msg });
     if (!res.writableEnded) {
       sendSse({ error: msg });
@@ -804,7 +803,7 @@ Follow this strict falsification-first evaluation order:
         factualOrLogicalErrors: evaluation.factualOrLogicalErrors,
       });
     } catch (err) {
-      logger.error("[chat/evaluate-interceptor] Evaluation failed:", { error: errMsg(err) });
+      logger.error("[chat/evaluate-interceptor] Evaluation failed:", { error: getErrorMessage(err) });
       res.json({
         pass: false,
         feedback: "Error evaluating response format.",
