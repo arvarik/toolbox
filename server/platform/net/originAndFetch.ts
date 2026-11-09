@@ -143,7 +143,10 @@ function extractEmbeddedIPv4(lowerIPv6: string): string | null {
   return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
 }
 
-/** Cloud metadata, link-local, unspecified, and multicast targets. Refused even when private targets are allowed. */
+/**
+ * Cloud metadata, link-local, unspecified, and multicast targets, and the deprecated IPv6 forms
+ * that carry an IPv4 host. Refused even when private targets are allowed.
+ */
 export function isAlwaysBlockedAddress(address: string): boolean {
   if (net.isIPv4(address)) {
     const [a, b] = address.split(".").map(Number);
@@ -153,7 +156,8 @@ export function isAlwaysBlockedAddress(address: string): boolean {
   const embedded = extractEmbeddedIPv4(lower);
   if (embedded) return isAlwaysBlockedAddress(embedded);
   return (
-    lower === "::" ||
+    /^::(?!1$)/.test(lower) || // "::" and IPv4-compatible ::a.b.c.d, but not the loopback ::1
+    /^2002:|^2001:0?:/.test(lower) || // 6to4 (2002::/16) and Teredo (2001::/32)
     lower === "fd00:ec2::254" ||
     /^fe[89ab][0-9a-f]*:/.test(lower) ||
     lower.startsWith("ff")
