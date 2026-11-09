@@ -10,7 +10,7 @@ import {
   wrapUntrusted,
 } from "../platform/mcp/mcpPrimitives.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
-import { setupTwoTenants } from "./testHelpers.ts";
+import { setupTwoTenants, withEnv } from "./testHelpers.ts";
 
 interface JsonRpcEnvelope {
   jsonrpc: string;
@@ -152,21 +152,10 @@ describe("Stateless Toolbox MCP Server (/api/mcp)", () => {
       expect(res.body.error.code).toBe("ORIGIN_NOT_ALLOWED");
     }
 
-    const prevCors = process.env.CORS_ORIGIN;
-    process.env.CORS_ORIGIN = "https://trusted-mcp.example";
-    try {
-      const trustedCors = await mcpRpc(
-        app,
-        aliceRwToken,
-        "tools/list",
-        {},
-        { Origin: "https://trusted-mcp.example" },
-      );
-      expect(trustedCors.status).toBe(200);
-    } finally {
-      if (prevCors === undefined) delete process.env.CORS_ORIGIN;
-      else process.env.CORS_ORIGIN = prevCors;
-    }
+    const trustedCors = await withEnv({ CORS_ORIGIN: "https://trusted-mcp.example" }, () =>
+      mcpRpc(app, aliceRwToken, "tools/list", {}, { Origin: "https://trusted-mcp.example" }),
+    );
+    expect(trustedCors.status).toBe(200);
 
     // 5. Bounded input guard (MAX_TOOL_INPUT_ELEMENTS = 5_000)
     expect(() =>

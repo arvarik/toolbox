@@ -53,6 +53,7 @@ import {
   kindTokFor,
 } from "../search/hybridSearch.ts";
 import { deterministicHashEmbed } from "../platform/workers/cpuHost.ts";
+import { withEnv } from "./testHelpers.ts";
 
 function buildScaleSkeleton(idx: number): KitSkeletonV1 {
   const slug = `perf-kit-${idx}`;
@@ -211,17 +212,6 @@ function rawHttpGet(
     req.on("error", reject);
     req.end();
   });
-}
-
-async function withEnv<T>(name: string, value: string, fn: () => Promise<T>): Promise<T> {
-  const previous = process.env[name];
-  process.env[name] = value;
-  try {
-    return await fn();
-  } finally {
-    if (previous === undefined) delete process.env[name];
-    else process.env[name] = previous;
-  }
 }
 
 /** One SHA-256 per ordinary table (FTS5 and vec0 shadow tables included), order-independent. */
@@ -892,7 +882,7 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
 
       expect(await runScheduledBackup()).toBeNull();
       const stale = Date.now() + 48 * 3_600_000;
-      expect(await withEnv("BACKUP_INTERVAL_HOURS", "0", () => runScheduledBackup(stale))).toBeNull();
+      expect(await withEnv({ BACKUP_INTERVAL_HOURS: "0" }, () => runScheduledBackup(stale))).toBeNull();
 
       stop();
       expect(vi.getTimerCount()).toBe(0);
@@ -900,7 +890,7 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       vi.useRealTimers();
     }
 
-    const quiet = await withEnv("BACKUP_KEEP", "1", () => runBackup());
+    const quiet = await withEnv({ BACKUP_KEEP: "1" }, () => runBackup());
     expect(listBackups().map((b) => b.filename)).toEqual([quiet.filename]);
     const restoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolbox-restore-"));
     const restoredPath = path.join(restoreDir, "toolbox.db");

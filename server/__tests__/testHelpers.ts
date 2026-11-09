@@ -58,6 +58,23 @@ export async function setupTwoTenants(
   };
 }
 
+/** Runs `fn` with the given environment variables set, then restores their previous values. */
+export async function withEnv<T>(vars: Record<string, string>, fn: () => Promise<T> | T): Promise<T> {
+  const prev = new Map<string, string | undefined>();
+  for (const [k, v] of Object.entries(vars)) {
+    prev.set(k, process.env[k]);
+    process.env[k] = v;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of prev.entries()) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
 /** Builds a ZIP by hand, so a test can write header values that createZipArchive refuses to write. */
 export function craftRawZip(opts: {
   entries: Array<{

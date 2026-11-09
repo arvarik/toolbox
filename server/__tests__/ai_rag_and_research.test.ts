@@ -5,7 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { Express } from "express";
 import type { Scope } from "../platform/tenancy/scope.ts";
-import { setupTwoTenants } from "./testHelpers.ts";
+import { setupTwoTenants, withEnv } from "./testHelpers.ts";
 
 const { default: db } = await import("../db.ts");
 const { createApp, __resetAppRateLimits } = await import("../app.ts");
@@ -51,22 +51,6 @@ function listenLocal(
       });
     });
   });
-}
-
-async function withEnv<T>(vars: Record<string, string>, fn: () => Promise<T> | T): Promise<T> {
-  const prev = new Map<string, string | undefined>();
-  for (const [k, v] of Object.entries(vars)) {
-    prev.set(k, process.env[k]);
-    process.env[k] = v;
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [k, v] of prev.entries()) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  }
 }
 
 function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
