@@ -186,7 +186,7 @@ export function getActiveKitHeaders(): Record<string, string> {
 /**
  * Generic fetch wrapper with active Kit header propagation and structured errors.
  */
-async function request<T = unknown>(
+export async function request<T = unknown>(
   path: string,
   options: RequestOptions = {},
 ): Promise<T> {
