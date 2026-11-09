@@ -1,5 +1,5 @@
 import { Menu, BookOpen } from 'lucide-react'
-import { useLocation } from 'react-router-dom'
+import { useLocation } from 'react-router'
 import ModelPicker from '../shared/ModelPicker'
 import { extractKitSlugFromPathname } from '../../stores/useKitStore'
 

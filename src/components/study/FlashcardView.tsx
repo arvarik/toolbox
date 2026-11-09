@@ -17,7 +17,7 @@ import {
   MessageSquare,
   Layers,
 } from 'lucide-react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router'
 import { flashcardsApi, chatApi } from '../../utils/api'
 import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 import StudySessionSummary, { type StudySessionStats } from './StudySessionSummary'

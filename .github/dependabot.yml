@@ -39,7 +39,7 @@ updates:
       actions:
         patterns: ["*"]
 
-  # Keep the Dockerfile base image up to date weekly.
+  # Keep the Dockerfile base image up to date weekly within the pinned LTS major.
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -47,3 +47,6 @@ updates:
       day: monday
     cooldown:
       default-days: 7
+    ignore:
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import { Search, X, ArrowRight } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { searchApi } from '../../utils/api'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 

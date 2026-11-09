@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import CalculatorPage from '../pages/CalculatorPage'
 import CalculatorModal from '../components/calculator/CalculatorModal'
 import useCalcStore from '../stores/useCalcStore'

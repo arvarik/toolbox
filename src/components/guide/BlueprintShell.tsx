@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, type CSSProperties } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router'
 import {
   Cpu, Scale, TrendingUp, Shield, Box,
   Radio, Target, Link, SlidersHorizontal,

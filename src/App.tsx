@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route } from 'react-router'
 import Layout from './components/layout/Layout'
 import AhaMoment from './components/shared/AhaMoment'
 import TaskWorkingBar from './components/shared/TaskWorkingBar'

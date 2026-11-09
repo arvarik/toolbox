@@ -1,5 +1,5 @@
 # ---- Build Stage ----
-FROM node:24-trixie-slim AS builder
+FROM node:26-trixie-slim AS builder
 
 WORKDIR /app
 
@@ -13,33 +13,58 @@ COPY . .
 RUN npm run build
 
 # ---- Production Stage ----
-FROM node:24-trixie-slim
+FROM node:26-trixie-slim
 
 WORKDIR /app
 
-# Install production dependencies only (glibc required by sqlite-vec & onnxruntime-node)
+# Install server runtime dependencies only and prune unused multi-OS/browser payloads
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts \
-    && test -f "node_modules/better-sqlite3/prebuilds/linux-$(node -p process.arch).node" \
-    && rm -rf /root/.npm
+    && ort=node_modules/onnxruntime-node/bin/napi-v6 \
+    && keep="linux/$(node -p process.arch)" \
+    && test -f "$ort/$keep/onnxruntime_binding.node" \
+    && find "$ort" -mindepth 2 -maxdepth 2 -type d ! -path "$ort/$keep" -exec rm -rf {} + \
+    && find "$ort" -mindepth 1 -maxdepth 1 -type d -empty -delete \
+    && bsq=node_modules/better-sqlite3/prebuilds \
+    && bsq_keep="linux-$(node -p process.arch).node" \
+    && test -f "$bsq/$bsq_keep" \
+    && find "$bsq" -maxdepth 1 -type f ! -name "$bsq_keep" -delete \
+    && rm -rf /root/.npm package-lock.json \
+         node_modules/onnxruntime-web \
+         node_modules/better-sqlite3/deps \
+         node_modules/better-sqlite3/src \
+         node_modules/zod/src \
+         node_modules/@huggingface/transformers/src \
+         node_modules/@huggingface/transformers/types \
+         node_modules/cheerio/node_modules/undici \
+         node_modules/parse5* \
+    && find node_modules/@huggingface/transformers/dist -type f ! -name 'transformers.node.mjs' -delete \
+    && find node_modules -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' -o -name '*.md' \) -delete
 
-# Copy server, shared, and operator scripts (Node 24 runs .ts natively)
+# Copy server, shared, and operator CLI scripts (Node 26 runs .ts natively)
 COPY server/ ./server/
 COPY shared/ ./shared/
-COPY scripts/ ./scripts/
+COPY scripts/reset-password.ts scripts/fetch-models.ts ./scripts/
 
 # Copy built frontend
 COPY --from=builder /app/dist ./dist
 
-# Create private data directory owned by non-root `node` user
-RUN mkdir -p /app/data && chmod 700 /app/data && chown -R node:node /app/data
-
 # Environment
-ENV NODE_ENV=production
-ENV HOST=0.0.0.0
-ENV PORT=3100
-ENV DATA_DIR=/app/data
-ENV DB_PATH=/app/data/toolbox.db
+ENV NODE_ENV=production \
+    NODE_COMPILE_CACHE=/app/.compile-cache \
+    HOST=0.0.0.0 \
+    PORT=3100 \
+    DATA_DIR=/app/data \
+    DB_PATH=/app/data/toolbox.db
+
+# Verify the trimmed production module graph loads cleanly and warm NODE_COMPILE_CACHE
+RUN mkdir -p /tmp/smoke-data /app/.compile-cache \
+    && DATA_DIR=/tmp/smoke-data DB_PATH=/tmp/smoke-data/toolbox.db DISABLE_BACKGROUND_JOBS=true \
+       node --input-type=module -e 'await import("./server/app.ts"); await import("unpdf"); await import("@huggingface/transformers"); process.exit(0)' \
+    && rm -rf /tmp/smoke-data \
+    && mkdir -p /app/data && chmod 700 /app/data \
+    && chown -R node:node /app/data /app/.compile-cache \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Drop root privileges for runtime process
 USER node

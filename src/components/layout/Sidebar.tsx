@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { NavLink, useLocation, useNavigate } from 'react-router'
 import {
   MessageSquare,
   BookOpen,

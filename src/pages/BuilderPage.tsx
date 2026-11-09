@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router'
 import { MessageSquare, Save, Layout, Download, Calculator, ShieldCheck } from 'lucide-react'
 import Toolbox from '../components/builder/Toolbox'
 import Canvas from '../components/builder/Canvas'

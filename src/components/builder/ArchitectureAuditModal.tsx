@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import {
   ShieldCheck, AlertOctagon, AlertTriangle, Info, CheckCircle2,
   MessageSquare, Sparkles, RefreshCw,

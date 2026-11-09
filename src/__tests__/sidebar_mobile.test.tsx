@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AuthGate } from '../components/auth/AuthGate'
 import Layout from '../components/layout/Layout'
@@ -161,7 +161,7 @@ describe('Sidebar Navigation & Mobile Shell', () => {
     )
 
     expect(document.querySelector('#app-sidebar')?.className).toContain('hidden-mobile')
-    const chatPanel = screen.getByTestId('chat-panel-container')
+    const chatPanel = await screen.findByTestId('chat-panel-container')
     expect(chatPanel.className).toContain('mobile-fullscreen')
 
     fireEvent.click(screen.getByRole('button', { name: 'Close chat' }))

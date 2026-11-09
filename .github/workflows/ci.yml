@@ -47,7 +47,7 @@ jobs:
         run: npm run audit:contrast
 
       - name: Dependency Security Audit
-        run: npm audit --omit=dev
+        run: npm audit
 
       - name: Unit & Integration Tests with Coverage
         run: npm run test:coverage
