@@ -82,7 +82,7 @@ interface LatencyNumberEntry {
   tier: 'cpu' | 'memory' | 'network' | 'disk'
 }
 
-interface BoteScenario {
+export interface BoteScenario {
   id: string
   name: string
   emoji: string

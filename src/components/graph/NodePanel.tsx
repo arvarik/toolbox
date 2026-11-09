@@ -7,29 +7,12 @@ import {
 import { graphApi } from '../../utils/api'
 import { HEALTH_COLORS, HEALTH_LABELS, type HealthBucket } from './graphLayout'
 import type { GraphNodeItem } from './GraphCanvas'
+import type { FlashcardItem } from '../study/FlashcardView'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 
 const STATE_LABELS: Record<number, string> = { 0: 'New', 1: 'Learning', 2: 'Review', 3: 'Relearning' }
 
-export interface StudySessionCard {
-  id: string
-  front: string
-  back: string
-  deck_id?: string
-  deckName?: string
-  state?: number
-  ease_factor?: number
-  interval?: number
-  repetitions?: number
-  learning_step?: number
-  next_review?: string | null
-  due?: boolean
-  remediation?: boolean
-  source_pillar_id?: string
-  source_topic_id?: string
-  source_section_id?: string
-  prerequisite_id?: string | null
-}
+export type StudySessionCard = FlashcardItem & { due?: boolean; remediation?: boolean }
 
 interface NodeDetailResponse {
   node: GraphNodeItem

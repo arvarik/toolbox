@@ -10,11 +10,12 @@ import {
   formatBytesPerSec,
   formatBitrate,
   CACHE_NODE_RAM_GB,
+  type BoteEstimates,
   type BoteInputDef,
   type BoteInputKey,
 } from '../../utils/bote'
-import LatencyReference, { type LatencyBudgetItem } from './LatencyReference'
-import AuditPanel, { type BoteEstimates, type BoteScenario } from './AuditPanel'
+import LatencyReference from './LatencyReference'
+import AuditPanel from './AuditPanel'
 import ExportMenu from './ExportMenu'
 
 const SLIDER_STEPS = 200
@@ -138,19 +139,14 @@ export default function CalculatorSandbox({ compact = false }: CalculatorSandbox
   const setInput = useCalcStore((s) => s.setInput)
   const applyScenario = useCalcStore((s) => s.applyScenario)
   const reset = useCalcStore((s) => s.reset)
-  const latencyBudget = useCalcStore((s) => s.latencyBudget as LatencyBudgetItem[])
+  const latencyBudget = useCalcStore((s) => s.latencyBudget)
 
   const [advancedOpen, setAdvancedOpen] = useState(false)
 
-  const scenarios = SCENARIOS as ReadonlyArray<BoteScenario>
   const inputDefs = BOTE_INPUT_DEFS as ReadonlyArray<BoteInputDef>
 
   const est = useMemo<BoteEstimates>(() => computeEstimates(inputs) as BoteEstimates, [inputs])
-  const scenario = scenarios.find((s) => s.id === scenarioId) || scenarios[0] || {
-    id: 'custom',
-    name: 'Custom',
-    description: '',
-  }
+  const scenario = SCENARIOS.find((s) => s.id === scenarioId) || SCENARIOS[0]
 
   const grouped = useMemo(() => ({
     traffic: inputDefs.filter((d) => d.group === 'traffic'),
@@ -165,7 +161,7 @@ export default function CalculatorSandbox({ compact = false }: CalculatorSandbox
       {/* Scenario presets + actions */}
       <div className="calc-toolbar">
         <div className="calc-scenarios" role="group" aria-label="Scenario presets">
-          {scenarios.map((sc) => (
+          {SCENARIOS.map((sc) => (
             <button
               key={sc.id}
               className={`calc-scenario-chip${sc.id === scenarioId ? ' active' : ''}`}

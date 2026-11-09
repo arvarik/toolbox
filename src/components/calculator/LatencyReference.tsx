@@ -9,20 +9,6 @@ import {
   sumLatencyBudget,
 } from '../../utils/bote'
 
-export interface LatencyBudgetItem {
-  id: string
-  count: number
-}
-
-type LatencyTier = 'cpu' | 'memory' | 'disk' | 'network'
-
-interface LatencyReferenceRow {
-  id: string
-  label: string
-  ns: number
-  tier: LatencyTier | string
-}
-
 const TIER_COLORS: Record<string, string> = {
   cpu: 'var(--color-accent)',
   memory: 'var(--color-teal)',
@@ -30,12 +16,8 @@ const TIER_COLORS: Record<string, string> = {
   network: 'var(--color-info)',
 }
 
-/** Reference SLOs the budget total is compared against. */
-const BUDGET_MARKS = [
-  { label: 'Instant (100 ms)', ns: 100e6 },
-  { label: 'Typical API SLO (200 ms)', ns: 200e6 },
-  { label: 'Patience limit (1 s)', ns: 1e9 },
-] as const
+/** Reference SLO the budget total is compared against. */
+const sloMark = { label: 'Typical API SLO (200 ms)', ns: 200e6 }
 
 /**
  * The interactive latency cheat sheet. Clicking a row adds that constant
@@ -44,14 +26,12 @@ const BUDGET_MARKS = [
  */
 export default function LatencyReference() {
   const [tab, setTab] = useState<'latency' | 'powers'>('latency')
-  const latencyBudget = useCalcStore((s) => s.latencyBudget as LatencyBudgetItem[])
+  const latencyBudget = useCalcStore((s) => s.latencyBudget)
   const addLatencyItem = useCalcStore((s) => s.addLatencyItem)
   const setLatencyCount = useCalcStore((s) => s.setLatencyCount)
   const clearLatencyBudget = useCalcStore((s) => s.clearLatencyBudget)
 
-  const latencyRows = LATENCY_NUMBERS as ReadonlyArray<LatencyReferenceRow>
   const totalNs = sumLatencyBudget(latencyBudget)
-  const sloMark = BUDGET_MARKS[1]
   const budgetShare = Math.min(1, totalNs / sloMark.ns)
 
   return (
@@ -81,7 +61,7 @@ export default function LatencyReference() {
             <div className="latency-table-hint">
               Click a row to add it to the latency budget →
             </div>
-            {latencyRows.map((row) => {
+            {LATENCY_NUMBERS.map((row) => {
               const tierColor = TIER_COLORS[row.tier] || 'var(--color-accent)'
               return (
                 <button
@@ -159,7 +139,7 @@ export default function LatencyReference() {
           ) : (
             <>
               {latencyBudget.map((item) => {
-                const ref = latencyRows.find((l) => l.id === item.id)
+                const ref = LATENCY_NUMBERS.find((l) => l.id === item.id)
                 if (!ref) return null
                 return (
                   <div key={item.id} className="latency-budget-item">

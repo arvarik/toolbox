@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from 'react'
-import { X, Layers, Settings, Sun, Moon, Globe, FolderKanban, Flame } from 'lucide-react'
+import { X, Layers, Settings, Sun, Moon } from 'lucide-react'
 import { NavLink } from 'react-router'
 import PomodoroWidget from './PomodoroWidget'
-import { buildStudyNavItems } from './Sidebar'
+import { buildStudyNavItems, workspaceItems } from './Sidebar'
 import useAppStore from '../../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 
@@ -55,42 +55,7 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
         </div>
 
         <nav className="mobile-drawer-nav" role="navigation" aria-label="mobile">
-          <NavLink
-            to="/"
-            end
-            onClick={onClose}
-            className={({ isActive }) =>
-              `mobile-drawer-link${isActive ? ' active' : ''}`
-            }
-            id="drawer-nav-library"
-          >
-            <FolderKanban size={18} />
-            <span>Library</span>
-          </NavLink>
-          <NavLink
-            to="/review"
-            onClick={onClose}
-            className={({ isActive }) =>
-              `mobile-drawer-link${isActive ? ' active' : ''}`
-            }
-            id="drawer-nav-review"
-          >
-            <Flame size={18} />
-            <span>Daily Review</span>
-          </NavLink>
-          <NavLink
-            to="/shared"
-            onClick={onClose}
-            className={({ isActive }) =>
-              `mobile-drawer-link${isActive ? ' active' : ''}`
-            }
-            id="drawer-nav-shared"
-          >
-            <Globe size={18} />
-            <span>Shared Kits</span>
-          </NavLink>
-
-          {studyItems.map((item) => {
+          {[...workspaceItems, ...studyItems].map((item) => {
             const Icon = item.icon
             return (
               <NavLink

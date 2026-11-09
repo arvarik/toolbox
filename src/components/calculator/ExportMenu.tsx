@@ -3,17 +3,21 @@ import { useNavigate } from 'react-router'
 import { Share2, Copy, MessageSquare, BookOpen, Check, Loader2, Layers } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
-import { buildMarkdownSummary, formatCount } from '../../utils/bote'
+import {
+  buildMarkdownSummary,
+  formatCount,
+  type BoteEstimates,
+  type BoteScenario,
+  type LatencyBudgetItem,
+} from '../../utils/bote'
 import { guideContentApi } from '../../utils/api'
 import {
   readStoreNodes,
   writeStoreGraph,
   type BuilderFlowNode,
 } from '../builder/boardModel'
-import type { BoteEstimates, BoteScenario } from './AuditPanel'
-import type { LatencyBudgetItem } from './LatencyReference'
 
-/** sessionStorage key LearningChat polls for a prefilled draft. */
+/** sessionStorage key LearningChat reads for a prefilled draft. */
 export const CHAT_DRAFT_KEY = 'toolbox_chat_draft'
 
 export interface ExportMenuProps {

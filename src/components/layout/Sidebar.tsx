@@ -44,8 +44,8 @@ export interface StudyNavItem {
   exact?: boolean
 }
 
-const workspaceItems: readonly StudyNavItem[] = [
-  { to: '/', icon: FolderKanban, label: 'Library', navId: 'nav-library' },
+export const workspaceItems: readonly StudyNavItem[] = [
+  { to: '/', icon: FolderKanban, label: 'Library', navId: 'nav-library', exact: true },
   { to: '/review', icon: Flame, label: 'Daily Review', navId: 'nav-review' },
   { to: '/shared', icon: Globe, label: 'Shared Kits', navId: 'nav-shared' },
 ]
