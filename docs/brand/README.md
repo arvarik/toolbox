@@ -33,11 +33,10 @@ what it learns, which is how Toolbox teaches.
   used a turtle to teach children math and programming. In _Mindstorms_ (1980)
   he called it an "object-to-think-with."
 
-The drawing has seven parts, each one round-capped stroke, and an eye:
+The drawing has six parts, each one round-capped stroke, and an eye:
 
 - **The dome** and **the body.** The body is one line from the neck, around
   the head, under the shell, and out to the tail.
-- **The grip**, the toolbox handle on top of the shell.
 - **The plates.** The center plate is a hexagon, the shape of a hex nut.
 - **The seams** from the plates to the rim, and **the two legs**, mid-stride.
 - **The eye** is amber, close to the orange eye of a male eastern box turtle.
@@ -64,10 +63,10 @@ person sees.
 
 | Master   | Seen at              | Parts                       | Stroke | Eye  |
 | -------- | -------------------- | --------------------------- | ------ | ---- |
-| `tiny`   | 16 px on a 1x screen | dome, body, grip            | 8.5    | none |
-| `small`  | 17 to 47 px          | adds the legs and the eye   | 5.2    | 2.8  |
-| `medium` | 48 to 95 px          | all seven                   | 4.4    | 2.6  |
-| `large`  | 96 px and up         | all seven                   | 3.6    | 2.8  |
+| `tiny`   | 16 px on a 1x screen | dome, body, legs            | 8.5    | none |
+| `small`  | 17 to 47 px          | adds the eye                | 5.2    | 2.8  |
+| `medium` | 48 to 95 px          | all six                     | 4.4    | 2.6  |
+| `large`  | 96 px and up         | all six                     | 3.6    | 2.8  |
 
 Strokes and eyes are in the mark's 100-unit box. The size a person sees picks
 the master, not the file's pixels: a 512 px launcher icon shows at about

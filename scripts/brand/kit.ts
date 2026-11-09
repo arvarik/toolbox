@@ -5,7 +5,6 @@
 export const PARTS = {
   dome: "M 12 60 C 11 40 23 25 40 25 C 57 25 70 37 72 58",
   body: "M 70.8 50 C 73.5 46.5 75.5 42 78.5 39 C 81.5 35.8 87.5 35 90.8 38 C 94 41 94.5 45.5 92.5 48.5 C 90.5 51.5 86.5 53.2 82.5 53.2 C 79 53.2 76 56.5 73.5 58.5 C 62 65 22 66.5 8 57",
-  grip: "M 32 26.1 L 32 21.5 C 32 15 48 15 48 21.5 L 48 26",
   plates: "M 29.5 27.1 L 34 35 L 46 35 L 50.5 26.7 M 34 35 L 28 45 L 34 55 L 46 55 L 52 45 L 46 35",
   seams: "M 28 45 L 13.9 45 M 52 45 L 69.2 45 M 34 55 L 31.5 63.4 M 46 55 L 48.5 63.6",
   frontLeg: "M 57 63 C 57 68 58 72 60.5 75.5 C 62.5 78.3 67 78.6 70 77.6 C 72.5 76.8 72 74 70 72.5 C 67.5 70.6 66 67 65.5 62.5",
@@ -24,8 +23,8 @@ const ALL = Object.keys(PARTS) as Part[];
  * is Kit's size in its box: on the tile for the icons, alone for the logo.
  */
 export const MASTERS = {
-  tiny: { stroke: 8.5, eye: 0, scale: 1, parts: ["dome", "body", "grip"] as Part[] },
-  small: { stroke: 5.2, eye: 2.8, scale: 0.88, parts: ["dome", "body", "grip", "frontLeg", "backLeg"] as Part[] },
+  tiny: { stroke: 8.5, eye: 0, scale: 1, parts: ["dome", "body", "frontLeg", "backLeg"] as Part[] },
+  small: { stroke: 5.2, eye: 2.8, scale: 0.88, parts: ["dome", "body", "frontLeg", "backLeg"] as Part[] },
   medium: { stroke: 4.4, eye: 2.6, scale: 0.8, parts: ALL },
   large: { stroke: 3.6, eye: 2.8, scale: 0.9, parts: ALL },
 } as const;
