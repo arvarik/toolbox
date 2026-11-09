@@ -2,6 +2,7 @@ import { Router } from "express";
 import { randomUUID } from "node:crypto";
 import db from "../db.ts";
 import { sealCredential } from "../kits/kitsSchema.ts";
+import { validateEndpointBaseUrl } from "../platform/ai/aiSettingsService.ts";
 import { ForbiddenError } from "../platform/net/errors.ts";
 import { fetchEndpointModels } from "../providers/defs.ts";
 import {
@@ -32,18 +33,6 @@ function toClientEndpoint(row: CustomEndpointRow, isAdmin: boolean) {
   };
 }
 
-function normalizeBaseUrl(baseUrl: unknown): string | null {
-  if (typeof baseUrl !== "string" || !baseUrl.trim()) return null;
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
-    return trimmed;
-  } catch {
-    return null;
-  }
-}
-
 router.get("/", (req, res) => {
   const isAdmin = req.principal?.user.role === "admin";
   res.json(listCustomEndpoints().map((ep) => toClientEndpoint(ep, isAdmin)));
@@ -59,11 +48,13 @@ router.post("/test", async (req, res, next) => {
     apiKey?: string;
     endpointId?: string;
   };
-  const normalized = normalizeBaseUrl(baseUrl);
-  if (!normalized) {
-    res
-      .status(400)
-      .json({ ok: false, message: "A valid http(s) Base URL is required" });
+  let normalized: string;
+  try {
+    normalized = await validateEndpointBaseUrl(baseUrl, { allowPrivate: true });
+  } catch (err) {
+    const msg =
+      err instanceof Error ? err.message : "A valid http(s) Base URL is required";
+    res.status(400).json({ ok: false, message: msg });
     return;
   }
 
@@ -99,9 +90,11 @@ router.post("/", async (req, res, next) => {
     res.status(400).json({ message: "A name is required" });
     return;
   }
-  const normalized = normalizeBaseUrl(baseUrl);
-  if (!normalized) {
-    res.status(400).json({ message: "A valid http(s) Base URL is required" });
+  let normalized: string;
+  try {
+    normalized = await validateEndpointBaseUrl(baseUrl, { allowPrivate: true });
+  } catch (err) {
+    next(err);
     return;
   }
   const key =
@@ -161,10 +154,14 @@ router.put("/:id", async (req, res, next) => {
   };
   const nextName =
     typeof name === "string" && name.trim() ? name.trim() : existing.name;
-  const nextUrl =
-    baseUrl !== undefined ? normalizeBaseUrl(baseUrl) : existing.base_url;
-  if (!nextUrl) {
-    res.status(400).json({ message: "A valid http(s) Base URL is required" });
+  let nextUrl: string;
+  try {
+    nextUrl = await validateEndpointBaseUrl(
+      baseUrl !== undefined ? baseUrl : existing.base_url,
+      { allowPrivate: true },
+    );
+  } catch (err) {
+    next(err);
     return;
   }
   let nextKey = existing.api_key || "";
@@ -205,6 +202,12 @@ router.post("/:id/refresh-models", async (req, res, next) => {
   const endpoint = getCustomEndpoint(req.params.id);
   if (!endpoint) {
     res.status(404).json({ message: "Endpoint not found" });
+    return;
+  }
+  try {
+    await validateEndpointBaseUrl(endpoint.base_url, { allowPrivate: true });
+  } catch (err) {
+    next(err);
     return;
   }
   try {

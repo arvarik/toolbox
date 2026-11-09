@@ -20,6 +20,14 @@ const router = Router();
 
 router.get("/", (req, res) => {
   const isAdmin = req.principal?.user.role === "admin";
+  const keyStatus = getApiKeyStatus();
+  if (!isAdmin) {
+    res.json({
+      api_keys_configured: keyStatus,
+      api_key_configured: Object.values(keyStatus).some(Boolean),
+    });
+    return;
+  }
   const rows = db.prepare("SELECT key, value FROM config").all() as Array<{
     key: string;
     value: string;
@@ -29,26 +37,23 @@ router.get("/", (req, res) => {
   for (const row of rows) {
     if (apiKeyFields.includes(row.key)) {
       const opened = openCredential(row.value);
-      config[row.key] = isAdmin ? maskSecret(opened) : opened ? "••••" : "";
+      config[row.key] = maskSecret(opened);
     } else {
       config[row.key] = row.value;
     }
   }
-  const keyStatus = getApiKeyStatus();
   config.api_keys_configured = keyStatus;
   config.api_key_configured = Object.values(keyStatus).some(Boolean);
   res.json(config);
 });
 
 router.put("/", (req, res, next) => {
-  const isAdmin = req.principal?.user.role === "admin";
-  const apiKeyFields = getApiKeyFields();
-  const body = (req.body || {}) as Record<string, unknown>;
-
-  if (!isAdmin && Object.keys(body).some((k) => apiKeyFields.includes(k))) {
-    next(new ForbiddenError("Only administrators can modify instance API keys"));
+  if (req.principal?.user.role !== "admin") {
+    next(new ForbiddenError("Only administrators can modify instance configuration"));
     return;
   }
+  const apiKeyFields = getApiKeyFields();
+  const body = (req.body || {}) as Record<string, unknown>;
 
   const upsert = db.prepare(
     `INSERT INTO config (key, value, updated_at)

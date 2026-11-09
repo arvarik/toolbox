@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DATA_DIR, SECRET_KEY_ENV } from "../../appConfig.ts";
+import { makeDataPrivate } from "../fs/privateFiles.ts";
 import { AppError } from "../net/errors.ts";
 
 export class SecretUnavailableError extends AppError {
@@ -16,6 +17,7 @@ export class SecretUnavailableError extends AppError {
 export function validateSecretKey(
   key: string | undefined = process.env[SECRET_KEY_ENV],
 ): void {
+  makeDataPrivate(DATA_DIR);
   if (key === undefined || key === "") {
     return;
   }

@@ -1,6 +1,44 @@
+# Dependencies — installed inside the image for the target Linux platform
 node_modules
+
+# Version control & editor / agent metadata
 .git
+.github
+.vscode
+.idea
+.agent
+.claude
+
+# Secrets & environment files — must never enter image layers
 .env
+.env.*
+!.env.example
+secret.key
+*.key
+**/*.key
+
+# Databases, backups, uploads, model caches & runtime state
+data
+backups
+uploads
+models
+.cache
+**/*.db
+**/*.db-shm
+**/*.db-wal
+**/*.db-journal
+
+# Build & test outputs (rebuilt inside builder or unused at runtime)
+dist
+coverage
+test-results
+playwright-report
+tests
+
+# Documentation & container configs not needed inside build context
 docs
 *.md
+Dockerfile
+docker-compose.yml
+.dockerignore
 .DS_Store

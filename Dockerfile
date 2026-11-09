@@ -3,12 +3,10 @@ FROM node:24-trixie-slim AS builder
 
 WORKDIR /app
 
-# Install build dependencies for native modules if prebuilds miss
-RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
-
-# Install dependencies
+# --ignore-scripts skips synthesized node-gyp rebuild (better-sqlite3 13+, sqlite-vec,
+# and onnxruntime-node ship prebuilt Linux x64/arm64 binaries inside their tarballs)
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --ignore-scripts && rm -rf /root/.npm
 
 # Copy source and build frontend
 COPY . .
@@ -21,7 +19,9 @@ WORKDIR /app
 
 # Install production dependencies only (glibc required by sqlite-vec & onnxruntime-node)
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts \
+    && test -f "node_modules/better-sqlite3/prebuilds/linux-$(node -p process.arch).node" \
+    && rm -rf /root/.npm
 
 # Copy server, shared, and operator scripts (Node 24 runs .ts natively)
 COPY server/ ./server/
@@ -31,8 +31,8 @@ COPY scripts/ ./scripts/
 # Copy built frontend
 COPY --from=builder /app/dist ./dist
 
-# Create data directory for SQLite, backups, uploads, models, and secret.key
-RUN mkdir -p /app/data
+# Create private data directory owned by non-root `node` user
+RUN mkdir -p /app/data && chmod 700 /app/data && chown -R node:node /app/data
 
 # Environment
 ENV NODE_ENV=production
@@ -40,6 +40,9 @@ ENV HOST=0.0.0.0
 ENV PORT=3100
 ENV DATA_DIR=/app/data
 ENV DB_PATH=/app/data/toolbox.db
+
+# Drop root privileges for runtime process
+USER node
 
 EXPOSE 3100
 
