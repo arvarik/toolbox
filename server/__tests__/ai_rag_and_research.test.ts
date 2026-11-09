@@ -792,7 +792,6 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
     const billable: Array<["get" | "post", string]> = [
       ["post", "/api/chat"],
       ["post", "/api/chat/stream"],
-      ["get", "/api/chat/starters?pillarId=p&topicId=t"],
       ["post", "/api/chat/generate-flashcards"],
       ["post", "/api/chat/generate-reverse-cards"],
       ["post", "/api/chat/summarize"],
@@ -817,6 +816,7 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
       expect(res.body.error?.code).toBe("RATE_LIMITED");
     }
     await bobAgent.post("/api/chat/commit/save").send({}).expect((res) => expect(res.status).not.toBe(429));
+    await bobAgent.get("/api/chat/starters?pillarId=p&topicId=t").expect((res) => expect(res.status).not.toBe(429));
     await aliceAgent.post("/api/chat").send({}).expect(400);
     __resetAppRateLimits();
   });

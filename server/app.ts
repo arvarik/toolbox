@@ -63,8 +63,10 @@ const apiRateLimit = createRateLimiter({
   name: "API",
 });
 
+// GET /api/chat/starters stays unmetered: it serves a per-topic cache and calls
+// the AI only on a miss, so metering it would spend the chat budget on reads.
 const aiCostLimiters = createCostRateLimiters([
-  /^\/api\/chat(?:\/(?:stream|starters|generate-flashcards|generate-reverse-cards|summarize|evaluate-interceptor|concept-map|commit))?$/,
+  /^\/api\/chat(?:\/(?:stream|generate-flashcards|generate-reverse-cards|summarize|evaluate-interceptor|concept-map|commit))?$/,
   /^\/api\/feynman\/evaluate$/,
   /^\/api\/compiler\/(?:calibrate|compile|refine|commit)$/,
   /^\/api\/compiler\/kits\/[^/]+\/expand$/,
