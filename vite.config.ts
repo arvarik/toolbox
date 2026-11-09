@@ -10,6 +10,9 @@ const pkg = JSON.parse(
 process.env.VITE_APP_VERSION = pkg.version;
 
 export default defineConfig({
+  define: {
+    "import.meta.env.VITE_APP_VERSION": JSON.stringify(pkg.version),
+  },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

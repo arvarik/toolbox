@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, type ComponentType, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef, type ChangeEvent, type ComponentType, type ReactNode } from 'react'
 import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon, RefreshCw, Plus, Server } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { useKitStore } from '../stores/useKitStore'
+import * as apiModule from '../utils/api'
 import { configApi, systemApi, profileApi, guideContentApi, endpointsApi } from '../utils/api'
 import ModalRaw from '../components/shared/Modal'
 import ModelPickerRaw from '../components/shared/ModelPicker'
@@ -588,6 +589,8 @@ export default function SettingsPage() {
   const [providerDefs, setProviderDefs] = useState<ProviderDef[]>(DEFAULT_PROVIDER_DEFS)
   const [maskedKeys, setMaskedKeys] = useState<Record<string, string>>({})
   const [isRefreshingModels, setIsRefreshingModels] = useState(false)
+  const [isImporting, setIsImporting] = useState(false)
+  const importInputRef = useRef<HTMLInputElement | null>(null)
 
   const handleKeyStatusChange = useCallback(
     (providerId: string, status: KeyConnectionStatus) => {
@@ -722,6 +725,53 @@ export default function SettingsPage() {
         ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}kit=${encodeURIComponent(activeSlug)}`
         : baseUrl
     window.open(exportUrl, '_blank')
+  }
+
+  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+
+    const kitsClient = (apiModule as { kitsApi?: typeof apiModule.kitsApi }).kitsApi
+    if (!kitsClient) {
+      addToast({ type: 'error', message: 'Kit import API is unavailable' })
+      return
+    }
+
+    setIsImporting(true)
+    try {
+      const isZip = file.name.toLowerCase().endsWith('.zip')
+      let res: { kit?: unknown; mode?: string }
+      if (isZip) {
+        res = await kitsClient.importBackupZip(file, 'copy')
+      } else {
+        const text = await file.text()
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(text)
+        } catch {
+          throw new Error('Invalid JSON file. Choose a valid .toolbox-kit.json or .toolbox-backup.zip.')
+        }
+        res = await kitsClient.importKitJson(parsed, 'update')
+      }
+      await useKitStore.getState().fetchKits()
+      systemApi
+        .stats()
+        .then((stats) => setSystemStats(stats as SystemStatsSummary))
+        .catch(() => {})
+      const importedName = (res?.kit as { name?: string } | undefined)?.name || file.name
+      addToast({
+        type: 'success',
+        message: `Imported "${importedName}"${res?.mode ? ` (${res.mode})` : ''}`,
+      })
+    } catch (err) {
+      addToast({
+        type: 'error',
+        message: err instanceof Error && err.message ? err.message : 'Failed to import Kit or backup',
+      })
+    } finally {
+      setIsImporting(false)
+    }
   }
 
   const modelGroups = availableModels as ModelGroupEntry[]
@@ -945,29 +995,46 @@ export default function SettingsPage() {
         <div className="settings-section">
           <h2 className="settings-section-title">Data Management</h2>
           <p className="settings-section-desc">
-            Export or import your flashcard decks and whiteboard designs.
+            Export Guide notes as Markdown, import portable Kits or personal backups, or download an instance database snapshot.
           </p>
 
-          <div className="data-management-buttons" style={{ display: 'flex', gap: 'var(--space-3)' }}>
+          <input
+            ref={importInputRef}
+            type="file"
+            accept=".json,.zip"
+            aria-label="Import Kit or Backup file"
+            style={{ display: 'none' }}
+            onChange={(e) => void handleImportFile(e)}
+          />
+
+          <div className="data-management-buttons" style={{ display: 'flex', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
             <button className="btn btn-secondary" onClick={handleExportGuide}>
               <Download size={14} />
               Export Guide (.md)
             </button>
             <button
               className="btn btn-secondary"
-              id="export-data-btn"
-              onClick={() => window.open(systemApi.exportDbUrl(), '_blank')}
+              id="import-data-btn"
+              disabled={isImporting}
+              onClick={() => importInputRef.current?.click()}
             >
-              <Download size={14} />
-              Export All Data
-            </button>
-            <button className="btn btn-secondary" id="import-data-btn">
               <Upload size={14} />
-              Import Data
+              {isImporting ? 'Importing...' : 'Import Kit / Backup (.json, .zip)'}
             </button>
+            {canManageInstanceAi && (
+              <button
+                className="btn btn-secondary"
+                id="export-data-btn"
+                onClick={() => window.open(systemApi.exportDbUrl(), '_blank')}
+              >
+                <Download size={14} />
+                Export Instance DB (.db)
+              </button>
+            )}
           </div>
           <p className="settings-help" style={{ marginTop: 'var(--space-3)' }}>
-            Guide notes are exported as a unified Markdown document. All data is exported as JSON.
+            Guide notes export as a unified Markdown document. Kit skeletons (<code>.toolbox-kit.json</code>) and personal backups (<code>.toolbox-backup.zip</code>) import into your Study Library.
+            {canManageInstanceAi ? ' Instance administrators can also export the full SQLite database (.db).' : ''}
           </p>
         </div>
 
@@ -1008,7 +1075,7 @@ export default function SettingsPage() {
         <div className="settings-section">
           <h2 className="settings-section-title">About</h2>
           <p className="settings-section-desc">
-            Toolbox is an open-source system design interview preparation tool. Self-hosted for complete data privacy.
+            Toolbox is a self-hosted, multi-domain active learning and mastery platform.
           </p>
 
           <div className="flex-column" style={{ gap: 'var(--space-2)' }}>

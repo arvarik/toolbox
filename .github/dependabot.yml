@@ -1,0 +1,49 @@
+# Dependabot opens update pull requests each Monday. GitHub reads this file
+# from the default branch, so it takes effect when it reaches `main`.
+#
+# `cooldown` waits a week after a release before proposing it. A hijacked
+# package version is usually found and pulled within days, so the wait keeps
+# most of them out of this repository.
+#
+# A security update ignores the cooldown and the schedule. Those come from the
+# "Dependabot security updates" setting, not from this file.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    groups:
+      # One pull request for every minor and patch update of a dev tool, and
+      # one for the app's own dependencies. A major update gets its own.
+      dev-dependencies:
+        dependency-type: development
+        update-types: [minor, patch]
+      production-dependencies:
+        dependency-type: production
+        update-types: [minor, patch]
+
+  # Keep workflow actions up to date weekly.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Keep the Dockerfile base image up to date weekly.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
