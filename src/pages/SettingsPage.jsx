@@ -6,6 +6,8 @@ import Modal from '../components/shared/Modal'
 import ModelPicker from '../components/shared/ModelPicker'
 import { useAuth } from '../components/auth/AuthGate.tsx'
 import { AccountSecuritySection, InstanceAdminSection } from '../components/settings/AccountAndAdminSections.tsx'
+import { AiSettingsSection } from '../components/settings/AiSettingsSection.tsx'
+import { UserByokSection } from '../components/settings/UserByokSection.tsx'
 
 /**
  * Default fallback provider config (used before server metadata loads).
@@ -627,8 +629,12 @@ export default function SettingsPage() {
             <CustomEndpointsSection />
 
             <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+
+            <AiSettingsSection />
           </>
         )}
+
+        <UserByokSection />
 
         {/* AI Shadow Memory */}
         <div className="settings-section">
