@@ -1,7 +1,6 @@
 import { afterAll, afterEach, vi } from "vitest";
 import { cleanup } from "@testing-library/react";
 import "@testing-library/jest-dom";
-import React from "react";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,8 +21,6 @@ afterAll(() => {
     // Best-effort cleanup
   }
 });
-
-(globalThis as unknown as { React: typeof React }).React = React;
 
 afterEach(() => {
   if (typeof window !== "undefined") {
@@ -54,37 +51,6 @@ if (typeof window !== "undefined") {
   window.ResizeObserver = ResizeObserverMock as unknown as typeof ResizeObserver;
 
   Element.prototype.scrollIntoView = vi.fn();
-
-  class DOMMatrixReadOnlyMock {
-    m22: number;
-    constructor(transform?: string) {
-      const scale = transform?.match(/scale\(([\d.]+)\)/)?.[1];
-      this.m22 = scale !== undefined ? +scale : 1;
-    }
-  }
-  (globalThis as unknown as { DOMMatrixReadOnly: unknown }).DOMMatrixReadOnly =
-    DOMMatrixReadOnlyMock;
-
-  Object.defineProperties(globalThis.HTMLElement.prototype, {
-    offsetHeight: {
-      get(this: HTMLElement) {
-        return parseFloat(this.style.height) || 1;
-      },
-      configurable: true,
-    },
-    offsetWidth: {
-      get(this: HTMLElement) {
-        return parseFloat(this.style.width) || 1;
-      },
-      configurable: true,
-    },
-  });
-
-  (
-    globalThis.SVGElement.prototype as unknown as {
-      getBBox: () => { x: number; y: number; width: number; height: number };
-    }
-  ).getBBox = () => ({ x: 0, y: 0, width: 0, height: 0 });
 
   globalThis.fetch = vi.fn() as unknown as typeof fetch;
 

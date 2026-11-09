@@ -106,7 +106,6 @@ export async function expectNoCriticalA11yViolations(
   options?: {
     testInfo?: TestInfo;
     label?: string;
-    disableRules?: string[];
   },
 ): Promise<void> {
   await page.evaluate(() =>
@@ -117,13 +116,11 @@ export async function expectNoCriticalA11yViolations(
         .map((anim) => anim.finished.catch(() => {})),
     ),
   );
-  let builder = new AxeBuilder({
+  const results = await new AxeBuilder({
     page: page as unknown as AxePage,
-  }).withTags([...WCAG_TAGS]);
-  if (options?.disableRules?.length) {
-    builder = builder.disableRules(options.disableRules);
-  }
-  const results = await builder.analyze();
+  })
+    .withTags([...WCAG_TAGS])
+    .analyze();
   const criticalOrSerious = results.violations.filter(
     (v) => v.impact === "critical" || v.impact === "serious",
   );

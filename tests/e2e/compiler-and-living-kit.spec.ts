@@ -8,7 +8,6 @@
  *   Stage 4 (Commit + Background Pillar Seed Hydration) ->
  *   Ordered Mastery Path (`/k/:slug`) -> Living Kit Additive DAG Expansion.
  */
-import { test as base } from "@playwright/test";
 import { ToolboxInstance } from "./fixtures/instance.ts";
 import { buildEuclideanGeometryKit } from "./fixtures/kits.ts";
 import {
@@ -17,18 +16,15 @@ import {
   type MockAiServer,
 } from "./fixtures/mockAiServer.ts";
 import {
+  test as base,
   collectPageErrors,
   expect,
   expectNoCriticalA11yViolations,
   resetLibrary,
 } from "./fixtures/test.ts";
 
-interface CompilerWorkerFixtures {
-  compilerInstance: ToolboxInstance;
-  mockAi: MockAiServer;
-}
-
-const test = base.extend<{ serverLog: void }, CompilerWorkerFixtures>({
+// Seed hydration runs as a background job, so this worker's instance enables background jobs.
+const test = base.extend<object, { mockAi: MockAiServer }>({
   mockAi: [
     // eslint-disable-next-line no-empty-pattern
     async ({}, use) => {
@@ -38,7 +34,7 @@ const test = base.extend<{ serverLog: void }, CompilerWorkerFixtures>({
     },
     { scope: "worker" },
   ],
-  compilerInstance: [
+  instance: [
     async ({ mockAi }, use) => {
       const instance = await ToolboxInstance.start({
         authRequired: false,
@@ -50,32 +46,16 @@ const test = base.extend<{ serverLog: void }, CompilerWorkerFixtures>({
     },
     { scope: "worker" },
   ],
-  baseURL: async ({ compilerInstance }, use) => {
-    await use(compilerInstance.baseURL);
-  },
-  serverLog: [
-    async ({ compilerInstance }, use, testInfo) => {
-      const mark = compilerInstance.mark();
-      await use();
-      if (testInfo.status !== testInfo.expectedStatus) {
-        await testInfo.attach("server.log", {
-          body: compilerInstance.logSince(mark),
-          contentType: "text/plain",
-        });
-      }
-    },
-    { auto: true },
-  ],
 });
 
 test.describe("New Kit Studio Compiler & Living Kit Expansion", () => {
   test("compiles a grounded Study Kit through Stages 1-4, hydrates starter content, renders /k/:slug mastery path, and expands the Living Kit DAG", async ({
     page,
-    compilerInstance,
+    instance,
     mockAi,
   }, testInfo) => {
     const pageErrors = collectPageErrors(page);
-    await resetLibrary(compilerInstance);
+    await resetLibrary(instance);
     mockAi.reset();
 
     // ── Stage 1: Topic, Depth, & Staged Syllabus Source ────────────────
@@ -167,7 +147,7 @@ test.describe("New Kit Studio Compiler & Living Kit Expansion", () => {
     await expect
       .poll(
         async () => {
-          const status = await compilerInstance.api<{
+          const status = await instance.api<{
             status: string;
             cardCount: number;
             drillCount: number;
@@ -216,7 +196,7 @@ test.describe("New Kit Studio Compiler & Living Kit Expansion", () => {
     await expect
       .poll(
         async () => {
-          const status = await compilerInstance.api<{
+          const status = await instance.api<{
             status: string;
             cardCount: number;
           }>("GET", "/compiler/kits/distributed-consensus/seed-status");
@@ -243,9 +223,9 @@ test.describe("New Kit Studio Compiler & Living Kit Expansion", () => {
   test(
     "supports mobile /new Kit Studio compilation without horizontal overflow or WCAG 2.2 AA violations",
     { tag: "@mobile" },
-    async ({ page, compilerInstance }, testInfo) => {
+    async ({ page, instance }, testInfo) => {
       const pageErrors = collectPageErrors(page);
-      await resetLibrary(compilerInstance);
+      await resetLibrary(instance);
 
       await page.goto("/new");
       await expect(
@@ -282,12 +262,12 @@ test.describe("New Kit Studio Compiler & Living Kit Expansion", () => {
 
   test("streams a Kit-grounded AI tutor reply in /k/:slug/chat and restores the session from the server", async ({
     page,
-    compilerInstance,
+    instance,
     mockAi,
   }) => {
     const pageErrors = collectPageErrors(page);
-    await resetLibrary(compilerInstance);
-    await compilerInstance.api("POST", "/kits/import-kit", {
+    await resetLibrary(instance);
+    await instance.api("POST", "/kits/import-kit", {
       skeleton: buildEuclideanGeometryKit({ includeStarterContent: false }),
     });
     mockAi.reset();
@@ -306,7 +286,7 @@ test.describe("New Kit Studio Compiler & Living Kit Expansion", () => {
 
     const kitHeader = { "X-Toolbox-Kit": "euclidean-geometry" };
     await expect
-      .poll(async () => JSON.stringify(await compilerInstance.api("GET", "/chat/sessions", undefined, kitHeader)))
+      .poll(async () => JSON.stringify(await instance.api("GET", "/chat/sessions", undefined, kitHeader)))
       .toContain(reply);
     await page.evaluate(() => localStorage.clear());
     await page.reload();

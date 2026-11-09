@@ -83,16 +83,6 @@ describe("OSS Community Hygiene, Build Metadata & Operator Password Recovery CLI
     );
     expect(viteConfigText).toContain("import.meta.env.VITE_APP_VERSION");
     expect(import.meta.env.VITE_APP_VERSION).toBe(pkg.version);
-
-    const settingsText = fs.readFileSync(
-      path.join(REPO_ROOT, "src/pages/SettingsPage.tsx"),
-      "utf8",
-    );
-    expect(settingsText).toContain("importKitJson");
-    expect(settingsText).toContain("importBackupZip");
-    expect(settingsText).toContain(
-      "Toolbox is a self-hosted, multi-domain active learning and mastery platform.",
-    );
   });
 
   it("keeps docs, .env.example, and shipped artifacts in step with the code", () => {

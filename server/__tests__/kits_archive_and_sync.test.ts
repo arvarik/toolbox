@@ -4,7 +4,6 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import type { Express } from "express";
-import request from "supertest";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   verifyKitSkeleton,
@@ -20,91 +19,7 @@ import {
   extractZipArchive,
 } from "../platform/archive/zip.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
-import { makeKitSkeleton, setupTwoTenants } from "./testHelpers.ts";
-
-function craftRawZip(opts: {
-  entries: Array<{
-    name: string;
-    payload: Buffer;
-    method?: number;
-    flags?: number;
-    crc?: number;
-    compSizeOverride?: number;
-    uncompSizeOverride?: number;
-    externalAttrs?: number;
-    localOffsetOverride?: number;
-  }>;
-  eocdTotalOverride?: number;
-  eocdCdOffsetOverride?: number;
-}): Buffer {
-  const localParts: Buffer[] = [];
-  const cdParts: Buffer[] = [];
-  let offset = 0;
-
-  for (const e of opts.entries) {
-    const nameBuf = Buffer.from(e.name, "utf8");
-    const method = e.method ?? 0;
-    const flags = e.flags ?? 0x0800;
-    const crc = e.crc ?? zlib.crc32(e.payload) >>> 0;
-    const compSize = e.compSizeOverride ?? e.payload.byteLength;
-    const uncompSize = e.uncompSizeOverride ?? e.payload.byteLength;
-    const localOffset = e.localOffsetOverride ?? offset;
-
-    if (e.localOffsetOverride === undefined) {
-      const lfh = Buffer.alloc(30);
-      lfh.writeUInt32LE(0x04034b50, 0);
-      lfh.writeUInt16LE(20, 4);
-      lfh.writeUInt16LE(flags, 6);
-      lfh.writeUInt16LE(method, 8);
-      lfh.writeUInt16LE(0, 10);
-      lfh.writeUInt16LE(0x0021, 12);
-      lfh.writeUInt32LE(crc, 14);
-      lfh.writeUInt32LE(compSize, 18);
-      lfh.writeUInt32LE(uncompSize, 22);
-      lfh.writeUInt16LE(nameBuf.byteLength, 26);
-      lfh.writeUInt16LE(0, 28);
-      localParts.push(lfh, nameBuf, e.payload);
-      offset += 30 + nameBuf.byteLength + e.payload.byteLength;
-    }
-
-    const cdfh = Buffer.alloc(46);
-    cdfh.writeUInt32LE(0x02014b50, 0);
-    cdfh.writeUInt16LE(0x0314, 4);
-    cdfh.writeUInt16LE(20, 6);
-    cdfh.writeUInt16LE(flags, 8);
-    cdfh.writeUInt16LE(method, 10);
-    cdfh.writeUInt16LE(0, 12);
-    cdfh.writeUInt16LE(0x0021, 14);
-    cdfh.writeUInt32LE(crc, 16);
-    cdfh.writeUInt32LE(compSize, 20);
-    cdfh.writeUInt32LE(uncompSize, 24);
-    cdfh.writeUInt16LE(nameBuf.byteLength, 28);
-    cdfh.writeUInt32LE((e.externalAttrs ?? (0o100644 << 16)) >>> 0, 38);
-    cdfh.writeUInt32LE(localOffset, 42);
-    cdParts.push(cdfh, nameBuf);
-  }
-
-  const cdBuf = Buffer.concat(cdParts);
-  const totalCount = opts.eocdTotalOverride ?? opts.entries.length;
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(totalCount, 8);
-  eocd.writeUInt16LE(totalCount, 10);
-  eocd.writeUInt32LE(cdBuf.byteLength, 12);
-  eocd.writeUInt32LE(opts.eocdCdOffsetOverride ?? offset, 16);
-  return Buffer.concat([...localParts, cdBuf, eocd]);
-}
-
-function getBinary(agent: ReturnType<typeof request.agent>, url: string) {
-  return agent
-    .get(url)
-    .buffer(true)
-    .parse((res, cb) => {
-      const chunks: Buffer[] = [];
-      res.on("data", (c: Buffer) => chunks.push(c));
-      res.on("end", () => cb(null, Buffer.concat(chunks)));
-    });
-}
+import { craftRawZip, makeKitSkeleton, setupTwoTenants } from "./testHelpers.ts";
 
 function buildRustKitV1(): KitSkeletonV1 {
   return makeKitSkeleton((s) => {
@@ -597,14 +512,14 @@ describe("Personal Kits, Shared Library Fork/Sync, Mode 1 & Mode 2 Archive Round
       aliceSourceId,
     );
 
-    const aliceDlRes = await getBinary(aliceAgent, `/api/kits/${aliceKitId}/sources/${aliceSourceId}/file`).expect(200);
+    const aliceDlRes = await aliceAgent.get(`/api/kits/${aliceKitId}/sources/${aliceSourceId}/file`).responseType("blob").expect(200);
     expect(aliceDlRes.headers["x-content-type-options"]).toBe("nosniff");
     expect(aliceDlRes.headers["content-disposition"]).toMatch(/^attachment;/);
     expect((aliceDlRes.body as Buffer).equals(binaryPdfContent)).toBe(true);
 
     await bobAgent.get(`/api/kits/${aliceKitId}/sources/${aliceSourceId}/file`).expect(404);
 
-    const zipExportRes = await getBinary(aliceAgent, `/api/kits/${aliceKitId}/export?mode=backup`).expect(200);
+    const zipExportRes = await aliceAgent.get(`/api/kits/${aliceKitId}/export?mode=backup`).responseType("blob").expect(200);
     expect(zipExportRes.headers["content-type"]).toMatch(/application\/zip/);
     expect(zipExportRes.headers["x-content-type-options"]).toBe("nosniff");
     const zipBuffer = zipExportRes.body as Buffer;
@@ -679,7 +594,7 @@ describe("Personal Kits, Shared Library Fork/Sync, Mode 1 & Mode 2 Archive Round
     expect(bobRestoredChunk.id).not.toBe(aliceChunkId);
     expect(bobRestoredChunk.source_id).toBe(bobRestoredSource.id);
 
-    const bobDlRes = await getBinary(bobAgent, `/api/kits/${bobRestoredKitId}/sources/${bobRestoredSource.id}/file`).expect(200);
+    const bobDlRes = await bobAgent.get(`/api/kits/${bobRestoredKitId}/sources/${bobRestoredSource.id}/file`).responseType("blob").expect(200);
     expect(bobDlRes.headers["x-content-type-options"]).toBe("nosniff");
     expect((bobDlRes.body as Buffer).equals(binaryPdfContent)).toBe(true);
 

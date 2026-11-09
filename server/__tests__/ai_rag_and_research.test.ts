@@ -5,15 +5,13 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { Express } from "express";
 import type { Scope } from "../platform/tenancy/scope.ts";
-import { setupTwoTenants } from "./testHelpers.ts";
+import { setupTwoTenants, withEnv } from "./testHelpers.ts";
 
 const { default: db } = await import("../db.ts");
 const { createApp, __resetAppRateLimits } = await import("../app.ts");
 const { __resetAuthRateLimits } = await import("../platform/routes/authRoutes.ts");
-const { __resetHostGuard, isHostAllowed } = await import("../platform/net/hostGuard.ts");
-const { isPrivateAddress, readBodyCapped, readBytesCapped } = await import(
-  "../platform/net/originAndFetch.ts"
-);
+const { __resetHostGuard } = await import("../platform/net/hostGuard.ts");
+const { readBodyCapped, readBytesCapped } = await import("../platform/net/originAndFetch.ts");
 const { AppError } = await import("../platform/net/errors.ts");
 const {
   resolveModel,
@@ -53,22 +51,6 @@ function listenLocal(
       });
     });
   });
-}
-
-async function withEnv<T>(vars: Record<string, string>, fn: () => Promise<T> | T): Promise<T> {
-  const prev = new Map<string, string | undefined>();
-  for (const [k, v] of Object.entries(vars)) {
-    prev.set(k, process.env[k]);
-    process.env[k] = v;
-  }
-  try {
-    return await fn();
-  } finally {
-    for (const [k, v] of prev.entries()) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  }
 }
 
 function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
@@ -493,32 +475,8 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
     }
   });
 
-  it("5. enforces hostGuard DNS-rebinding protection, readBodyCapped/readBytesCapped limits, and SSRF protection on SearXNG result URLs", async () => {
-    expect(isHostAllowed("localhost:3100")).toBe(true);
-    expect(isHostAllowed("127.0.0.1:3100")).toBe(true);
-    expect(isHostAllowed("[::1]:3100")).toBe(true);
-    expect(isHostAllowed("attacker.example")).toBe(false);
-
-    const blockedHostRes = await aliceAgent
-      .get("/api/config")
-      .set("Host", "attacker.example")
-      .expect(403);
-    expect(blockedHostRes.body.error?.code).toBe("HOST_NOT_ALLOWED");
-    await aliceAgent.get("/api/config").set("Host", "127.0.0.1:3100").expect(200);
+  it("5. accepts a localhost Host header, caps response bodies, and blocks SSRF on SearXNG result URLs", async () => {
     await aliceAgent.get("/api/config").set("Host", "localhost:3100").expect(200);
-
-    for (const priv of [
-      "198.18.0.1",
-      "198.19.255.254",
-      "224.0.0.1",
-      "240.0.0.1",
-      "::ffff:127.0.0.1",
-      "64:ff9b::10.0.0.1",
-    ]) {
-      expect(isPrivateAddress(priv)).toBe(true);
-    }
-    expect(isPrivateAddress("198.20.0.1")).toBe(false);
-    expect(isPrivateAddress("93.184.216.34")).toBe(false);
 
     const oversizedChunkedResponse = new Response(
       new ReadableStream({

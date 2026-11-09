@@ -7,7 +7,7 @@
  * jobs disabled.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { cp, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -15,43 +15,6 @@ import { REPO_ROOT } from "./paths.ts";
 
 const BOOT_TIMEOUT_MS = 45_000;
 const STOP_TIMEOUT_MS = 5_000;
-
-/**
- * Workaround when the checkout lives inside a dot-prefixed directory (e.g.
- * `~/.gemini/...` worktrees or `~/.local/...`): `server/app.ts:107` calls
- * `res.sendFile(path.join(distPath, "index.html"))` without `{ root: distPath }`,
- * causing `send` to reject any absolute path containing a `.segment` with 404/500.
- */
-async function resolveServerRoot(dataDir: string): Promise<string> {
-  const hasDotSegment = REPO_ROOT.split(path.sep).some(
-    (seg) => seg.startsWith(".") && seg.length > 1,
-  );
-  if (!hasDotSegment) return REPO_ROOT;
-
-  const appRoot = path.join(dataDir, "runtime");
-  await mkdir(appRoot, { recursive: true });
-  await Promise.all([
-    cp(path.join(REPO_ROOT, "server"), path.join(appRoot, "server"), {
-      recursive: true,
-    }),
-    cp(path.join(REPO_ROOT, "shared"), path.join(appRoot, "shared"), {
-      recursive: true,
-    }),
-    cp(path.join(REPO_ROOT, "dist"), path.join(appRoot, "dist"), {
-      recursive: true,
-    }),
-    cp(
-      path.join(REPO_ROOT, "package.json"),
-      path.join(appRoot, "package.json"),
-    ),
-    symlink(
-      path.join(REPO_ROOT, "node_modules"),
-      path.join(appRoot, "node_modules"),
-      "dir",
-    ),
-  ]);
-  return appRoot;
-}
 
 export interface InstanceOptions {
   authRequired?: boolean;
@@ -79,20 +42,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export class ToolboxInstance {
   readonly baseURL: string;
   readonly dataDir: string;
-  readonly dbPath: string;
   #child: ChildProcess;
   #output: string[] = [];
   #exited: Promise<number | null>;
 
-  private constructor(
-    baseURL: string,
-    dataDir: string,
-    dbPath: string,
-    child: ChildProcess,
-  ) {
+  private constructor(baseURL: string, dataDir: string, child: ChildProcess) {
     this.baseURL = baseURL;
     this.dataDir = dataDir;
-    this.dbPath = dbPath;
     this.#child = child;
     child.stdout?.on("data", (chunk: Buffer) =>
       this.#output.push(chunk.toString()),
@@ -106,12 +62,10 @@ export class ToolboxInstance {
   static async start(options: InstanceOptions = {}): Promise<ToolboxInstance> {
     const port = await freePort();
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "toolbox-e2e-"));
-    const dbPath = path.join(dataDir, "toolbox.db");
     const baseURL = `http://127.0.0.1:${port}`;
-    const serverRoot = await resolveServerRoot(dataDir);
 
     const child = spawn(process.execPath, ["server/index.ts"], {
-      cwd: serverRoot,
+      cwd: REPO_ROOT,
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
@@ -119,7 +73,7 @@ export class ToolboxInstance {
         PORT: String(port),
         HOST: "127.0.0.1",
         DATA_DIR: dataDir,
-        DB_PATH: dbPath,
+        DB_PATH: path.join(dataDir, "toolbox.db"),
         AUTH_REQUIRED: options.authRequired ? "true" : "false",
         GEMINI_API_KEY: "",
         OPENAI_API_KEY: "",
@@ -134,7 +88,7 @@ export class ToolboxInstance {
       },
     });
 
-    const instance = new ToolboxInstance(baseURL, dataDir, dbPath, child);
+    const instance = new ToolboxInstance(baseURL, dataDir, child);
     try {
       await instance.#waitUntilHealthy();
     } catch (error) {

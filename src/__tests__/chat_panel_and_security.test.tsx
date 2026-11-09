@@ -9,7 +9,7 @@ import ChatPage from '../pages/ChatPage'
 import useAppStore from '../stores/appStore'
 import useCommitStore from '../stores/useCommitStore'
 import useKitStore from '../stores/useKitStore'
-import { ApiError, chatApi, getActiveKitHeaders } from '../utils/api'
+import { chatApi, getActiveKitHeaders } from '../utils/api'
 import { makeTestKit, resetKitStore, sseStreamResponse } from './testHelpers'
 
 describe('ChatPanel, LearningChat, SSE Streaming, XSS Safety & Multi-Kit Isolation', () => {
@@ -95,7 +95,6 @@ describe('ChatPanel, LearningChat, SSE Streaming, XSS Safety & Multi-Kit Isolati
       status: 401,
       code: 'UNAUTHENTICATED',
     })
-    expect(new ApiError('Forbidden', 403, 'FORBIDDEN')).toBeInstanceOf(Error)
     expect(unauthSpy).toHaveBeenCalledTimes(1)
     window.removeEventListener('toolbox:unauthorized', unauthSpy)
   })

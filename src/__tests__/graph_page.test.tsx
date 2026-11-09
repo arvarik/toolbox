@@ -78,7 +78,6 @@ function byId(id: string): HTMLElement {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
   mocks.graphGet.mockResolvedValue(graphFixture)
   mocks.graphGetNode.mockResolvedValue(nodeDetailFixture)
   resetKitStore()

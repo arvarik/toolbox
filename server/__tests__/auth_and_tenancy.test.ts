@@ -16,6 +16,7 @@ import {
   validateSecretKey,
 } from "../platform/crypto/secretBox.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
+import { setupTwoTenants } from "./testHelpers.ts";
 
 describe("secretBox AES-256-GCM Sealing & tenant-lint Static Gate", () => {
   it("round-trips UTF-8 secrets with distinct IVs, rejects tampering/wrong keys, and persists secret.key", () => {
@@ -97,7 +98,7 @@ describe("secretBox AES-256-GCM Sealing & tenant-lint Static Gate", () => {
   });
 });
 
-describe("Multi-tenant Auth, Tokens, Invitations, Backups & Tenant Isolation", () => {
+describe("Local owner upgrade & tenant isolation", () => {
   let app: Express;
 
   beforeAll(() => {
@@ -146,71 +147,11 @@ describe("Multi-tenant Auth, Tokens, Invitations, Backups & Tenant Isolation", (
       .send({ profileText: "Alice private interview goal" })
       .expect(200);
 
-    const aliceAgent = request.agent(app);
-    const setupRes = await aliceAgent
-      .post("/api/auth/setup")
-      .send({
-        email: "alice@example.com",
-        username: "alice",
-        displayName: "Alice Admin",
-        password: "correct-horse-battery-staple",
-      })
-      .expect(201);
-    expect(setupRes.body.user.username).toBe("alice");
-    expect(setupRes.body.user.role).toBe("admin");
-
+    const { aliceAgent, bobAgent } = await setupTwoTenants(app, "tenancy");
     await request(app).get("/api/decks").expect(401);
 
     const aliceDecksAfterSetup = await aliceAgent.get("/api/decks").expect(200);
     expect(aliceDecksAfterSetup.body.some((d: { id: string }) => d.id === aliceDeckId)).toBe(true);
-
-    // Personal API tokens (`tbk_...`): read-only enforcement + revocation
-    const roTokenRes = await aliceAgent
-      .post("/api/auth/tokens")
-      .send({ name: "ReadOnly MCP", readOnly: true })
-      .expect(201);
-    const roToken = roTokenRes.body.token as string;
-    expect(roToken.startsWith("tbk_")).toBe(true);
-
-    const roDecks = await request(app)
-      .get("/api/decks")
-      .set("Authorization", `Bearer ${roToken}`)
-      .expect(200);
-    expect(roDecks.body.length).toBeGreaterThanOrEqual(1);
-
-    const roWrite = await request(app)
-      .post("/api/decks")
-      .set("Authorization", `Bearer ${roToken}`)
-      .send({ name: "Blocked Deck" })
-      .expect(403);
-    expect(roWrite.body.error.code).toBe("TOKEN_READ_ONLY");
-
-    await aliceAgent.delete(`/api/auth/tokens/${roTokenRes.body.id}`).expect(200);
-    await request(app).get("/api/decks").set("Authorization", `Bearer ${roToken}`).expect(401);
-
-    // Invitation flow -> Member Bob
-    const inviteRes = await aliceAgent
-      .post("/api/admin/invitations")
-      .send({ email: "bob@example.com", role: "member" })
-      .expect(201);
-    const inviteToken = new URL(inviteRes.body.link as string).searchParams.get("token")!;
-
-    const bobAgent = request.agent(app);
-    const joinRes = await bobAgent
-      .post("/api/auth/accept-invitation")
-      .send({
-        token: inviteToken,
-        email: "bob@example.com",
-        username: "bob",
-        displayName: "Bob Learner",
-        password: "bob-secure-passphrase-123",
-      })
-      .expect(201);
-    expect(joinRes.body.user.role).toBe("member");
-
-    await bobAgent.get("/api/admin/users").expect(403);
-    await bobAgent.get("/api/system/export-db").expect(403);
-    await bobAgent.put("/api/config").send({ gemini_api_key: "unauthorized-override" }).expect(403);
 
     expect((await bobAgent.get("/api/decks").expect(200)).body).toEqual([]);
     await bobAgent.get(`/api/decks/${aliceDeckId}`).expect(404);
@@ -245,15 +186,5 @@ describe("Multi-tenant Auth, Tokens, Invitations, Backups & Tenant Isolation", (
 
     const bobSearch = await bobAgent.get("/api/search?q=quorum").expect(200);
     expect(bobSearch.body).toMatchObject({ flashcards: [], guideContent: [], boards: [], decks: [] });
-
-    const backupRes = await aliceAgent.post("/api/admin/backups").expect(201);
-    expect(backupRes.body.backup.filename).toMatch(/\.db$/);
-    expect(backupRes.body.backup.sizeBytes).toBeGreaterThan(0);
-
-    const auditRes = await aliceAgent.get("/api/admin/audit?limit=20").expect(200);
-    const serializedAudit = JSON.stringify(auditRes.body.entries);
-    expect(auditRes.body.entries.length).toBeGreaterThan(0);
-    expect(serializedAudit).not.toContain("correct-horse-battery-staple");
-    expect(serializedAudit).not.toContain(roToken);
   });
 });

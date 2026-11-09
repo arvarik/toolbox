@@ -255,7 +255,7 @@ export const adminApi = {
     `/api/admin/backups/${encodeURIComponent(filename)}`,
 
   listAudit: (limit = 50) =>
-    authFetch<{ entries: AuditEntry[]; nextCursor: string | null }>(
+    authFetch<{ entries: AuditEntry[]; nextBefore: string | null }>(
       `/admin/audit?limit=${limit}`,
     ),
 };

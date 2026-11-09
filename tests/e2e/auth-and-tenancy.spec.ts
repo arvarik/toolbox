@@ -174,7 +174,7 @@ gatedTest.describe("Auth Setup Wizard & Multi-Tenant Isolation", () => {
         .fill("CorrectHorseBatteryStaple1!");
       await page.getByRole("button", { name: "Sign In" }).click();
 
-      // Wait for Argon2id login to settle on `/settings` before navigating to `/`
+      // Wait for the sign-in to settle on `/settings` before navigating to `/`
       await expect(
         page.locator("#account-security-section").getByText("Alice Admin"),
       ).toBeVisible();

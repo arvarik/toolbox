@@ -19,7 +19,7 @@ import {
 } from "../platform/ai/aiSettingsService.ts";
 import { scopeForOwnerId } from "../platform/tenancy/scope.ts";
 import { fetchEndpointModels } from "../providers/defs.ts";
-import { makeKitSkeleton } from "./testHelpers.ts";
+import { craftRawZip, makeKitSkeleton } from "./testHelpers.ts";
 import { topologicalSort } from "../../shared/kits/kitSkeleton.ts";
 import { makeDataPrivate } from "../platform/fs/privateFiles.ts";
 import {
@@ -29,56 +29,6 @@ import {
 import { __resetHostGuard } from "../platform/net/hostGuard.ts";
 import { __resetMcpRateLimit } from "../platform/mcp/mcpPrimitives.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
-
-function craftSingleEntryZip(opts: {
-  name: string;
-  rawData: Buffer;
-  method?: number;
-  crc?: number;
-  uncompSize?: number;
-}): Buffer {
-  const nameBuf = Buffer.from(opts.name, "utf8");
-  const method = opts.method ?? 0;
-  const crc = opts.crc ?? zlib.crc32(opts.rawData) >>> 0;
-  const compSize = opts.rawData.byteLength;
-  const uncompSize = opts.uncompSize ?? compSize;
-
-  const lfh = Buffer.alloc(30);
-  lfh.writeUInt32LE(0x04034b50, 0);
-  lfh.writeUInt16LE(20, 4);
-  lfh.writeUInt16LE(0x0800, 6);
-  lfh.writeUInt16LE(method, 8);
-  lfh.writeUInt32LE(crc, 14);
-  lfh.writeUInt32LE(compSize, 18);
-  lfh.writeUInt32LE(uncompSize, 22);
-  lfh.writeUInt16LE(nameBuf.byteLength, 26);
-
-  const localRecord = Buffer.concat([lfh, nameBuf, opts.rawData]);
-
-  const cdfh = Buffer.alloc(46);
-  cdfh.writeUInt32LE(0x02014b50, 0);
-  cdfh.writeUInt16LE(0x0314, 4);
-  cdfh.writeUInt16LE(20, 6);
-  cdfh.writeUInt16LE(0x0800, 8);
-  cdfh.writeUInt16LE(method, 10);
-  cdfh.writeUInt32LE(crc, 16);
-  cdfh.writeUInt32LE(compSize, 20);
-  cdfh.writeUInt32LE(uncompSize, 24);
-  cdfh.writeUInt16LE(nameBuf.byteLength, 28);
-  cdfh.writeUInt32LE((0o100644 << 16) >>> 0, 38);
-  cdfh.writeUInt32LE(0, 42);
-
-  const cdRecord = Buffer.concat([cdfh, nameBuf]);
-
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0);
-  eocd.writeUInt16LE(1, 8);
-  eocd.writeUInt16LE(1, 10);
-  eocd.writeUInt32LE(cdRecord.byteLength, 12);
-  eocd.writeUInt32LE(localRecord.byteLength, 16);
-
-  return Buffer.concat([localRecord, cdRecord, eocd]);
-}
 
 describe("Adversarial Security & Runtime Hardening Suite", () => {
   let app: Express;
@@ -350,9 +300,8 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
   });
 
   it("6. rejects malicious .toolbox-backup.zip archives with path traversal or zip-bomb oversized payloads", async () => {
-    const traversalZip = craftSingleEntryZip({
-      name: "../evil.txt",
-      rawData: Buffer.from("escaped", "utf8"),
+    const traversalZip = craftRawZip({
+      entries: [{ name: "../evil.txt", payload: Buffer.from("escaped", "utf8") }],
     });
 
     await expect(extractZipArchive(traversalZip)).rejects.toThrow(
@@ -368,26 +317,25 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
     // Deflated zero-byte zip bomb: ~2 KB compressed inflating to 2 MB (> cap)
     const rawZeros = Buffer.alloc(2 * 1024 * 1024, 0);
     const deflatedZeros = zlib.deflateRawSync(rawZeros, { level: 9 });
-    const zipBomb = craftSingleEntryZip({
-      name: "kit.json",
-      rawData: deflatedZeros,
-      method: 8,
-      crc: zlib.crc32(rawZeros) >>> 0,
-      uncompSize: rawZeros.byteLength,
-    });
+    const bombEntry = (uncompSizeOverride: number) =>
+      craftRawZip({
+        entries: [
+          {
+            name: "kit.json",
+            payload: deflatedZeros,
+            method: 8,
+            crc: zlib.crc32(rawZeros) >>> 0,
+            uncompSizeOverride,
+          },
+        ],
+      });
 
     await expect(
-      extractZipArchive(zipBomb, { maxTotalUncompressedBytes: 256 * 1024 }),
+      extractZipArchive(bombEntry(rawZeros.byteLength), { maxTotalUncompressedBytes: 256 * 1024 }),
     ).rejects.toThrow(/exceeds.*limit/i);
 
     // Oversized declared uncompressed entry (>150 MB global archive cap) rejected on /api/kits/import-backup
-    const oversizedHeaderBomb = craftSingleEntryZip({
-      name: "kit.json",
-      rawData: deflatedZeros,
-      method: 8,
-      crc: zlib.crc32(rawZeros) >>> 0,
-      uncompSize: 200 * 1024 * 1024,
-    });
+    const oversizedHeaderBomb = bombEntry(200 * 1024 * 1024);
     await adminAgent
       .post("/api/kits/import-backup")
       .attach("file", oversizedHeaderBomb, "bomb.toolbox-backup.zip")
@@ -448,12 +396,7 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
     );
     const exportRes = await adminAgent
       .get("/api/system/export-db")
-      .buffer(true)
-      .parse((r, cb) => {
-        const chunks: Buffer[] = [];
-        r.on("data", (c: Buffer) => chunks.push(c));
-        r.on("end", () => cb(null, Buffer.concat(chunks)));
-      })
+      .responseType("blob")
       .expect(200);
     expect((exportRes.body as Buffer).subarray(0, 15).toString("utf8")).toBe(
       "SQLite format 3",

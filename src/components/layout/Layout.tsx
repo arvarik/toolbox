@@ -52,7 +52,6 @@ export default function Layout() {
   const searchOpen = useAppStore((s) => s.searchOpen)
   const setSearchOpen = useAppStore((s) => s.setSearchOpen)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
-  const setApiKeyConfigured = useAppStore((s) => s.setApiKeyConfigured)
   const setApiKeysConfigured = useAppStore((s) => s.setApiKeysConfigured)
   const addToast = useAppStore((s) => s.addToast)
   const selectKitBySlug = useKitStore((s) => s.selectKitBySlug)
@@ -120,12 +119,10 @@ export default function Layout() {
       .then((data) => {
         if (data.api_keys_configured) {
           setApiKeysConfigured(data.api_keys_configured)
-        } else if (data.api_key_configured) {
-          setApiKeyConfigured(true)
         }
       })
       .catch(() => {})
-  }, [setApiKeyConfigured, setApiKeysConfigured])
+  }, [setApiKeysConfigured])
 
   const getPageKey = (): 'chat' | 'guide' | 'builder' | 'study' | null => {
     const subPath = location.pathname.replace(/^\/k\/[^/]+/, '') || '/'

@@ -48,7 +48,6 @@ interface SystemStatsSummary {
 }
 
 interface ConfigApiResponse {
-  api_key_configured?: boolean
   api_keys_configured?: Record<string, boolean>
   [key: string]: unknown
 }
@@ -602,8 +601,6 @@ export default function SettingsPage() {
           for (const [providerId, configured] of Object.entries(config.api_keys_configured)) {
             statuses[providerId] = configured ? 'connected' : 'disconnected'
           }
-        } else if (config.api_key_configured) {
-          statuses.gemini = 'connected'
         }
         const masked: Record<string, string> = {}
         for (const def of DEFAULT_PROVIDER_DEFS) {
