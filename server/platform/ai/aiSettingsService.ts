@@ -33,7 +33,10 @@ import {
   NotFoundError,
   ValidationError,
 } from "../net/errors.ts";
-import { isPrivateAddress } from "../net/originAndFetch.ts";
+import {
+  isAlwaysBlockedAddress,
+  isPrivateAddress,
+} from "../net/originAndFetch.ts";
 import {
   DEFAULT_MODEL_ID,
   PROVIDER_DEFS,
@@ -90,6 +93,7 @@ export type ResolvedModelDescriptor =
       upstreamModelId: string;
       modelId: string;
       keySource: "byok" | "instance";
+      allowPrivate: boolean;
     };
 
 function sealSecret(plain: string | null | undefined): string {
@@ -113,34 +117,7 @@ const ALWAYS_BLOCKED_HOSTS = new Set([
   "instance-data.ec2.internal",
 ]);
 
-function extractEmbeddedIPv4(lowerIPv6: string): string | null {
-  const mapped = lowerIPv6.match(/^::ffff:(?:0:)?(.+)$/);
-  const nat64 = lowerIPv6.match(/^64:ff9b::(.+)$/);
-  const tail = mapped?.[1] ?? nat64?.[1];
-  if (!tail) return null;
-  if (net.isIPv4(tail)) return tail;
-  const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (!hex) return null;
-  const high = parseInt(hex[1], 16);
-  const low = parseInt(hex[2], 16);
-  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
-}
-
-export function isAlwaysBlockedAddress(address: string): boolean {
-  if (net.isIPv4(address)) {
-    const [a, b] = address.split(".").map(Number);
-    return a === 0 || (a === 169 && b === 254) || a >= 224;
-  }
-  const lower = address.toLowerCase();
-  const embedded = extractEmbeddedIPv4(lower);
-  if (embedded) return isAlwaysBlockedAddress(embedded);
-  return (
-    lower === "::" ||
-    lower === "fd00:ec2::254" ||
-    /^fe[89ab][0-9a-f]*:/.test(lower) ||
-    lower.startsWith("ff")
-  );
-}
+const MAX_ENDPOINT_URL_LENGTH = 2048;
 
 export function canUsePrivateEndpoint(opts?: {
   isAdmin?: boolean;
@@ -169,6 +146,10 @@ export function normalizeEndpointBaseUrl(
 ): string {
   if (typeof raw !== "string" || !raw.trim()) {
     throw new ValidationError("A valid http(s) Base URL is required");
+  }
+  // The trailing-slash and trailing-dot regexes below are O(n^2); the cap keeps them fast.
+  if (raw.length > MAX_ENDPOINT_URL_LENGTH) {
+    throw new ValidationError("Base URL is too long");
   }
   const trimmed = raw.trim().replace(/\/+$/, "");
   let parsed: URL;
@@ -721,6 +702,7 @@ export function resolveModelDescriptor(
           upstreamModelId: custom.upstreamModelId,
           modelId: targetId,
           keySource: "byok",
+          allowPrivate: canUsePrivateEndpoint({ scope }),
         };
       }
     }
@@ -739,6 +721,7 @@ export function resolveModelDescriptor(
       upstreamModelId: custom.upstreamModelId,
       modelId: targetId,
       keySource: "instance",
+      allowPrivate: true,
     };
   }
 
@@ -1062,7 +1045,7 @@ export async function upsertUserCustomEndpoint(
   let discoveredModels = prev?.models ?? [];
   if (!opts?.skipProbe) {
     try {
-      const raw = await fetchEndpointModels(plainKey, baseUrl);
+      const raw = await fetchEndpointModels(plainKey, baseUrl, { allowPrivate });
       const filtered = applyCatalogGuardrails(raw);
       discoveredModels = filtered.map((m) => ({
         id: customModelId(id, m.id),

@@ -18,6 +18,7 @@ import {
   type ResolvedModelDescriptor,
 } from "../platform/ai/aiSettingsService.ts";
 import { AppError } from "../platform/net/errors.ts";
+import { guardedFetch } from "../platform/net/originAndFetch.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import logger from "../utils/logger.ts";
 
@@ -65,6 +66,15 @@ function buildLanguageModelFromDescriptor(
       baseURL: desc.baseUrl,
       apiKey: desc.apiKey || undefined,
       supportsStructuredOutputs,
+      // A user's endpoint was checked when saved; DNS and redirects can change, so check every call.
+      ...(desc.keySource === "byok"
+        ? {
+            fetch: guardedFetch({
+              allowPrivate: desc.allowPrivate,
+              timeoutMs: STREAM_TIMEOUT_MS,
+            }),
+          }
+        : {}),
     });
     return provider.chatModel(desc.upstreamModelId);
   }

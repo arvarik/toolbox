@@ -61,7 +61,7 @@ async function probeModelsOrFail(
   res: Response,
 ): Promise<boolean> {
   try {
-    await fetchEndpointModels(key, url);
+    await fetchEndpointModels(key, url, { allowPrivate: true });
     return true;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -98,7 +98,9 @@ router.post("/test", requireAdmin, async (req, res) => {
   }
 
   try {
-    const models = await fetchEndpointModels(effectiveKey, normalized);
+    const models = await fetchEndpointModels(effectiveKey, normalized, {
+      allowPrivate: true,
+    });
     res.json({ ok: true, modelCount: models.length });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

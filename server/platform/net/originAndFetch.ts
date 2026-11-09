@@ -127,20 +127,41 @@ export function getPasskeyRp(req: Request): { rpID: string; origin: string } {
 
 // SSRF protection & connect-time DNS rebinding guard
 
+// IPv4-mapped (::ffff:), IPv4-translated (::ffff:0:) and NAT64 (64:ff9b::/96) forms.
 function extractEmbeddedIPv4(lowerIPv6: string): string | null {
-  const mapped = lowerIPv6.match(/^::ffff:(.+)$/);
-  const nat64 = lowerIPv6.match(/^64:ff9b::(.+)$/);
-  const tail = mapped?.[1] ?? nat64?.[1];
-  if (!tail) return null;
-  if (net.isIPv4(tail)) return tail;
-  const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
-  if (!hex) return null;
-  const high = parseInt(hex[1], 16);
-  const low = parseInt(hex[2], 16);
+  const match =
+    lowerIPv6.match(/^::ffff:(?:0:)?([\d.]+|[0-9a-f]{1,4}:[0-9a-f]{1,4})$/) ??
+    lowerIPv6.match(/^64:ff9b::([\d.]+|(?:[0-9a-f]{1,4}:)?[0-9a-f]{1,4})?$/);
+  if (!match) return null;
+  const tail = match[1] ?? "";
+  if (tail.includes(".")) return net.isIPv4(tail) ? tail : null;
+  // Canonical IPv6 text drops leading zero groups: "64:ff9b::1" is 0.0.0.1.
+  const [high, low] = `0:0:${tail || "0"}`
+    .split(":")
+    .slice(-2)
+    .map((g) => parseInt(g, 16));
   return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
 }
 
+/** Cloud metadata, link-local, unspecified, and multicast targets. Refused even when private targets are allowed. */
+export function isAlwaysBlockedAddress(address: string): boolean {
+  if (net.isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number);
+    return a === 0 || (a === 169 && b === 254) || a >= 224;
+  }
+  const lower = address.toLowerCase();
+  const embedded = extractEmbeddedIPv4(lower);
+  if (embedded) return isAlwaysBlockedAddress(embedded);
+  return (
+    lower === "::" ||
+    lower === "fd00:ec2::254" ||
+    /^fe[89ab][0-9a-f]*:/.test(lower) ||
+    lower.startsWith("ff")
+  );
+}
+
 export function isPrivateAddress(address: string): boolean {
+  if (isAlwaysBlockedAddress(address)) return true;
   if (net.isIPv4(address)) {
     const [a, b] = address.split(".").map(Number);
     return (
@@ -201,30 +222,34 @@ export async function assertPublicHttpUrl(targetUrl: string): Promise<URL> {
   return url;
 }
 
-export function guardedLookup(
-  hostname: string,
-  options: LookupOptions,
-  callback: (
-    err: NodeJS.ErrnoException | null,
-    address: string | LookupAddress[],
-    family?: number,
-  ) => void,
-): void {
-  dnsCallbackLookup(hostname, options, (err, result, family) => {
-    if (err) return callback(err, result, family);
-    const addresses = Array.isArray(result)
-      ? result.map((entry) => entry.address)
-      : [String(result)];
-    if (addresses.some((addr) => isPrivateAddress(addr))) {
-      const blocked: NodeJS.ErrnoException = new Error(
-        "URL resolves to a private address",
-      );
-      blocked.code = "ERR_PRIVATE_ADDRESS";
-      return callback(blocked, result, family);
-    }
-    callback(null, result, family);
-  });
+type LookupCallback = (
+  err: NodeJS.ErrnoException | null,
+  address: string | LookupAddress[],
+  family?: number,
+) => void;
+
+// Connect-time check: it sees the address the socket really uses, so DNS rebinding cannot pass it.
+function lookupRefusing(isBlocked: (address: string) => boolean) {
+  return (hostname: string, options: LookupOptions, callback: LookupCallback): void => {
+    dnsCallbackLookup(hostname, options, (err, result, family) => {
+      if (err) return callback(err, result, family);
+      const addresses = Array.isArray(result)
+        ? result.map((entry) => entry.address)
+        : [String(result)];
+      if (addresses.some(isBlocked)) {
+        const blocked: NodeJS.ErrnoException = new Error(
+          "URL resolves to a private address",
+        );
+        blocked.code = "ERR_PRIVATE_ADDRESS";
+        return callback(blocked, result, family);
+      }
+      callback(null, result, family);
+    });
+  };
 }
+
+export const guardedLookup = lookupRefusing(isPrivateAddress);
+const metadataGuardedLookup = lookupRefusing(isAlwaysBlockedAddress);
 
 function assertHttpUrl(targetUrl: string): URL {
   let url: URL;
@@ -235,6 +260,11 @@ function assertHttpUrl(targetUrl: string): URL {
   }
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new ValidationError("Only http(s) URLs are allowed");
+  }
+  // An IP literal skips DNS lookup, so check it here (initial URL and every redirect hop).
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  if (net.isIP(host) && isAlwaysBlockedAddress(host)) {
+    throw new ValidationError("URL resolves to a blocked address");
   }
   return url;
 }
@@ -257,7 +287,7 @@ function fetchViaNodeHttp(
         method: init.method ?? "GET",
         headers: init.headers,
         signal: init.signal,
-        ...(init.allowPrivate ? {} : { lookup: guardedLookup }),
+        lookup: init.allowPrivate ? metadataGuardedLookup : guardedLookup,
       },
       (res) => {
         const headers = new Headers();
@@ -364,6 +394,30 @@ export async function safeFetch(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** A `fetch` for libraries (for example the AI SDK) that sends every request and redirect through `safeFetch`. */
+export function guardedFetch(opts: {
+  allowPrivate: boolean;
+  timeoutMs: number;
+}): typeof fetch {
+  return (async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+    const body = init?.body;
+    if (body != null && typeof body !== "string") {
+      throw new TypeError("guardedFetch sends only string request bodies");
+    }
+    const { response } = await safeFetch(
+      input instanceof globalThis.Request ? input.url : input,
+      {
+        method: init?.method,
+        headers: init?.headers,
+        body: body ?? undefined,
+        signal: init?.signal,
+        ...opts,
+      },
+    );
+    return response;
+  }) as typeof fetch;
 }
 
 export interface ReadCappedOptions {

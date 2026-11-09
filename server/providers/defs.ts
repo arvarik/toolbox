@@ -1,3 +1,5 @@
+import { safeFetch } from "../platform/net/originAndFetch.ts";
+
 const LIST_TIMEOUT_MS = 15_000;
 
 export const CUSTOM_ENDPOINT_COLOR = "#8B5CF6";
@@ -148,9 +150,14 @@ async function fetchClaudeModels(apiKey: string): Promise<RawDiscoveredModel[]> 
   return models;
 }
 
+/**
+ * Lists models on an OpenAI-compatible endpoint. `allowPrivate` is true only for
+ * admin-configured endpoints; every connection and redirect is re-checked by `safeFetch`.
+ */
 export async function fetchEndpointModels(
   apiKey: string,
   baseUrl: string,
+  opts: { allowPrivate?: boolean } = {},
 ): Promise<RawDiscoveredModel[]> {
   const base = String(baseUrl || "").replace(/\/+$/, "");
   const headers: Record<string, string> = {};
@@ -158,10 +165,12 @@ export async function fetchEndpointModels(
 
   let res: Response;
   try {
-    res = await fetch(`${base}/models`, {
+    ({ response: res } = await safeFetch(`${base}/models`, {
       headers,
+      allowPrivate: opts.allowPrivate ?? false,
+      timeoutMs: LIST_TIMEOUT_MS,
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
-    });
+    }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Could not reach ${base} — ${msg}`, { cause: err });
