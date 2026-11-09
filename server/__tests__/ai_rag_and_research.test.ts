@@ -820,4 +820,66 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
     await aliceAgent.post("/api/chat").send({}).expect(400);
     __resetAppRateLimits();
   });
+
+  it("9. streams tutor replies as SSE frames and aborts the billable upstream generation when the learner disconnects", async () => {
+    const systemPrompts: string[] = [];
+    let upstreamClosed!: () => void;
+    const closed = new Promise<void>((resolve) => (upstreamClosed = resolve));
+    const llm = await listenLocal(async (req, res) => {
+      if (req.url === "/v1/models") return sendJson(res, 200, { data: [{ id: "slow-tutor", created: 1_760_000_000 }] });
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const body = JSON.parse(raw) as { model: string; messages: Array<{ role: string; content: string }> };
+      systemPrompts.push(body.messages.find((m) => m.role === "system")?.content ?? "");
+      const frame = (delta: object, finish: string | null = null) =>
+        `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: body.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(frame({ role: "assistant", content: "Quorums overlap. " }));
+      if (body.messages.at(-1)?.content === "finish the answer") {
+        res.write(frame({ content: "So reads see the latest write." }));
+        res.end(`${frame({}, "stop")}data: [DONE]\n\n`);
+        return;
+      }
+      res.on("close", () => upstreamClosed());
+    });
+    const server = app.listen(0, "127.0.0.1");
+    try {
+      const epId = (await aliceAgent.post("/api/endpoints").send({ name: "Slow Tutor", baseUrl: `${llm.baseUrl}/v1` }).expect(201)).body.id as string;
+      const model = `custom:${epId}:slow-tutor`;
+      await withEnv({ DISABLE_BACKGROUND_JOBS: "true" }, async () => {
+        __resetAppRateLimits();
+        const full = await aliceAgent
+          .post("/api/chat/stream")
+          .send({ message: "finish the answer", persona: "strict", model })
+          .expect(200);
+        expect(full.headers["content-type"]).toMatch(/^text\/event-stream/);
+        expect(full.text).toBe(
+          'data: {"text":"Quorums overlap. "}\n\ndata: {"text":"So reads see the latest write."}\n\ndata: [DONE]\n\n',
+        );
+        expect(systemPrompts[0]).toContain('Active Study Kit: "System Design"');
+        expect(systemPrompts[0]).toContain("Tutor Persona Directive:");
+
+        const token = (await aliceAgent.post("/api/auth/tokens").send({ name: "stream-client" }).expect(201)).body.token as string;
+        const { port } = server.address() as { port: number };
+        const req = http.request({
+          host: "127.0.0.1",
+          port,
+          method: "POST",
+          path: "/api/chat/stream",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        });
+        req.end(JSON.stringify({ message: "keep talking", model }));
+        const res = await new Promise<http.IncomingMessage>((resolve) => req.on("response", resolve));
+        const firstFrame = await new Promise<string>((resolve) => res.once("data", (c: Buffer) => resolve(c.toString())));
+        expect(firstFrame).toContain("Quorums overlap.");
+        req.destroy();
+        await closed;
+      });
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      await llm.close();
+      __resetAppRateLimits();
+    }
+  });
 });
