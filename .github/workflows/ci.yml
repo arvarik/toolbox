@@ -1,9 +1,10 @@
 name: CI
 
+# No tag trigger: a tag runs docker-publish.yml, and a cache restored in a
+# tag-triggered run is a cache-poisoning risk (zizmor `cache-poisoning`).
 on:
   push:
     branches: ["main"]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -125,3 +126,27 @@ jobs:
           only-fixed: true
           severity-cutoff: high
           output-format: table
+
+  workflow-lint:
+    name: Workflow Security Lint (zizmor · actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Audit workflows with zizmor
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false
+          annotations: true
+
+      # Catches expression, syntax, and shellcheck errors in docker-publish.yml,
+      # which runs only on main and tags. Dependabot does not bump this digest.
+      - name: Lint workflows with actionlint
+        run: >-
+          docker run --rm -v "$PWD:/repo:ro" -w /repo
+          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667

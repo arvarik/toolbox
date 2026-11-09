@@ -148,6 +148,12 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
     expect(publish).toContain("output-format: sarif");
   });
 
+  it("lints workflows with pinned zizmor and actionlint", () => {
+    const ci = workflows.find((w) => w.file === "ci.yml")?.body ?? "";
+    expect(ci).toMatch(/uses: zizmorcore\/zizmor-action@/);
+    expect(ci).toMatch(/rhysd\/actionlint:[\w.]+@sha256:[0-9a-f]{64}/);
+  });
+
   it("keeps production dependencies exact: every server/shared/CLI external import is in dependencies and pure-client packages stay in devDependencies", () => {
     const pkg = JSON.parse(
       fs.readFileSync(path.join(ROOT, "package.json"), "utf8"),
