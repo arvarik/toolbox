@@ -127,6 +127,8 @@ describe("FSRS-6 Pure Math, Lazy SM-2 Bootstrap & State Transitions", () => {
 
     const guessedNext = calculateNextSrsState(legacySm2, 4, null, "guessed", NOW);
     expect(guessedNext.stability).toBeLessThan(goodNext.stability);
+    // The web app and the MCP tool send "low" for a guess, so it gets the same cap.
+    expect(calculateNextSrsState(legacySm2, 4, null, "low", NOW)).toEqual(guessedNext);
 
     const lapsed = calculateNextSrsState(goodNext, 1, null, "medium", NOW);
     expect(lapsed.state).toBe(3);

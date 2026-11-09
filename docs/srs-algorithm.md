@@ -76,7 +76,7 @@ Legacy v1 cards (`stability == null` or `difficulty == null`) are migrated lazil
 
 ### Metacognitive Confidence & Hypercorrection
 
-- **Guessed Pass Cap**: Submitting `confidence: "guessed"` on a passing rating (`quality > 3`, i.e., Good or Easy) caps the effective grade to **Hard (`G = 2`)** so lucky guesses do not inflate stability. Only API clients send `guessed` today. The web app's **Low** option and the MCP tool send `low`, which the scheduler treats like `medium`.
+- **Guessed Pass Cap**: Submitting `confidence: "low"` (the web app's **Low** option and the MCP tool) or `"guessed"` on a passing rating (`quality > 3`, i.e., Good or Easy) caps the effective grade to **Hard (`G = 2`)** so lucky guesses do not inflate stability.
 - **High-Confidence Lapse (Hypercorrection)**: Failing (`G = 1`) while declaring `confidence: "high"` halves the initial learning/relearning step (`Math.max(1, steps[0] / 2)` minutes) to force immediate error correction.
 
 ---

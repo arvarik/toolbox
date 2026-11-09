@@ -53,7 +53,7 @@ Guided Drills test active generation rather than passive recognition:
 ## 5. Spaced Repetition Flashcards (`/k/:slug/study`, `/review`)
 
 - **FSRS-6 Scheduling**: Rate each card **Again**, **Hard**, **Good**, or **Easy** (`1`–`4` or keyboard shortcuts). Each deck targets 90% recall by default. Deck Options set daily limits and learning steps.
-- **Confidence Calibration**: Before revealing a card, pick **Low**, **Medium**, or **High** confidence. **High** halves the first relearning step after a miss (hypercorrection). **Low** and **Medium** do not change the schedule.
+- **Confidence Calibration**: Before revealing a card, pick **Low**, **Medium**, or **High** confidence. **Low** caps a Good or Easy rating at Hard, so lucky guesses do not inflate intervals. **High** halves the first relearning step after a miss (hypercorrection). **Medium** does not change the schedule.
 - **FIRe Graph Credit & Adaptive Remediation**:
   - Rating a Review card Good or Easy, or scoring 80% or more on an unassisted drill, propagates fractional stability credit 1–2 hops **up** your prerequisite graph, reducing redundant basic reviews.
   - Failing a card or drill automatically queues up to 3 shaky prerequisite cards into the front of your review queue (`Remediation`).
