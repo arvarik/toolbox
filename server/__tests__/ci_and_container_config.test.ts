@@ -137,9 +137,11 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
     expect(publish).toContain('--title "$TAG"');
   });
 
-  it("gates PRs on npm registry signatures and fixed high/critical image CVEs", () => {
+  it("gates PRs on npm registry signatures, bundle and load budgets, and fixed high/critical image CVEs", () => {
     const ci = workflows.find((w) => w.file === "ci.yml")?.body ?? "";
-    expect(ci).toContain("npm audit signatures");
+    for (const cmd of ["npm audit signatures", "npm run check:bundle", "npm run test:load"]) {
+      expect(ci).toContain(cmd);
+    }
     for (const gate of ["fail-build: true", "only-fixed: true", "severity-cutoff: high"]) {
       expect(ci).toContain(gate);
     }

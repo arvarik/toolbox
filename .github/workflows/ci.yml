@@ -59,6 +59,9 @@ jobs:
       - name: Production Build
         run: npm run build
 
+      - name: Bundle Size Budget
+        run: npm run check:bundle
+
       - name: Read Playwright version
         id: playwright
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
@@ -80,6 +83,9 @@ jobs:
 
       - name: Playwright Production E2E Suite
         run: npm run test:e2e
+
+      - name: Production Load & Soak Test
+        run: npm run test:load
 
       - name: Upload Playwright Report
         if: ${{ !cancelled() }}
