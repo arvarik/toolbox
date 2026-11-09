@@ -1,441 +1,112 @@
-# Toolbox — User Guide
+# Toolbox v2 — User Guide
 
-A complete guide to all features of the Toolbox system design interview preparation app.
-
----
-
-## Table of Contents
-
-1. [Getting Started](#getting-started)
-2. [Navigation Overview](#navigation-overview)
-3. [AI Chat — Socratic Learning](#ai-chat--socratic-learning)
-4. [Guide — Knowledge Library](#guide--knowledge-library)
-5. [Builder — Architecture Whiteboard](#builder--architecture-whiteboard)
-6. [Flashcards — Spaced Repetition](#flashcards--spaced-repetition)
-7. [Feynman Simulator](#feynman-simulator)
-8. [Interleaved Review](#interleaved-review)
-9. [Knowledge Graph](#knowledge-graph)
-10. [BotE Calculator](#bote-calculator)
-11. [Pomodoro Timer](#pomodoro-timer)
-12. [Settings & Configuration](#settings--configuration)
-13. [Keyboard Shortcuts](#keyboard-shortcuts)
+Practical guide to Toolbox v2's workflows, multi-Kit Library, Deep Research Kit Compiler, FSRS-6 spaced repetition, Guided Drills, Dual-Mode Canvas, and MCP integration.
 
 ---
 
-## Getting Started
+## 1. Library Home & Portable Kits (`/`, `/shared`)
 
-After deployment (see [Deployment Guide](./deployment.md)), navigate to the app in your browser. The first thing you'll need to do is configure your **Gemini API key** in Settings to unlock all AI-powered features.
+Toolbox organizes every subject into a self-contained **Kit** — a curriculum prerequisite graph (`KitSkeleton`), Guide blueprint sections, Flashcard decks, Guided Drills, Canvas boards, AI Tutor persona prompts, and uploaded reference sources.
 
-> **No API key?** Get one for free at [Google AI Studio](https://aistudio.google.com/apikey). The free tier is sufficient for regular use.
-
-On first launch, you'll land on the **AI Chat** page with the full study plan sidebar on the left.
-
----
-
-## Navigation Overview
-
-The left sidebar provides access to all sections:
-
-| Section | Shortcut | Description |
-|---------|----------|-------------|
-| **Chat** | `⌘1` | AI-powered Socratic learning with session history |
-| **Guide** | `⌘2` | Structured 7-pillar knowledge library |
-| **Builder** | `⌘3` | Drag-and-drop architecture whiteboard |
-| **Flashcards** | `⌘4` | Spaced repetition study decks |
-| **Feynman** | `⌘5` | Feynman Technique simulator |
-| **Interleaved** | `⌘6` | Cross-deck review session |
-| **Graph** | `⌘7` | Knowledge Graph with live retention heatmap |
-| **Calculator** | `⌘8` | Back-of-the-envelope capacity estimation sandbox |
-| **Pomodoro** | `⌘9` | Focus timer with plant gamification |
-| **Settings** | `⌘,` | API key, model, and data management |
-
-The sidebar can be collapsed with `⌘B` to maximize your working area.
+- **System Design Starter Kit**: Provisioned automatically on first launch so you can start studying immediately.
+- **Personal Library (`/`)**: Switch between Kits, resume where you left off, or click **Import** to load either:
+  - `<slug>.toolbox-kit.json` (**Mode 1**): A clean curriculum skeleton shared by another learner or instructor.
+  - `<slug>.toolbox-backup.zip` (**Mode 2**): A complete backup restoring your flashcards, FSRS-6 scheduling state, Guide notes, boards, chat history, and uploaded PDFs.
+- **Shared Library (`/shared`)**: On multi-user instances, publish Kits to your instance's Shared Library (`Publish`) or fork Kits published by teammates (`Fork`) and pull non-destructive upstream curriculum updates (`Sync`) — any notes tied to removed topics are preserved in **Archived Notes** so nothing is lost.
 
 ---
 
-## AI Chat — Socratic Learning
+## 2. New Kit Studio & Living Kits (`/new`)
 
-The Chat page (`/chat`) is the primary study interface. It features a full-page AI conversation with a **Study Plan** sidebar.
+Click **+ New Kit** (`/new`) to compile a structured Kit on any technical or academic subject through 4 stages:
 
-### Study Plan Sidebar
+1. **Ingest Sources (Optional)**: Upload PDFs (parsed locally via `unpdf`), Markdown/text files, or paste reference URLs.
+2. **Calibrate**: Enter your topic and learning goal. Toolbox generates 3–5 quick diagnostic questions to calibrate depth, prior knowledge, and workspace capabilities (`Architecture` whiteboard, Novakian `Concept` map, or `None`; BotE Calculator on/off).
+3. **Synthesize**: Streams grounded web research (when SearXNG is configured) and compiles an acyclic prerequisite DAG of pillars, topics, blueprint sections, and learning tracks.
+4. **Refine & Commit**: Request natural-language adjustments (*"Add a pillar on consensus protocols"*, *"Split Raft and Paxos"*) and commit the Kit to your Library.
 
-The left panel shows your 7-pillar progress across all guide topics:
-- **0–100% completion** tracking per topic (based on committed guide sections)
-- **"START HERE" suggestion** — recommends the most relevant topic to study next
-- Click any pillar/topic to automatically focus the chat on that topic
-
-### Chat Interface
-
-- **Named sessions** — create and manage multiple labeled chat sessions, persisted in localStorage
-- **Session history** — each session stores up to 120 messages
-- **Session picker dropdown** — rename, delete, or switch between sessions
-- **AI Personas** — choose your study style from the persona picker:
-  - 💡 **Socratic Tutor** — explains, questions, surfaces edge cases
-  - 🧸 **Explain Like I'm 5** — uses everyday analogies, no jargon
-  - 🔥 **Strict** — demanding engineering manager style, no fluff
-  - 👿 **Devil's Advocate** — aggressively challenges your reasoning
-- **Dynamic starter prompts** — when you select a topic, the AI generates fresh, topic-specific starter questions automatically
-- **Streaming responses** — AI streams text in real-time with a stop button
-- **Retry** — retry any user message to get a different response
-- **Generate Concept Map** — after 4+ messages, generate a markdown concept map summarizing the conversation
-- **Commit to Guide** — send AI responses directly into your Guide knowledge library (see Guide section)
-
-### Commit Flow
-
-After a productive chat session, click **Commit to Guide** to open the commit modal. The AI analyzes your conversation and suggests which guide sections to update. You can edit the content before saving, ensuring your personal notes are accurate and useful.
+### Living Kit Expansion
+Inside any existing Kit's Mastery Path (`/k/:slug`) or Knowledge Graph (`/k/:slug/graph`), trigger **Expand Kit** to research and splice 1–6 new sub-DAG nodes into your curriculum without disturbing existing notes or flashcard progress.
 
 ---
 
-## Guide — Knowledge Library
+## 3. Kit Mastery Path & Knowledge Graph (`/k/:slug`, `/k/:slug/graph`)
 
-The Guide (`/guide`) is your personal, editable knowledge reference organized around **7 pillars** of system design:
-
-1. **Compute & Infrastructure** — Load balancers, API gateways, microservices, serverless
-2. **Storage** — SQL/NoSQL, caching, object storage, search
-3. **Protocols** — HTTP/REST, gRPC, WebSockets, messaging patterns
-4. **Observability** — Logging, metrics, tracing, alerting
-5. **Resiliency** — Circuit breakers, rate limiting, chaos engineering
-6. **Distributed Systems** — Consensus, CAP theorem, replication, sharding
-7. **Paradigms** — Event-driven, CQRS, saga patterns, hexagonal architecture
-
-### Library Landing
-
-The guide home page shows **overall progress** (% of sections filled) across all pillars, with per-pillar completion bars. Click any pillar to drill into its topics.
-
-### Blueprint View
-
-Each topic has a **Blueprint** — a structured set of sections covering:
-- Core concepts and primitives
-- Scale considerations
-- Performance characteristics
-- Trade-offs and failure modes
-- Real-world examples
-- Interview framing
-
-Each blueprint section can be:
-- **Filled** via the Commit flow from Chat sessions
-- **Manually edited** in-place with the pencil icon
-- **Cleared** to start fresh
-- **Viewed** in rendered Markdown
-
-### Topic-Level AI Chat
-
-While viewing a topic, click **Ask AI** to open a contextual chat panel on the right. The AI is pre-primed with knowledge about the specific topic.
+- **Mastery Path (`/k/:slug`)**: Displays pillars, node readiness (`Ready`, `Due`, `Weak`, `Mastered`, `Blocked`), due flashcard counts, and quick actions into Guide, Drills, Chat, or `⚡ Challenge Node`.
+- **Knowledge Graph (`/k/:slug/graph`)**: Interactive React Flow + `dagre` prerequisite DAG colored by live FSRS-6 retrievability $R(t, S)$. Hover or select any node to highlight upstream prerequisites and downstream dependents, filter by readiness or learning track, and launch targeted study sessions.
 
 ---
 
-## Builder — Architecture Whiteboard
+## 4. Guided Drills & `⚡ Challenge Node` (`/k/:slug/drills`)
 
-The Builder (`/builder`) is an interactive canvas for practicing architecture diagrams, powered by **React Flow**.
+Guided Drills test active generation rather than passive recognition:
 
-### Canvas
-
-- **Drag and drop** components from the left toolbox onto the canvas
-- **Connect** components by dragging between the anchor dots on any side of a card — any side connects to any side
-- **Remove** an edge with a single click on it, or select nodes/edges and press `Backspace`/`Delete`
-- **Pan** by dragging the canvas background; **zoom** with the mouse wheel or the on-canvas controls
-- **Multi-select** by dragging a selection box on empty canvas
-- The **minimap** (bottom-left) shows the whole board with category colors — click or drag it to jump around large diagrams
-- **Fit view** (the frame icon in the canvas controls) re-centers everything
-
-### Component Library
-
-The toolbox organizes components by category:
-- **Compute** — Load Balancer, API Gateway, Microservice, Serverless Function, Background Worker, Message Queue, Event Bus, Stream Processor, Batch Processor, CDN/Edge Node
-- **Storage** — SQL Database, NoSQL Database, Cache (Redis), Object Storage (S3/GCS), Full-Text Search (Elasticsearch), Vector Database
-- **Clients** — Web Client, Mobile Client, IoT Device, 3rd Party Service
-- **Resiliency** — Rate Limiter, Circuit Breaker, Retry/Backoff Handler, Load Shedder
-- **Observability** — Log Aggregator, Metrics Collector, Distributed Tracer
-
-### Toolbar Features
-
-| Tool | Function |
-|------|----------|
-| **Estimate** | Open the quick BotE Calculator modal |
-| **Templates** | Load pre-built architecture templates |
-| **Export** | Download board as a PNG image |
-| **Save** | Persist the board to the database (`⌘S`) |
-| **Verify Design** | Open AI chat to review your architecture |
-
-### Templates Gallery
-
-Click **Templates** to browse pre-built architectures categorized by system type. Templates are loaded onto the canvas with a single click, giving you a starting point to modify.
-
-### Multiple Boards
-
-Create multiple named boards via the **+** tab at the top of the canvas. Boards are **auto-saved** every 3 seconds after changes.
-
-### AI Verification
-
-Click **Verify Design** to open a side panel where the AI reviews your whiteboard layout, identifies missing components, suggests improvements, and answers questions about your design.
+- **4 Drill Modes**: `Recall`, `Apply` (scenario problem-solving), `Synthesize` (connecting multiple nodes), and `Critique` (finding flaws in a proposed design or argument).
+- **Attempt-Gated Workflow**: Worked solutions stay locked until you submit an earnest attempt. Up to **3 progressive hints** are available:
+  - *Hint 1* (conceptual nudge): no score penalty.
+  - *Hint 2* (structural scaffold): caps score at `80%`.
+  - *Hint 3* or *Reveal Solution*: marks the attempt **assisted** (no mastery/FIRe credit).
+- **Anti-Sycophancy Grading**: Submissions are graded errors-first against an explicit rubric. Any factual or logical error automatically caps the score below passing (`≤ 59%`) and triggers Socratic follow-up plus prerequisite remediation if needed.
+- **`⚡ Challenge Node`**: Already know a topic? Click **Challenge Node** on any node to tackle a difficulty-3 scenario plus a first-principles Feynman explanation. Scoring `≥ 85%` unassisted with zero errors commits your explanation into your Guide notes, graduates the node's flashcards (`21-day` stability), and awards upward FIRe credit to prerequisite nodes.
 
 ---
 
-## Flashcards — Spaced Repetition
+## 5. Spaced Repetition Flashcards (`/k/:slug/study`, `/review`)
 
-The Flashcards section (`/study`) implements a full **Anki-style SM-2 Spaced Repetition System (SRS)**.
-
-### Study Hub
-
-The main view shows:
-- **Study activity heatmap** — GitHub-style calendar showing your study sessions over the last year
-- **Deck grid** — all your flashcard decks with due counts
-- **Tag filter chips** — filter decks by custom tags
-- **Search** — find decks by name or tags
-
-### Deck Cards
-
-Each deck card shows:
-- Card count and progress
-- **Due count badge** — number of cards due for review today
-- Quick action buttons (hover to reveal): Study, Review Due, Browse Cards, Stats, Settings, Edit, Delete
-
-### Creating Decks
-
-Click **New Deck** to create a deck with:
-- Name and description
-- Tags (comma-separated for organization)
-- Color (automatically assigned, rotates through 8 colors)
-- Initial flashcards (front/back pairs)
-
-Or use **AI Generate** to open the AI chat and describe a topic — the AI will generate flashcard content you can paste into a new deck.
-
-### Study Session
-
-The flashcard viewer shows one card at a time with a flip animation. After revealing the answer, rate your recall:
-- **Again** — card failed, resets to learning steps
-- **Hard** — partial recall, shorter interval
-- **Good** — solid recall, standard interval increase
-- **Easy** — easy recall, longer interval with easy bonus
-
-The SRS algorithm (SM-2) automatically schedules cards for optimal long-term retention.
-
-### Review Mode
-
-Click the **clock icon** on a deck with due cards to enter Review Mode — only cards due today are shown. Review Mode uses the same SRS rating interface.
-
-### Card Browser
-
-Hover over a deck and click **Browse** (magnifying glass icon) to view all cards in a list. From here you can:
-- Edit card front and back text inline
-- Delete individual cards
-- Add blank new cards
-- View card SRS state (interval, ease factor, state)
-
-### Deck Statistics
-
-Click the **bar chart icon** on a deck to view:
-- Cards by state (new, learning, review, mature)
-- Due forecast (upcoming reviews over the next 7 days)
-- Ease factor distribution
-- Average interval
-- Retention rate
-
-### Deck Settings
-
-Click the **gear icon** to configure per-deck SRS parameters:
-- **New cards/day** — limit daily new card introductions
-- **Review limit/day** — cap daily reviews
-- **Learning steps** — intervals before cards graduate (e.g., `1m 10m`)
-- **Lapse steps** — re-learning intervals after failed reviews
-- **Easy bonus** — multiplier applied to "Easy" ratings
+- **FSRS-6 Scheduling**: Rate each card **Again**, **Hard**, **Good**, or **Easy** (`1`–`4` or keyboard shortcuts). Adjust per-deck **Desired Retention** (`75%`–`97%`, default `90%`) in Deck Settings to trade review workload against recall probability.
+- **Confidence Calibration**: Tag reviews as *Guessed* (caps passing grades to Hard so lucky guesses don't inflate intervals) or *High Confidence* (halves relearning delay on a miss via Hypercorrection).
+- **FIRe Graph Credit & Adaptive Remediation**:
+  - Passing advanced cards or unassisted drills propagates fractional stability credit 1–2 hops **up** your prerequisite graph, reducing redundant basic reviews.
+  - Failing a card or drill automatically queues up to 3 shaky prerequisite cards into the front of your review queue (`Remediation`).
+- **Global Review (`/review`) & Kit Interleaved (`/k/:slug/interleaved`)**: Study all due cards across your active Kit or across every Kit in your Library in one shuffled session.
 
 ---
 
-## Feynman Simulator
+## 6. AI Tutor Chat & Knowledge Guide (`/k/:slug/chat`, `/k/:slug/guide`)
 
-The Feynman page (`/feynman`) helps you identify gaps in your understanding using the Feynman Technique: if you can't explain something simply, you don't truly understand it.
-
-### How It Works
-
-1. **Enter a concept** — e.g., "DNS", "Paxos", "React Hooks"
-2. **Write your explanation** — explain it as if talking to a beginner
-3. **Voice Record** — click the microphone button to dictate instead of typing (uses browser Web Speech API)
-4. **Analyze** — the AI evaluates your explanation and provides structured feedback
-
-### Feedback Format
-
-The AI provides feedback in four categories:
-- **Missing Key Points** — crucial information you omitted
-- **Unexplained Jargon** — complex terms you used without simplifying
-- **Logical Gaps** — where your reasoning breaks down or skips steps
-- **Overall Assessment** — a constructive summary of your comprehension level
-
-> Note: The AI is instructed **not** to explain the concept for you — it only points out what you missed, forcing you to revisit the gaps yourself.
+- **AI Tutor Chat**: Session-based tutor with 4 coaching personas (*Socratic*, *ELI5*, *Strict*, *Devil's Advocate*), grounded via local **Hybrid Search** (`FTS5` + `sqlite-vec` across your notes, cards, and uploaded PDFs) and optional **SearXNG Web Research** with inline source citations.
+- **Constructive Diagrams & Math**: Responses and Guide notes render sanitized inline `language-svg` figures, strict-mode `mermaid` diagrams, and offline `KaTeX` math (`$...$` and `$$...$$`).
+- **Commit to Guide**: Extract structured takeaways from any chat conversation directly into your Kit's Guide blueprint sections, or edit Markdown notes manually in `/k/:slug/guide`.
 
 ---
 
-## Interleaved Review
+## 7. Dual-Mode Canvas, Feynman & BotE Calculator
 
-The Interleaved page (`/interleaved`) collects **all due cards across all your decks** into a single shuffled review session.
-
-This is particularly valuable for **interleaved practice** — a proven learning technique where mixing topics during review strengthens long-term retention compared to studying one topic at a time.
-
-Access it from the sidebar (`⌘6`) or navigate to `/interleaved`.
-
----
-
-## Knowledge Graph
-
-The Graph page (`/graph`, `⌘7`) turns your flashcards and guide notes into an interactive **prerequisite map** of ~60 system design concepts, grouped by the 7 pillars. An edge means "learn this first" — for example *Consistent Hashing → Distributed KV Stores → Virtual Nodes*. A layered layout (dagre) places every prerequisite in an earlier column than its dependents, so learning always flows left → right. A minimap and canvas controls handle navigation on the large map.
-
-### Retention Heatmap
-
-Node colors track your live SM-2 memory health, updating immediately after every graded card — no reload needed:
-
-- 🟢 **Mastered** — every linked card sits at ease ≥ 2.5 with an interval over 21 days
-- 🟡 **Learning / Due** — something is new, learning, or scheduled within 48 hours
-- 🔴 **Decayed / Fragile** — a card lapsed, has crushed ease, or waits in the remediation queue
-- ⚪ **Not started** — no cards link to this concept yet
-
-Cards link to concepts automatically: keyword phrases in the card text match first; the card's source guide topic is the fallback.
-
-### Exploring
-
-- **Hover** a node to light up its full lineage — prerequisites in indigo, everything it unlocks in teal.
-- **Click** a node to open the slide-over panel: memory strength, linked flashcards with their SRS states, prerequisite and dependent concepts, plus deep links to the Guide topic, related whiteboards, and a one-click **Study N cards** session.
-- **Search**, **pillar chips**, and the readiness filter (*Ready to Learn / Needs Review / Mastered*) narrow the view. "Ready to Learn" surfaces untouched concepts whose prerequisites you have already graduated.
-
-### Learning Tracks
-
-Pick a curated track (e.g. *Senior Distributed Systems*, *Storage & Consistency*, *Caching & Read Performance*) to number its concepts in prerequisite order on the canvas. **Start Track Session** builds a study queue from those concepts — due cards first, foundations before capstones.
-
-### Adaptive Prerequisite Remediation
-
-When you rate an advanced card **Again**, the engine checks whether the failure stems from a broken foundation. It inspects the concept's direct prerequisites for *shaky* cards — never studied, still learning, lapsed, overdue, or low ease — and queues up to three of them into your next review session. They appear first, marked with a red **Foundation Checkup** banner explaining which concept they support. Rock-solid foundations produce no remediation: the system only intervenes when the foundation is actually the problem.
+- **Dual-Mode Canvas (`/k/:slug/builder` or `/k/:slug/canvas`)**:
+  - **Architecture Mode**: Drag-and-drop system components (load balancers, caches, queues, databases), load starter templates, and run **AI Critique** for bottlenecks, SPOFs, and trade-offs.
+  - **Concept Map Mode**: Build Novakian concept maps with labeled **edge linking phrases** (`[Concept A] —causes→ [Concept B]`) and run **AI Critique** to verify proposition accuracy and missing cross-links.
+- **Feynman Evaluator (`/k/:slug/feynman`)**: Explain a topic in plain language (typing or browser speech-to-text) to receive structured gap, jargon, and error analysis.
+- **BotE Calculator (`/k/:slug/calculator` or `⌘E`)**: Live QPS, storage, bandwidth, cache, and latency estimation sandbox with 1-click Markdown export and **Audit My Math** AI verification (shown on Kits where `calculator` capability is enabled).
 
 ---
 
-## BotE Calculator
+## 8. Settings, BYOK & External MCP Clients (`/settings`)
 
-The Calculator page (`/calculator`, `⌘8`) is a back-of-the-envelope capacity estimation sandbox. Every result recalculates instantly as you drag sliders — no mental math friction between an assumption and its consequence.
-
-It is also available everywhere as a quick modal: press `⌘E`, or use the calculator buttons in the Chat header, the Guide, and the Builder toolbar. The modal and the full page share the same state, which persists across navigation and restarts.
-
-### Inputs
-
-Daily Active Users, requests per user, read:write ratio, peak multiplier, payload size, media percentage and size, retention, and replication factor. **Advanced assumptions** adds index/metadata overhead, cache working-set percentage, target QPS per server, CPU utilization target, and storage per shard. Scenario presets (URL Shortener, Video Streaming, E-Commerce Flash Sale, Chat, Social Feed, Ride Sharing) load realistic numbers in one click.
-
-### Outputs
-
-- **Traffic** — average read/write QPS and peak QPS
-- **Storage** — ingestion rate, per-day, per-year, and retained total with replication and overhead
-- **Cache & Memory** — the 80/20 working-set cache size and the Redis-class node count
-- **Bandwidth** — peak ingress and egress
-- **Hardware** — app server count from target CPU saturation, and database shard count
-
-Every stat shows the formula that produced it, with your actual numbers substituted in.
-
-### Numbers Every Engineer Should Know
-
-The reference section carries the canonical latency table (L1 cache 0.5 ns → cross-continent RTT 150 ms) and a powers-of-two table. Click any latency row to add it to the **Latency Budget** composer — stack up a request path (e.g. 1 cross-AZ round trip + 2 NVMe reads) and compare the total against a 200 ms API SLO.
-
-### Audit My Math
-
-One click sends your assumptions and results to the AI, which reviews them against the selected scenario and returns a structured critique: a verdict, severity-ranked findings with concrete fixes, and real-world factors the estimate omits (index overhead, compression, replication lag buffers, CDN offload, …).
-
-### Export
-
-The Export menu copies the summary as **Markdown with LaTeX formulas**, sends it into the **AI Chat** as a prefilled message, or appends it to any **Guide section**.
+- **AI Capability Router & BYOK**: Choose models per task tier — **Quick** (fast starters/classification), **Deep** (tutoring, grading, critique), and **Research** (Kit synthesis & expansion). Supply personal encrypted **BYOK** keys (`Gemini`, `OpenAI`, `Claude`) or custom OpenAI-compatible endpoints (`Ollama`, `vLLM`, `LM Studio`, `OpenRouter`).
+- **Account & Security**: Manage password, active sessions, **Passkeys**, and linked **OIDC** accounts.
+- **Personal `tbk_` Tokens & MCP**: Mint read-write or **read-only** `tbk_` tokens under **API & MCP Tokens** to connect Claude Desktop, Cursor, or Claude Code to `POST /api/mcp` — letting external AI assistants search your Kits, inspect due cards, record reviews, or commit study notes.
 
 ---
 
-## Pomodoro Timer
+## 9. Keyboard Shortcuts
 
-The Pomodoro timer is accessible globally from the sidebar. Click **Pomodoro** (`⌘9`) to open the timer modal.
-
-### Timer Features
-
-- **Three modes** — Pomodoro (25 min), Short Break (5 min), Long Break (15 min)
-- **Circular progress ring** — smooth visual countdown
-- **Plant gamification** — 🌱→🌿→🪴→🌸 plant grows as you focus; 🥀 if focus is lost
-- **Task name** — label what you're working on
-- **±5 minute adjustments** — add or subtract time during a session
-- **Strict Mode** — kills the plant if you tab away while the timer is running
-- **Custom durations** — configure all three timer lengths in Settings
-- **Persistent state** — timer preferences persist across page refreshes
-
-### Plant States
-
-| Progress | Plant |
-|----------|-------|
-| Starting | 🌱 Seed |
-| 25% complete | 🌿 Sprout |
-| 50% complete | 🪴 Plant |
-| 75%+ complete | 🌸 Flower |
-| Focus lost (strict mode) | 🥀 Dead |
-
----
-
-## Settings & Configuration
-
-The Settings page (`/settings`) provides:
-
-### Gemini API Key
-
-- Enter and verify your Google Gemini API key
-- Status indicator: Connected / Not configured
-- Key is stored server-side in the SQLite database
-- Can also be provided via the `GEMINI_API_KEY` environment variable at startup
-- Get your key at [Google AI Studio](https://aistudio.google.com/apikey)
-
-### AI Shadow Memory
-
-The AI maintains a persistent **profile** about you to personalize responses (e.g., "interviewing at Google in 3 weeks," "strongest in distributed systems, weakest in storage"). 
-
-- The AI automatically extracts facts from your chat sessions
-- You can manually view and edit the profile text
-- This context is injected into every AI prompt
-
-### AI Model Selection
-
-Choose from available Gemini models:
-- **Gemini 3.5 Flash** — Fast and efficient (recommended for most use)
-- **Gemini 2.5 Flash** — Previous generation, still capable
-- **Gemini 2.5 Pro** — Most capable, slower responses
-- **Gemini 2.0 Flash** — Legacy model
-
-Model selection is persisted in localStorage and used across all AI features.
-
-### Appearance
-
-Toggle between **Dark Mode** (default) and **Light Mode** with the theme button, or use `⌘D` anywhere in the app.
-
-### System Diagnostics
-
-View database statistics:
-- Guide sections filled
-- Total flashcards
-- Whiteboards saved
-- Cached AI starters
-
-**Clear AI Starter Caches** — forces the app to regenerate topic-specific starter prompts on next visit.
-
-### Data Management
-
-- **Export Guide (.md)** — Download all your committed guide notes as a single Markdown document
-- **Export All Data** — Download the full database as JSON (decks, flashcards, boards, guide content, profile)
-- **Import Data** — Restore from a previously exported JSON file
-
----
-
-## Keyboard Shortcuts
+Use `⌘` on macOS or `Ctrl` on Windows/Linux (`src/hooks/useKeyboardShortcuts.js`):
 
 | Shortcut | Action |
 |----------|--------|
-| `⌘1` | Navigate to Chat |
-| `⌘2` | Navigate to Guide |
-| `⌘3` | Navigate to Builder |
-| `⌘4` | Navigate to Flashcards |
-| `⌘5` | Navigate to Feynman |
-| `⌘6` | Navigate to Interleaved |
-| `⌘7` | Navigate to Knowledge Graph |
-| `⌘8` | Navigate to BotE Calculator |
-| `⌘9` | Toggle Pomodoro timer |
-| `⌘,` | Navigate to Settings |
-| `⌘K` | Toggle AI Chat panel (on Guide, Builder, Flashcards pages) |
-| `⌘E` | Toggle the quick BotE Calculator modal |
-| `⌘B` | Toggle sidebar collapse |
-| `⌘D` | Toggle Dark/Light Mode |
-| `⌘S` | Save board (in Builder) |
-| `⌘/` | Search topics (in Guide) |
+| `⌘K` or `⌘/` | Open Global Hybrid Search / Command Palette |
+| `⌘1` | AI Chat (`/chat` or `/k/:slug/chat`) |
+| `⌘2` | Knowledge Guide (`/guide` or `/k/:slug/guide`) |
+| `⌘3` | Canvas (`/builder` or `/k/:slug/canvas`, if enabled on Kit) |
+| `⌘4` | Flashcards (`/study` or `/k/:slug/study`) |
+| `⌘5` | Feynman Evaluator (`/feynman` or `/k/:slug/feynman`) |
+| `⌘6` | Interleaved Review (`/interleaved` or `/k/:slug/interleaved`) |
+| `⌘7` | Knowledge Graph (`/graph` or `/k/:slug/graph`) |
+| `⌘8` | BotE Calculator page (if enabled on Kit) |
+| `⌘9` | Toggle Pomodoro Focus Timer |
+| `⌘E` | Toggle quick BotE Calculator modal (outside text inputs) |
+| `⌘J` | Toggle sliding AI Chat panel (on Guide, Canvas, and Study pages) |
+| `⌘B` | Collapse / expand navigation sidebar (outside text inputs) |
+| `⌘D` | Toggle Dark / Light theme (outside text inputs) |
+| `⌘S` | Save active Canvas board |
+| `⌘,` | Open Settings (`/settings`) |

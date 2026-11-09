@@ -2,7 +2,7 @@
 
 # 🧰 Toolbox
 
-**A self-hosted AI study hub for system design interviews**
+**A self-hosted, multi-tenant AI study platform built around portable learning Kits**
 
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://hub.docker.com)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
@@ -11,7 +11,7 @@
 
 ![Toolbox Chat Interface](docs/screenshots/screenshot-chat.png)
 
-Toolbox is a self-hosted web app that brings together everything you need to prepare for system design interviews: an AI tutor, an editable knowledge library, a drag-and-drop architecture whiteboard, spaced-repetition flashcards, and a Pomodoro timer — all in one dark, focused interface.
+Toolbox v2 is a self-hosted web app for mastering complex domains through AI-synthesized **Kits** (shipping with an official **System Design Starter Kit** out of the box). Compile custom Kits from any topic, PDF, Markdown file, or URL; practice with FSRS-6 spaced repetition, prerequisite-graph credit propagation, anti-sycophancy drills, and dual-mode visual canvases — backed by a single SQLite file.
 
 ---
 
@@ -19,18 +19,16 @@ Toolbox is a self-hosted web app that brings together everything you need to pre
 
 | Feature | Description |
 |---------|-------------|
-| 🤖 **AI Learning Chat** | Session-based chat with 4 AI personas (Socratic, ELI5, Strict, Devil's Advocate), topic-specific starter prompts, and concept map generation |
-| 📖 **Knowledge Guide** | 7-pillar structured library with AI-assisted Commit flow to save learnings from chat sessions |
-| 🎨 **Architecture Builder** | React Flow-powered whiteboard with 25+ components, drag-to-connect anchors, minimap, multi-select, templates, and AI design verification |
-| 📚 **Flashcards + SRS** | SM-2 spaced repetition system with per-deck settings, card browser, deck stats, and a study activity heatmap |
-| 🕸️ **Knowledge Graph** | Layered prerequisite map of ~60 system design concepts (React Flow + dagre) with a live SM-2 retention heatmap, lineage highlighting, readiness filters, curated learning tracks, and deep links into Guide, Builder, and Flashcards |
-| 🧱 **Adaptive Remediation** | Fail an advanced card and the SRS engine detects shaky foundations, then queues the prerequisite cards into your next review session |
-| 🧮 **BotE Calculator** | Back-of-the-envelope sizing sandbox: live QPS/storage/cache/bandwidth/hardware math, scenario presets, an interactive latency cheat-sheet with a budget composer, AI "Audit My Math", and 1-click Markdown export |
-| 🧠 **Feynman Simulator** | Voice-enabled Feynman technique: explain a concept, get structured AI feedback on gaps |
-| 🔀 **Interleaved Review** | Study all due cards across every deck in a single shuffled session |
-| 🍅 **Pomodoro Timer** | Persistent focus timer with plant gamification (🌱→🌸→🥀) and Strict Mode |
-| ⚙️ **Shadow Memory** | The AI learns your timeline, strengths, and goals across sessions for personalized coaching |
-| 🔌 **Multi-Provider AI** | Gemini, Claude, and OpenAI out of the box, plus bring-your-own-model via any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, OpenRouter, …) with live model discovery |
+| 📦 **Multi-Kit Library & Sharing** | Organize study workspaces into portable Kits (`<slug>.toolbox-kit.json` skeletons and `<slug>.toolbox-backup.zip` full backups with uploaded sources, cards, notes, and boards) plus an instance-wide Shared Library (`/shared`). |
+| 🧬 **4-Stage Deep Research Kit Compiler** | Build a Kit on any domain (`/new`) via source ingestion (`unpdf` / Markdown / URLs), diagnostic calibration, SearXNG-grounded curriculum DAG synthesis, interactive refinement, and Living Kit sub-DAG expansion. |
+| 📚 **FSRS-6 + FIRe Graph Credit** | Pure-TypeScript 21-weight FSRS-6 scheduler (`desired_retention` targeting, lazy v1 SM-2 migration) paired with **FIRe-Lite** upward fractional credit to prerequisites and downward remediation queues on lapses. |
+| 🎯 **Guided Drills & `⚡ Challenge Node`** | Attempt-gated recall, application, synthesis, and critique drills with progressive hints, errors-first anti-sycophancy grading, and a first-principles `⚡ Challenge Node` diagnostic to fast-track mastered topics. |
+| 🎨 **Dual-Mode Canvas** | Per-Kit `architecture` whiteboard (25+ system components, templates) or Novakian `concept` map (labeled linking phrases), both with structured AI rubric critique. |
+| 🤖 **Capability Router, BYOK & Hybrid RAG** | Route `quick`, `deep`, and `research` tasks across Gemini, OpenAI, Claude, or any OpenAI-compatible endpoint (Ollama, vLLM, LM Studio, OpenRouter), with per-user encrypted BYOK keys and local `sqlite-vec` + `FTS5` Reciprocal Rank Fusion search. |
+| 🖼️ **Constructive Diagrams & Math** | Strict-sanitized inline `language-svg` figures, strict-mode Mermaid diagrams, and bundled offline KaTeX math rendering. |
+| 🔐 **Zero-Friction Local or Multi-Tenant Auth** | Runs out of the box with an implicit local owner (`AUTH_REQUIRED=false`), or scales to multi-user auth with `scrypt` passwords, Passkeys (WebAuthn), OIDC SSO, audit logs, and online SQLite backups. |
+| 🔌 **Built-In MCP Server** | Stateless Streamable HTTP Model Context Protocol endpoint (`POST /api/mcp`) secured by personal `tbk_` bearer tokens (read-write or read-only) for Claude Desktop, Cursor, and CLI agents. |
+| 🧮 **BotE Calculator & Focus Tools** | Back-of-the-envelope capacity sandbox with AI math audit (enabled per Kit capability), voice-capable Feynman evaluator, cross-Kit `/review` queue, and Pomodoro focus timer. |
 
 ---
 
@@ -38,7 +36,7 @@ Toolbox is a self-hosted web app that brings together everything you need to pre
 
 <table>
   <tr>
-    <td align="center"><em>Knowledge Graph — prerequisite map with live SRS heatmap</em></td>
+    <td align="center"><em>Knowledge Graph — prerequisite DAG with live FSRS-6 retrievability</em></td>
     <td align="center"><em>BotE Calculator — capacity estimation sandbox</em></td>
   </tr>
   <tr>
@@ -46,7 +44,7 @@ Toolbox is a self-hosted web app that brings together everything you need to pre
     <td><img src="docs/screenshots/screenshot-calculator.png" alt="BotE Calculator" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Architecture Whiteboard Builder</em></td>
+    <td align="center"><em>Architecture & Concept Canvas</em></td>
     <td align="center"><em>Structured Knowledge Guide</em></td>
   </tr>
   <tr>
@@ -54,8 +52,8 @@ Toolbox is a self-hosted web app that brings together everything you need to pre
     <td><img src="docs/screenshots/screenshot-guide.png" alt="Knowledge Guide" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Spaced Repetition Flashcards</em></td>
-    <td align="center"><em>Feynman Technique Simulator</em></td>
+    <td align="center"><em>FSRS-6 Spaced Repetition Flashcards</em></td>
+    <td align="center"><em>Feynman First-Principles Evaluator</em></td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/screenshot-flashcards.png" alt="Flashcards" /></td>
@@ -73,19 +71,17 @@ Toolbox is a self-hosted web app that brings together everything you need to pre
 git clone https://github.com/arvarik/toolbox.git
 cd toolbox
 cp .env.example .env
-# Add your API keys to .env (or configure via the Settings UI)
+# Optional: set GEMINI_API_KEY / OPENAI_API_KEY / CLAUDE_API_KEY in .env (or configure in Settings UI)
 docker compose up -d
 ```
 
-Access at `http://your-server:3100`.
+Open `http://localhost:3100`.
 
-> Get a free Gemini API key at [Google AI Studio](https://aistudio.google.com/apikey)
-
-### Local Development
+### Local Development (Node.js ≥ 24)
 
 ```bash
 npm install
-npm run dev   # Vite (5173) + Express (3100)
+npm run dev   # Vite (:5173) + Express (:3100, native TypeScript)
 ```
 
 ---
@@ -94,36 +90,38 @@ npm run dev   # Vite (5173) + Express (3100)
 
 | Document | Description |
 |----------|-------------|
-| [User Guide](docs/user-guide.md) | Complete guide to all features and workflows |
-| [API Reference](docs/api.md) | Full REST API — every endpoint, request/response shape |
-| [SRS Algorithm](docs/srs-algorithm.md) | SM-2 implementation, state machine, Hypercorrection Penalty |
-| [Deployment Guide](docs/deployment.md) | Docker, Proxmox LXC, Nginx/Caddy setup |
-| [Architecture](docs/architecture.md) | Tech stack, data model, AI integration |
-| [Design Reference](docs/design.md) | CSS design system, component patterns, motion guidelines |
-| [Agent Instructions](docs/AGENTS.md) | For AI coding agents — rules, patterns, gotchas |
-| [Contributing](CONTRIBUTING.md) | Dev setup, coding standards, PR process |
+| [User Guide](docs/user-guide.md) | Library workflows, Kit Compiler, Guided Drills, Canvas modes, MCP setup, shortcuts |
+| [API Reference](docs/api.md) | REST endpoints (Auth, Admin, Kits, Compiler, AI Router, Pedagogy) + MCP protocol |
+| [SRS & Pedagogy Spec](docs/srs-algorithm.md) | FSRS-6 21-weight DSR math, FIRe-Lite graph credit, remediation, anti-sycophancy |
+| [Deployment Guide](docs/deployment.md) | Docker (`node:24-trixie-slim`), reverse proxies, OIDC/Passkeys, SearXNG, airgapped ONNX |
+| [Architecture](docs/architecture.md) | TypeScript stack, `platform/` boundary, tenant-scoped SQLite + `sqlite-vec`, worker isolation |
+| [Design Reference](docs/design.md) | Tailwind v4 semantic `@theme` tokens (WCAG AA), legacy CSS classes, SVG sanitizer rules |
+| [Agent Instructions](docs/AGENTS.md) | Invariants, `Scope` / `tenant-lint` rules, and codebase gotchas for coding agents |
+| [Contributing](CONTRIBUTING.md) | Dev setup, `oxlint` / `tsc` / `tenant-lint` gates, Vitest & Playwright suites |
 
 ---
 
-## ⚙️ Configuration
+## ⚙️ Core Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3100` | Server port |
-| `DB_PATH` | `./data/toolbox.db` | SQLite database path |
-| `GEMINI_API_KEY` | — | Gemini API key (can also be set via Settings UI) |
-| `CLAUDE_API_KEY` | — | Claude API key (can also be set via Settings UI) |
-| `OPENAI_API_KEY` | — | OpenAI API key (can also be set via Settings UI) |
+| `PORT` | `3100` | HTTP server port |
+| `DATA_DIR` | `./data` | Directory for SQLite DB, backups, ONNX models, and `secret.key` |
+| `DB_PATH` | `./data/toolbox.db` | SQLite database path (auto-migrates v1 databases in place) |
+| `AUTH_REQUIRED` | `false` | Set `true` to require login immediately (auto-enables once an account is created) |
+| `PUBLIC_URL` | — | Canonical `https://...` origin (required for Passkeys & OIDC behind a reverse proxy) |
+| `TRUST_PROXY_HOPS` | `0` | Number of reverse-proxy hops to trust (`0`–`10`) |
+| `TOOLBOX_SECRET_KEY` | auto-generated | 32-byte hex/base64 key for `AES-256-GCM` credential encryption at rest |
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` / `CLAUDE_API_KEY` | — | Instance AI keys (also configurable in Admin Settings or per-user BYOK) |
+| `SEARXNG_URL` | — | Self-hosted SearXNG URL for grounded web research |
 
-Custom OpenAI-compatible endpoints (Ollama, LM Studio, vLLM, OpenRouter, Groq, ...) are managed in the Settings UI. The app discovers each provider's model catalog live, so new model releases appear without an app update.
-
-All user data lives in a single SQLite file — back it up by copying that file.
+See [`.env.example`](.env.example) and [`docs/deployment.md`](docs/deployment.md) for OIDC, SMTP, airgapped model pre-fetching, and backup settings.
 
 ---
 
 ## 🛠️ Tech Stack
 
-React 19 · Vite · React Router · Zustand · React Flow (`@xyflow/react`) · dagre · Vanilla CSS · Node.js · Express · SQLite (`better-sqlite3`) · Vercel AI SDK (Gemini / Claude / OpenAI / BYOM) · Docker
+Node.js 24 (native TypeScript) · Express 5 · SQLite (`better-sqlite3` + `sqlite-vec` + `FTS5`) · `@huggingface/transformers` (`all-MiniLM-L6-v2` ONNX worker) · Zod v4 · Model Context Protocol SDK · React 19 · Vite 8 · Tailwind CSS v4 · Zustand · React Flow (`@xyflow/react`) + `dagre` · Vercel AI SDK
 
 ---
 

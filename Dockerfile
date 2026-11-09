@@ -23,9 +23,10 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy server and shared TypeScript modules (Node 24 runs .ts natively)
+# Copy server, shared, and operator scripts (Node 24 runs .ts natively)
 COPY server/ ./server/
 COPY shared/ ./shared/
+COPY scripts/ ./scripts/
 
 # Copy built frontend
 COPY --from=builder /app/dist ./dist

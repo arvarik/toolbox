@@ -1,204 +1,78 @@
-# Toolbox — Deployment Guide
+# Toolbox v2 — Deployment Guide
 
-This guide covers all deployment options for Toolbox, from local development to production self-hosting.
-
----
-
-## Table of Contents
-
-1. [Prerequisites](#prerequisites)
-2. [Local Development](#local-development)
-3. [Docker Compose (Recommended)](#docker-compose-recommended)
-4. [Docker Manual Build](#docker-manual-build)
-5. [Proxmox LXC Deployment](#proxmox-lxc-deployment)
-6. [Reverse Proxy Setup (Nginx/Caddy)](#reverse-proxy-setup)
-7. [Environment Variables Reference](#environment-variables-reference)
-8. [Data Persistence & Backups](#data-persistence--backups)
-9. [Upgrading](#upgrading)
-10. [Health Checks](#health-checks)
-11. [Troubleshooting](#troubleshooting)
+Production self-hosting guide covering Docker Compose, multi-tenant security, reverse proxies, SearXNG web grounding, airgapped ONNX embeddings, and backups.
 
 ---
 
 ## Prerequisites
 
-| Requirement | Notes |
-|-------------|-------|
-| Docker 20+ | For containerized deployment |
-| Node.js 18+ | For local development only |
-| Gemini API Key | Get free at [Google AI Studio](https://aistudio.google.com/apikey) |
-| 512MB RAM | Minimum. The Docker Compose sets a 512MB limit. |
+| Requirement | Minimum / Notes |
+|-------------|-----------------|
+| **Container Runtime** | Docker 24+ with Docker Compose v2 |
+| **Bare-Metal Runtime** | Node.js ≥ 24 on a **glibc** OS (Debian 12/13, Ubuntu 22.04+, macOS) |
+| **Memory & CPU** | **1 GB RAM** and **1.0 vCPU** (`sqlite-vec` + quantized ONNX embedding worker) |
+| **Disk** | ~500 MB for container image + `${DATA_DIR}` for SQLite, backups, uploads, and ~90 MB ONNX model cache |
+
+> **Why Debian `node:24-trixie-slim` instead of Alpine?** Native prebuilds for `better-sqlite3`, `sqlite-vec`, and `onnxruntime-node` require `glibc`. Running on `trixie-slim` avoids slow source compilation and musl runtime crashes.
 
 ---
 
-## Local Development
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/arvarik/toolbox.git
-cd toolbox
-
-# 2. Install dependencies
-npm install
-
-# 3. Configure environment
-cp .env.example .env
-# Edit .env and optionally add your GEMINI_API_KEY
-
-# 4. Start the development server
-npm run dev
-```
-
-This starts:
-- **Frontend**: Vite dev server at `http://localhost:5173` (with HMR)
-- **Backend**: Express API at `http://localhost:3100`
-
-The frontend proxies API requests to the backend automatically.
-
-> **API Key via UI**: You can skip the `.env` step and set your API key through the Settings page after the app launches.
-
----
-
-## Docker Compose (Recommended)
-
-This is the recommended production deployment method.
-
-### 1. Prepare Your Environment
+## 1. Docker Compose (Recommended)
 
 ```bash
 git clone https://github.com/arvarik/toolbox.git
 cd toolbox
-
 cp .env.example .env
-```
-
-Edit `.env` and set your API key:
-
-```env
-GEMINI_API_KEY=AIza...your-key-here
-PORT=3100
-DB_PATH=./data/toolbox.db
-```
-
-### 2. Start the Application
-
-```bash
+# Edit .env (set API keys, PUBLIC_URL, or AUTH_REQUIRED as needed)
 docker compose up -d
 ```
 
-The app will be available at `http://your-server:3100`.
-
-### 3. Verify It's Running
+Verify container health:
 
 ```bash
 docker compose ps
 docker compose logs -f toolbox
 ```
 
-### docker-compose.yml Overview
-
-The included `docker-compose.yml` is pre-configured with:
-- **Named volume** (`toolbox-data`) for database persistence
-- **Health check** using `curl http://127.0.0.1:3100/api/health` (uses `127.0.0.1` not `localhost` to avoid IPv6 issues in LXC/Alpine containers)
-- **CPU limit**: `0.5` cores
-- **Memory limit**: `512M`
-- **Watchtower label**: `com.centurylinklabs.watchtower.enable=true` for auto-updates
+Both `Dockerfile` and `docker-compose.yml` run a zero-dependency Node `fetch` healthcheck against `http://127.0.0.1:3100/api/health` (no `curl` or `wget` binary required in `trixie-slim`, and `127.0.0.1` avoids IPv6 loopback quirks in LXC).
 
 ---
 
-## Docker Manual Build
+## 2. Securing a Multi-Tenant Instance
 
-For environments where Docker Compose isn't available:
+By default (`AUTH_REQUIRED=false`), Toolbox starts in frictionless single-user mode under an implicit local owner (`local@toolbox.local`).
 
-```bash
-# Build the image
-docker build -t toolbox .
-
-# Run the container
-docker run -d \
-  --name toolbox \
-  -p 3100:3100 \
-  -v toolbox-data:/app/data \
-  -e GEMINI_API_KEY=your-key-here \
-  toolbox
-```
-
-The `Dockerfile` uses a **multi-stage build**:
-1. **Build stage**: Installs all dependencies and runs `vite build`
-2. **Production stage**: Copies only the built assets and production dependencies, resulting in a lean image
+To run a shared or internet-facing instance:
+1. Set `AUTH_REQUIRED=true` and `PUBLIC_URL=https://toolbox.example.com` in `.env` (or open **Settings → Instance Admin → Secure This Instance** in the UI to create the first admin account; creating any password account permanently enables auth).
+2. Set an explicit 32-byte `TOOLBOX_SECRET_KEY` (`openssl rand -hex 32`) in `.env` **or** ensure `${DATA_DIR}/secret.key` is persisted on your volume. `secretBox` uses this key (`AES-256-GCM`) to encrypt provider API keys, user BYOK keys, OIDC client secrets, and SMTP passwords at rest.
+3. **Passkeys (WebAuthn) & OIDC SSO**: Both derive the Relying Party ID and callback URLs from `PUBLIC_URL`. Set `PUBLIC_URL` to your exact external origin (no trailing path) and configure `TRUST_PROXY_HOPS=1` when behind Nginx/Caddy/Traefik.
 
 ---
 
-## Proxmox LXC Deployment
+## 3. Reverse Proxy Configuration
 
-Toolbox is optimized for Proxmox LXC containers.
-
-### Container Setup
-
-1. Create a new LXC container (Debian 12 or Ubuntu 22.04)
-2. Enable **nesting** in container options (required for Docker)
-3. Recommended specs:
-   - CPU: 1-2 cores
-   - RAM: 512MB (1GB recommended)
-   - Storage: 4GB
-
-### Install Docker in LXC
-
-```bash
-# Inside the LXC container
-apt update && apt install -y curl
-curl -fsSL https://get.docker.com | sh
-systemctl enable docker
-```
-
-### Deploy Toolbox
-
-```bash
-git clone https://github.com/arvarik/toolbox.git
-cd toolbox
-cp .env.example .env
-# Edit .env
-docker compose up -d
-```
-
-### Known LXC Quirks
-
-> **IPv6 Loopback Workaround**: The health check in `docker-compose.yml` uses `127.0.0.1` instead of `localhost`. This prevents Docker health checks from failing due to IPv6 DNS resolution issues common in Alpine-based containers inside LXC.
-
-> **Kernel Restrictions**: Some older Proxmox kernels may prevent certain Docker networking features. If you encounter issues, try adding `keyctl=1` and `nesting=1` to the container's LXC config file.
-
----
-
-## Reverse Proxy Setup
+Streaming AI chat (`POST /api/chat/stream`) and Kit compilation (`POST /api/compiler/compile`) use **Server-Sent Events (SSE)**. Disable response buffering on your proxy.
 
 ### Nginx
 
 ```nginx
 server {
-    listen 80;
-    server_name toolbox.yourdomain.com;
-    
-    # Redirect to HTTPS
-    return 301 https://$host$request_uri;
-}
-
-server {
     listen 443 ssl http2;
-    server_name toolbox.yourdomain.com;
-    
-    ssl_certificate /etc/letsencrypt/live/toolbox.yourdomain.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/toolbox.yourdomain.com/privkey.pem;
-    
+    server_name toolbox.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/toolbox.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/toolbox.example.com/privkey.pem;
+    client_max_body_size 110M; # Allows up to 100 MB .toolbox-backup.zip imports
+
     location / {
         proxy_pass http://127.0.0.1:3100;
         proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_cache_bypass $http_upgrade;
-        
-        # Required for Server-Sent Events (AI streaming)
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # Required for SSE streaming & MCP HTTP responses
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 300s;
@@ -206,151 +80,112 @@ server {
 }
 ```
 
-> **Important**: The `proxy_buffering off` setting is required for the streaming AI responses to work correctly.
+Set `TRUST_PROXY_HOPS=1` and `PUBLIC_URL=https://toolbox.example.com` in `.env`.
 
 ### Caddy
 
 ```caddy
-toolbox.yourdomain.com {
-    reverse_proxy localhost:3100 {
+toolbox.example.com {
+    request_body {
+        max_size 110MB
+    }
+    reverse_proxy 127.0.0.1:3100 {
         flush_interval -1
     }
 }
 ```
 
-Caddy handles HTTPS automatically via Let's Encrypt.
+---
+
+## 4. Grounded Web Research with SearXNG
+
+To enable live web citations in AI Chat and Stage 3 of the Deep Research Kit Compiler:
+1. Run a self-hosted [SearXNG](https://docs.searxng.org/) container on the same Docker network.
+2. Enable the `json` output format in SearXNG's `settings.yml`:
+   ```yaml
+   search:
+     formats:
+       - html
+       - json
+   ```
+3. Set `SEARXNG_URL=http://searxng:8080` in `.env` (or configure and test it in **Settings → Instance Admin → AI & Embeddings**).
 
 ---
 
-## Environment Variables Reference
+## 5. Airgapped / Offline Local Embeddings
+
+Toolbox runs `Xenova/all-MiniLM-L6-v2` (quantized ONNX, 384 dimensions) locally inside a persistent worker thread. Weights are pinned by HuggingFace commit revision and verified by SHA-256 (`scripts/fetch-models.ts`).
+
+To pre-populate weights for an airgapped environment:
+
+```bash
+# Pre-fetch and verify SHA-256 digests into ./data/models on a connected host
+node scripts/fetch-models.ts ./data/models
+
+# Or inside a running container before disconnecting egress
+docker exec toolbox node scripts/fetch-models.ts /app/data/models
+
+# Verify cached model integrity at any time
+docker exec toolbox node scripts/fetch-models.ts --check /app/data/models
+```
+
+Then set `TRANSFORMERS_OFFLINE=1` in `.env` so the worker never attempts runtime HuggingFace downloads.
+
+---
+
+## 6. Environment Variables Reference
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `3100` | TCP port the server listens on |
-| `DB_PATH` | `./data/toolbox.db` | Absolute or relative path for the SQLite database file |
-| `GEMINI_API_KEY` | — | Google Gemini API key (can also be set via the Settings UI) |
-| `NODE_ENV` | `production` | Set to `development` for verbose logging |
+| `PORT` | `3100` | HTTP listen port |
+| `HOST` | `0.0.0.0` | Bind address |
+| `NODE_ENV` | `production` | Serves built `dist/` SPA when `production` |
+| `DATA_DIR` | `./data` | Root directory for DB, `secret.key`, `backups/`, `models/`, and uploads |
+| `DB_PATH` | `${DATA_DIR}/toolbox.db` | SQLite database file path |
+| `TOOLBOX_SECRET_KEY` | auto (`${DATA_DIR}/secret.key`) | 32-byte hex or base64 key for `AES-256-GCM` encryption at rest |
+| `AUTH_REQUIRED` | `false` | Require login before any password account exists |
+| `PUBLIC_URL` | — | Canonical `http(s)://host` origin for Passkeys, OIDC, and email links |
+| `TRUST_PROXY_HOPS` | `0` | Trusted reverse-proxy hop count (`0`–`10`) |
+| `ALLOWED_HOSTS` | — | Optional comma-separated hostnames or `.domain` suffixes (`hostGuard`) |
+| `CORS_ORIGIN` | — | Optional trusted browser origin allowed to call `POST /api/mcp` |
+| `GEMINI_API_KEY` | — | Instance Gemini API key |
+| `OPENAI_API_KEY` | — | Instance OpenAI API key |
+| `CLAUDE_API_KEY` | — | Instance Anthropic Claude API key |
+| `SEARXNG_URL` | — | SearXNG base URL for grounded web search |
+| `MODELS_DIR` | `${DATA_DIR}/models` | Directory for local ONNX embedding models |
+| `TRANSFORMERS_OFFLINE` | — | Set `1` to forbid runtime HuggingFace network fetches |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | — | Optional OIDC SSO credentials (`OIDC_NAME`, `OIDC_MATCH_BY_EMAIL`) |
+| `SMTP_URL` / `MAIL_FROM` / `MAIL_REPLY_TO` | — | Optional SMTP transport for invites, magic links, and resets |
+| `BACKUP_INTERVAL_HOURS` / `BACKUP_KEEP` | `24` / `14` | Automated online SQLite snapshot cadence and retention count |
 
 ---
 
-## Data Persistence & Backups
+## 7. Data Persistence, Backups & Upgrading
 
-All user data is stored in a single SQLite file at `DB_PATH` (default: `./data/toolbox.db`).
+All persistent state lives inside `${DATA_DIR}` (`/app/data` in Docker):
+- `toolbox.db` (plus `-wal` / `-shm` journals while running)
+- `secret.key` (critical if `TOOLBOX_SECRET_KEY` is not set in `.env` — back this up alongside `toolbox.db` so encrypted keys remain decryptable!)
+- `backups/` (online SQLite snapshots created automatically or via **Settings → Instance Admin → Backups**)
+- `sources/` (uploaded PDFs/files attached to Kits)
+- `models/` (cached ONNX weights)
 
-### What's Stored
+### Per-Kit Portable Backups
+Individual users can export any Kit from the Library without admin access:
+- **Export Kit (`.toolbox-kit.json`)**: Clean, shareable curriculum skeleton with zero personal state.
+- **Export Full Backup (`.toolbox-backup.zip`)**: Complete portable archive of the Kit skeleton, flashcards + FSRS-6 state, committed Guide notes, drills, boards, chat sessions, and uploaded source files.
 
-- Flashcard decks and cards (with SRS state)
-- Whiteboard boards and their data
-- Guide section content (committed notes)
-- User profile / AI shadow memory
-- Cached AI starter prompts
-- API key and configuration
-
-### Backup
-
-```bash
-# Simple file backup
-cp ./data/toolbox.db ./backups/toolbox-$(date +%Y%m%d).db
-
-# Or export via the UI: Settings → Export All Data
-```
-
-### Restore
+### Upgrading from v1 or Earlier v2 Releases
 
 ```bash
-# Stop the container
-docker compose down
-
-# Replace the database file
-cp backup.db ./data/toolbox.db
-
-# Restart
-docker compose up -d
-```
-
-Or use the **Import Data** button in the Settings UI to restore from a JSON export.
-
----
-
-## Upgrading
-
-### Docker Compose
-
-```bash
-# Pull the latest image
 docker compose pull
-
-# Restart with the new image
 docker compose up -d
 ```
 
-Database migrations run automatically on startup — no manual migration steps needed.
-
-### With Watchtower
-
-If you have [Watchtower](https://containrrr.dev/watchtower/) running, Toolbox is pre-labeled for automatic updates:
-
-```yaml
-labels:
-  - "com.centurylinklabs.watchtower.enable=true"
-```
-
-Watchtower will automatically pull and restart when a new image is published.
+Startup migrations in `server/db.ts` (`initPlatformSchema` + `initKitsSchema`) automatically upgrade v1 SQLite databases in place — preserving existing decks, SM-2 progress (lazily bootstrapped into FSRS-6), Guide notes, boards, and Shadow Memory inside the local owner's System Design Kit.
 
 ---
 
-## Health Checks
+## 8. Proxmox LXC Notes
 
-The server exposes a health endpoint:
-
-```
-GET /api/health
-```
-
-Response:
-```json
-{ "status": "ok" }
-```
-
-The Docker health check runs every 30 seconds with a 10-second timeout. A container is considered unhealthy after 3 consecutive failures.
-
----
-
-## Troubleshooting
-
-### Container Won't Start
-
-```bash
-# Check logs
-docker compose logs toolbox
-
-# Common cause: DB_PATH directory doesn't exist
-mkdir -p data
-```
-
-### AI Features Not Working
-
-1. Check the API key is set: **Settings → Gemini API Key** should show "Connected"
-2. Verify the key is valid by clicking "Save & Verify"
-3. Check the server logs for Gemini API errors:
-   ```bash
-   docker compose logs toolbox | grep -i gemini
-   ```
-
-### Streaming Responses Cut Off
-
-This is usually a reverse proxy timeout issue. Ensure your proxy config has:
-- `proxy_buffering off` (Nginx)
-- `proxy_read_timeout 300s` (Nginx)
-- `flush_interval -1` (Caddy)
-
-### Database Locked Error
-
-If multiple instances are running against the same database file, SQLite will throw a "database locked" error. Ensure only one container accesses the database at a time.
-
-### Permission Denied on DB File
-
-```bash
-# Fix permissions on the data directory
-chown -R 1000:1000 ./data
-```
+- Use a Debian 12/13 LXC template with **Nesting** enabled (`nesting=1`), **1–2 vCPUs**, **1 GB+ RAM**, and **8 GB+ disk**.
+- Healthchecks use `127.0.0.1` via Node's built-in `fetch`, avoiding Alpine/LXC IPv6 `localhost` resolution failures.
