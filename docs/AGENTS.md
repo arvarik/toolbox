@@ -17,9 +17,9 @@
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Runtime | Node.js ≥ 24 (`node server/index.ts`) | Native TypeScript type-stripping — no server build step |
-| Contracts | TypeScript + Zod v4 (`shared/`) | Runtime-pure (`no-restricted-imports` blocks `node:*` and `react`) |
-| Frontend | React 19 + Vite 8 + React Router v7 | Zustand stores in `src/stores/` |
+| Runtime | Node.js ≥ 26 (`node server/index.ts`) | Native TypeScript type-stripping — no server build step |
+| Contracts | TypeScript + Zod v4 (`shared/`) | Runtime-pure (`scripts/tenant-lint.mjs` blocks `node:*` and `react` imports) |
+| Frontend | React 19 + Vite 8 + React Router 8 | Zustand stores in `src/stores/` |
 | Styling | Tailwind v4 semantic `@theme` (`src/theme.css`) + legacy CSS (`src/index.css`) | WCAG 2.1 AA contrast verified by `scripts/contrast-audit.mjs` and `src/__tests__/theme_contrast.test.ts` |
 | Icons | `lucide-react` | Consistent icon set |
 | Diagrams & Math | `@xyflow/react` + `dagre`, strict `mermaid`, sanitized `language-svg`, bundled `katex` | Canvas + Knowledge Graph DAG + inline constructive figures |
@@ -34,19 +34,19 @@
 1. **One-Way `platform/` Boundary**:
    - Reusable self-hosted infrastructure lives in `server/platform/*` and `shared/platform/*` (`auth`, `tenancy`, `crypto`, `audit`, `mail`, `settings`, `net`, `db`, `archive`, `workers`, `ai`).
    - Toolbox domain code lives in `server/kits/*`, `server/compiler/*`, `server/srs/*`, `server/graph/*`, `server/mcp/*`, `server/search/*`, `server/ai/*`, `server/routes/*`, and `shared/kits/*`.
-   - Domain imports `platform/`; **`platform/` never imports domain** (enforced by `.oxlintrc.json` and `scripts/tenant-lint.mjs`).
+   - Domain imports `platform/`; **`platform/` never imports domain** (enforced by `scripts/tenant-lint.mjs`).
 2. **Single `server/appConfig.ts` for Brand Constants**:
    - Keep app-specific identifiers (`APP_SLUG`, `SESSION_COOKIE`, `TOKEN_PREFIX = "tbk_"`, `SECRET_KEY_ENV = "TOOLBOX_SECRET_KEY"`, `DEFAULT_PORT = 3100`) centralized in `server/appConfig.ts`.
 3. **Branded `Scope` + `tenant-lint` on Every Owned Table**:
    - Every HTTP route touching user-owned tables (`kits`, `guide_content`, `chat_starters`, `decks`, `flashcards`, `remediation_queue`, `drills`, `drill_attempts`, `boards`, `chat_sessions`, `kit_sources`, `kit_source_chunks`, `episodic_memory`, `study_sessions`, `user_learning_profile`, `user_ai_settings`, `rag_chunks`) MUST extract `const scope = scopeOf(req)` and filter SQL with `ownerId = ?` (`scope.ownerId`).
-   - `npm run lint:tenant` statically AST-checks every `db.prepare(...)` / `db.exec(...)` call in `server/**/*.ts`. Only add `// tenant-lint: allow <reason>` on genuine instance-wide admin/migration queries with a clear explanation.
+   - `npm run lint:tenant` statically checks every SQL string in `server/**/*.ts` that names an owned table (DDL excluded). Only add `// tenant-lint: allow <reason>` on genuine instance-wide admin/migration queries with a clear explanation.
 4. **Encrypted Credentials at Rest (`secretBox`)**:
    - Never store plaintext API keys, OIDC secrets, or SMTP passwords in SQLite. Seal with `sealCredential()` / `secretBox.seal()` (`AES-256-GCM` keyed by `TOOLBOX_SECRET_KEY` or `<DATA_DIR>/secret.key`).
 5. **Co-Located Subsystem Schemas**:
    - Platform tables live in `initPlatformSchema(db)` (`server/platform/db/platformSchema.ts`); Kit/study tables and legacy v1→v2 automatic migration live in `initKitsSchema(db)` (`server/kits/kitsSchema.ts`) plus `ensureHybridSearchTables(db)` (`server/search/hybridSearch.ts`), orchestrated by `server/db.ts`.
 6. **Semantic `@theme` Tokens & WCAG AA Contrast**:
    - New `.tsx` views use Contrack-compatible semantic Tailwind v4 tokens (`bg-surface`, `bg-surface-container`, `bg-surface-container-lowest`, `text-on-surface`, `text-on-surface-variant`, `bg-primary`, `text-on-primary`, `text-on-primary-wash`, `text-ai`, `text-on-ai-wash`, `border-outline-variant`, `text-danger`, `text-success`, `text-warning`).
-   - Keep `src/theme.css` and `src/lib/themePalette.ts` synchronized; every text/surface and pill-wash pair must stay ≥ 4.5:1 in both dark and light modes.
+   - `src/theme.css` is the single source of color tokens. Every text/surface and pill-wash pair must stay ≥ 4.5:1 in both dark and light modes (`npm run audit:contrast` and `src/__tests__/theme_contrast.test.ts` parse `src/theme.css` directly).
 
 ---
 
@@ -76,13 +76,13 @@ server/
 └── routes/                 # Tenant-scoped Express routers
 
 src/
-├── App.tsx                 # React Router v7 route definitions
+├── App.tsx                 # React Router route definitions
 ├── theme.css               # Tailwind v4 semantic @theme tokens (dark + light)
 ├── index.css               # Legacy design system classes (.btn, .card, .sidebar, etc.)
 ├── components/auth/        # AuthGate.tsx + useAuth() context
 ├── components/settings/    # Account, Passkeys, BYOK, Capability Router, tbk_ Tokens & Admin UI
 ├── pages/                  # Library, NewKitStudio, KitPath, Drills, Review, Chat, Guide, Canvas, etc.
-├── stores/                 # Zustand global state (appStore, useKitStore, useTimerStore, useCalcStore)
+├── stores/                 # Zustand global state (appStore, useKitStore, useTimerStore, useCalcStore, useCommitStore)
 └── utils/                  # API clients (api.ts, authApi.ts, compilerApi.ts, pedagogyApi.ts, aiSettingsApi.ts), sanitizeSvg.ts, markdownPreprocess.ts
 ```
 
@@ -106,7 +106,7 @@ npm run reset-password -- <user>   # CLI temporary password reset for locked-out
 ## Common Gotchas (Preserve These)
 
 1. **SRS state after edits**: After saving card content via the card browser, re-fetch the full deck (`decksApi.get(deckId)`) to sync FSRS-6 state back to the UI.
-2. **Board auto-save vs manual save**: Boards auto-save after 3 seconds of inactivity. New boards (`id.startsWith('board-')`) are NOT auto-saved until first manual save.
+2. **Board auto-save vs manual save**: Boards auto-save after 3 seconds of inactivity. New boards (tracked in `unsavedIds` in `BuilderPage.tsx`) are NOT auto-saved until first manual save.
 3. **Chat panel state**: Each page (`guide`, `builder`, `study`) has its own chat panel state in `appStore.chatOpen`. Toggle with `toggleChat(page)`.
 4. **Streaming abort**: Always pass an `AbortController.signal` to `chatApi.stream()` so users can stop generation.
 5. **Toast notifications**: Use `addToast({ type: 'success'|'error'|'info', message: '...' })` from `useAppStore` for user feedback. Never use `alert()`.

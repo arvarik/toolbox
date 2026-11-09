@@ -48,6 +48,9 @@ export default defineConfig({
   build: {
     outDir: "dist",
     sourcemap: false,
+    // Writes the license text of every bundled package next to the app, so the
+    // shipped bundle keeps the notices its MIT, ISC, BSD and Apache licenses require.
+    license: { fileName: "THIRD-PARTY-LICENSES.md" },
   },
   test: {
     globals: true,

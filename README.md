@@ -4,7 +4,9 @@
 
 **A self-hosted, multi-tenant AI study platform built around portable learning Kits**
 
-[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://hub.docker.com)
+[![CI](https://img.shields.io/github/actions/workflow/status/arvarik/toolbox/ci.yml?branch=main&style=for-the-badge&label=CI)](https://github.com/arvarik/toolbox/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://img.shields.io/ossf-scorecard/github.com/arvarik/toolbox?style=for-the-badge&label=OpenSSF%20Scorecard)](https://scorecard.dev/viewer/?uri=github.com/arvarik/toolbox)
+[![Docker](https://img.shields.io/badge/Docker-GHCR-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://github.com/arvarik/toolbox/pkgs/container/toolbox)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
 
 </div>
@@ -77,12 +79,14 @@ docker compose up -d
 
 Open `http://localhost:3100`.
 
-### Local Development (Node.js ≥ 24)
+### Local Development (Node.js ≥ 26)
 
 ```bash
-npm install
+npm ci
 npm run dev   # Vite (:5173) + Express (:3100, native TypeScript)
 ```
+
+To run from source without Docker, use `npm ci && npm run build && npm start`. See the [deployment guide](docs/deployment.md#run-without-docker).
 
 ---
 
@@ -93,7 +97,7 @@ npm run dev   # Vite (:5173) + Express (:3100, native TypeScript)
 | [User Guide](docs/user-guide.md) | Library workflows, Kit Compiler, Guided Drills, Canvas modes, MCP setup, shortcuts |
 | [API Reference](docs/api.md) | REST endpoints (Auth, Admin, Kits, Compiler, AI Router, Pedagogy) + MCP protocol |
 | [SRS & Pedagogy Spec](docs/srs-algorithm.md) | FSRS-6 21-weight DSR math, FIRe-Lite graph credit, remediation, anti-sycophancy |
-| [Deployment Guide](docs/deployment.md) | Docker (`node:24-trixie-slim`), reverse proxies, OIDC/Passkeys, SearXNG, airgapped ONNX |
+| [Deployment Guide](docs/deployment.md) | Docker (`node:26-trixie-slim`), reverse proxies, OIDC/Passkeys, SearXNG, airgapped ONNX |
 | [Architecture](docs/architecture.md) | TypeScript stack, `platform/` boundary, tenant-scoped SQLite + `sqlite-vec`, worker isolation |
 | [Design Reference](docs/design.md) | Tailwind v4 semantic `@theme` tokens (WCAG AA), legacy CSS classes, SVG sanitizer rules |
 | [Agent Instructions](docs/AGENTS.md) | Invariants, `Scope` / `tenant-lint` rules, and codebase gotchas for coding agents |
@@ -111,7 +115,7 @@ npm run dev   # Vite (:5173) + Express (:3100, native TypeScript)
 | `AUTH_REQUIRED` | `false` | Set `true` to require login immediately (auto-enables once an account is created) |
 | `PUBLIC_URL` | — | Canonical `https://...` origin (required for Passkeys & OIDC behind a reverse proxy) |
 | `TRUST_PROXY_HOPS` | `0` | Number of reverse-proxy hops to trust (`0`–`10`) |
-| `TOOLBOX_SECRET_KEY` | auto-generated | 32-byte hex/base64 key for `AES-256-GCM` credential encryption at rest |
+| `TOOLBOX_SECRET_KEY` | auto-generated | 64-character hex key (32 bytes, `openssl rand -hex 32`) for `AES-256-GCM` credential encryption at rest |
 | `GEMINI_API_KEY` / `OPENAI_API_KEY` / `CLAUDE_API_KEY` | — | Instance AI keys (also configurable in Admin Settings or per-user BYOK) |
 | `SEARXNG_URL` | — | Self-hosted SearXNG URL for grounded web research |
 
@@ -121,10 +125,10 @@ See [`.env.example`](.env.example) and [`docs/deployment.md`](docs/deployment.md
 
 ## 🛠️ Tech Stack
 
-Node.js 24 (native TypeScript) · Express 5 · SQLite (`better-sqlite3` + `sqlite-vec` + `FTS5`) · `@huggingface/transformers` (`all-MiniLM-L6-v2` ONNX worker) · Zod v4 · Model Context Protocol SDK · React 19 · Vite 8 · Tailwind CSS v4 · Zustand · React Flow (`@xyflow/react`) + `dagre` · Vercel AI SDK
+Node.js 26 (native TypeScript) · Express 5 · SQLite (`better-sqlite3` + `sqlite-vec` + `FTS5`) · `@huggingface/transformers` (`all-MiniLM-L6-v2` ONNX worker) · Zod v4 · Model Context Protocol SDK · React 19 · Vite 8 · Tailwind CSS v4 · Zustand · React Flow (`@xyflow/react`) + `dagre` · Vercel AI SDK
 
 ---
 
 ## 📄 License
 
-MIT
+[MIT](LICENSE). The web bundle lists its third-party licenses in `THIRD-PARTY-LICENSES.md`, served at `/THIRD-PARTY-LICENSES.md`.

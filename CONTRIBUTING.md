@@ -8,7 +8,7 @@ Contributions (bug fixes, pedagogy improvements, security hardening, and documen
 
 ## Prerequisites
 
-- **Node.js ≥ 24** (server runs `.ts` directly via native Node type-stripping — no server build step)
+- **Node.js ≥ 26**, the version in `.nvmrc` (server runs `.ts` directly via native Node type-stripping — no server build step)
 - **npm ≥ 10**
 - Optional: a Gemini, OpenAI, Claude, or local Ollama endpoint for testing live AI generation
 
@@ -18,7 +18,7 @@ Contributions (bug fixes, pedagogy improvements, security hardening, and documen
 git clone https://github.com/arvarik/toolbox.git
 cd toolbox
 cp .env.example .env
-npm install
+npm ci
 npm run dev
 ```
 
@@ -38,7 +38,7 @@ npm run dev
 | `server/kits/`, `server/compiler/`, `server/srs/`, `server/graph/`, `server/mcp/`, `server/search/` | Toolbox v2 domain modules |
 | `server/routes/` | Tenant-scoped Express route handlers |
 | `shared/` | Runtime-pure TypeScript + Zod v4 schemas shared by server, client, and MCP |
-| `src/App.tsx` | React Router v7 route definitions (Library, `/k/:slug/*`, `/new`, `/review`, `/settings`) |
+| `src/App.tsx` | React Router route definitions (Library, `/k/:slug/*`, `/new`, `/review`, `/settings`) |
 | `src/theme.css` & `src/index.css` | Tailwind v4 semantic `@theme` tokens + legacy CSS component classes |
 | `src/stores/` | Zustand global state (`appStore`, `useKitStore`, `useTimerStore`, `useCalcStore`) |
 | `src/utils/` | API clients (`api.ts` including `kitsApi`, `authApi.ts`, `compilerApi.ts`, `pedagogyApi.ts`, `aiSettingsApi.ts`) |
@@ -47,12 +47,12 @@ npm run dev
 
 ## Architectural & Coding Rules
 
-1. **One-Way `platform/` Boundary**: `server/platform/*` and `shared/platform/*` must never import Toolbox domain modules (`kits`, `compiler`, `srs`, `graph`, `mcp`). Enforced by `.oxlintrc.json` and `scripts/tenant-lint.mjs`.
-2. **Tenant Isolation (`Scope`)**: Every SQL query against a user-owned table must extract `const scope = scopeOf(req)` and filter by `ownerId = ?` (`scope.ownerId`). `npm run lint:tenant` AST-checks every `db.prepare()` / `db.exec()` call.
+1. **One-Way `platform/` Boundary**: `server/platform/*` and `shared/platform/*` must never import Toolbox domain modules (`kits`, `compiler`, `srs`, `graph`, `mcp`). Enforced by `scripts/tenant-lint.mjs`.
+2. **Tenant Isolation (`Scope`)**: Every SQL query against a user-owned table must extract `const scope = scopeOf(req)` and filter by `ownerId = ?` (`scope.ownerId`). `npm run lint:tenant` checks every SQL string that names an owned table.
 3. **Runtime-Pure `shared/`**: Files in `shared/` must not import `node:*` or `react`. Validate external payloads with Zod v4 schemas.
 4. **Encrypted Secrets**: Never store plaintext API keys, OIDC client secrets, or SMTP credentials in SQLite. Seal them via `secretBox` (`AES-256-GCM`).
-5. **Styling & Contrast**: `.tsx` views use semantic Tailwind v4 `@theme` tokens (`src/theme.css` synchronized with `src/lib/themePalette.ts`) clearing WCAG 2.1 AA (≥ 4.5:1) in both dark and light modes, verified by `npm run audit:contrast` and `src/__tests__/theme_contrast.test.ts`. Legacy component classes use CSS variables in `src/index.css`.
-6. **Minimal Dependencies**: Prefer Node 24 built-ins (`node:zlib`, `node:crypto`, `fetch`, `worker_threads`) before adding packages.
+5. **Styling & Contrast**: New views use semantic Tailwind v4 `@theme` tokens (`src/theme.css`) clearing WCAG 2.1 AA (≥ 4.5:1) in both dark and light modes, verified by `npm run audit:contrast` and `src/__tests__/theme_contrast.test.ts`. Legacy component classes use CSS variables in `src/index.css`.
+6. **Minimal Dependencies**: Prefer Node.js built-ins (`node:zlib`, `node:crypto`, `fetch`, `worker_threads`) before adding packages.
 
 ---
 
@@ -65,9 +65,17 @@ npm run lint           # Runs oxlint + tsc --noEmit + scripts/tenant-lint.mjs
 npm run audit:contrast # Static WCAG 2.1 AA contrast audit across src/
 npm test               # Vitest unit + Supertest API/security integration tests
 npm run test:coverage  # Vitest with v8 coverage
-npm run build          # Production Vite frontend build
-npm run test:e2e       # Playwright end-to-end browser suite
+npm run build          # Production Vite frontend build (also writes dist/THIRD-PARTY-LICENSES.md)
+npm run check:bundle   # Gzip size budget for the built bundle (needs npm run build)
+npm run test:e2e       # Playwright end-to-end browser suite (needs npm run build)
+npm run test:load      # 45-second load and soak test against a production server (needs npm run build)
 ```
+
+`npm run test:coverage` fails when coverage drops below the thresholds in `vite.config.ts`. Add tests instead of lowering them.
+
+Before the first `npm run test:e2e`, install the Playwright browser once with `npx playwright install chromium`.
+
+CI also runs `npm audit` and `npm audit signatures`, a Grype scan of the container image (it fails on fixed HIGH or CRITICAL CVEs), and a `workflow-lint` job (zizmor and actionlint). If the image scan fails on a new OS package CVE, bump the base image digest in the `Dockerfile`, or add the package to its `apt-get install --only-upgrade` line.
 
 For locked-out self-hosted operators on `AUTH_REQUIRED=true` instances, recover account access via CLI:
 
@@ -99,3 +107,15 @@ npm run reset-password -- <username-or-email>
 - `npm run lint`, `npm run audit:contrast`, `npm test`, and `npm run build` pass with zero errors
 - Relevant tests added or updated (`src/__tests__/`, `server/**/__tests__/`, or `tests/e2e/`)
 - Documentation updated (`docs/api.md`, `docs/architecture.md`, `docs/user-guide.md`) when behavior changes
+- User-visible changes added to the top section of [`CHANGELOG.md`](CHANGELOG.md)
+
+---
+
+## Releases & Versioning
+
+Toolbox follows [Semantic Versioning](https://semver.org/). A pre-release has a suffix, such as `2.0.0-alpha.1`.
+
+1. Run `npm version <version> --no-git-tag-version`, rename the top `CHANGELOG.md` section to that version with the release date, and merge to `main`.
+2. Tag that commit `v<version>` and push the tag. The **Publish Docker image to GHCR** workflow publishes the multi-arch image for the tag and creates a GitHub release with a signed source archive. A tag with a suffix becomes a pre-release.
+
+Every push to `main` also publishes the `latest` image tag.

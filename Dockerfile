@@ -48,7 +48,7 @@ RUN npm ci --omit=dev --ignore-scripts \
          node_modules/cheerio/node_modules/undici \
          node_modules/parse5* \
     && find node_modules/@huggingface/transformers/dist -type f ! -name 'transformers.node.mjs' -delete \
-    && find node_modules -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' -o -name '*.md' \) -delete
+    && find node_modules -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' -o -name '*.md' \) ! -iname '*licen[cs]e*' ! -iname '*notice*' ! -path '*/sharp-libvips-*/README.md' -delete
 
 # Copy server, shared, and operator CLI scripts (Node 26 runs .ts natively)
 COPY server/ ./server/

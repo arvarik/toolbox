@@ -9,6 +9,11 @@ services:
       - "${PORT:-3100}:3100"
     volumes:
       - ./data:/app/data
+    # Passes every variable in .env (OIDC, SMTP, backups, offline models).
+    # The values under `environment:` below take precedence.
+    env_file:
+      - path: .env
+        required: false
     environment:
       - NODE_ENV=production
       - HOST=0.0.0.0

@@ -229,7 +229,9 @@ export function qualityToFsrsGrade(
   quality: number,
   confidence?: string | null,
 ): FsrsGrade {
-  const effective = confidence === "guessed" && quality > 3 ? 3 : quality;
+  // "low" is what the web app and the MCP tool send for a guess.
+  const guessed = confidence === "guessed" || confidence === "low";
+  const effective = guessed && quality > 3 ? 3 : quality;
   if (effective < 3) return 1;
   if (effective === 3) return 2;
   if (effective === 4) return 3;
