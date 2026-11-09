@@ -821,8 +821,9 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
     __resetAppRateLimits();
   });
 
-  it("9. streams tutor replies as SSE frames and aborts the billable upstream generation when the learner disconnects", async () => {
+  it("9. seals and masks the instance endpoint key, streams tutor replies as SSE frames, and aborts the billable upstream generation when the learner disconnects", async () => {
     const systemPrompts: string[] = [];
+    const upstreamAuth: Array<string | undefined> = [];
     let upstreamClosed!: () => void;
     const closed = new Promise<void>((resolve) => (upstreamClosed = resolve));
     const llm = await listenLocal(async (req, res) => {
@@ -830,6 +831,7 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
       let raw = "";
       for await (const chunk of req) raw += chunk;
       const body = JSON.parse(raw) as { model: string; messages: Array<{ role: string; content: string }> };
+      upstreamAuth.push(req.headers.authorization);
       systemPrompts.push(body.messages.find((m) => m.role === "system")?.content ?? "");
       const frame = (delta: object, finish: string | null = null) =>
         `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: body.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
@@ -844,8 +846,20 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
     });
     const server = app.listen(0, "127.0.0.1");
     try {
-      const epId = (await aliceAgent.post("/api/endpoints").send({ name: "Slow Tutor", baseUrl: `${llm.baseUrl}/v1` }).expect(201)).body.id as string;
+      const apiKey = "sk-instance-tutor-secret-4242";
+      const created = (await aliceAgent.post("/api/endpoints").send({ name: "Slow Tutor", baseUrl: `${llm.baseUrl}/v1`, apiKey }).expect(201)).body;
+      const epId = created.id as string;
       const model = `custom:${epId}:slow-tutor`;
+      const sealedKey = () => (db.prepare("SELECT api_key FROM custom_endpoints WHERE id = ?").get(epId) as { api_key: string }).api_key;
+      expect(sealedKey()).toMatch(/^v1:/);
+      expect(sealedKey()).not.toContain(apiKey);
+      const adminView = (await aliceAgent.get("/api/endpoints").expect(200)).body.find((e: { id: string }) => e.id === epId);
+      expect(adminView).toMatchObject({ apiKeyMasked: "••••4242", hasApiKey: true });
+      const memberView = JSON.stringify((await bobAgent.get("/api/endpoints").expect(200)).body);
+      expect(memberView).toContain('"apiKeyMasked":"••••"');
+      expect(memberView).not.toContain("4242");
+      // Re-saving the admin form with the masked value keeps the real key
+      await aliceAgent.put(`/api/endpoints/${epId}`).send({ name: "Slow Tutor", baseUrl: `${llm.baseUrl}/v1`, apiKey: adminView.apiKeyMasked }).expect(200);
       await withEnv({ DISABLE_BACKGROUND_JOBS: "true" }, async () => {
         __resetAppRateLimits();
         const full = await aliceAgent
@@ -858,6 +872,7 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
         );
         expect(systemPrompts[0]).toContain('Active Study Kit: "System Design"');
         expect(systemPrompts[0]).toContain("Tutor Persona Directive:");
+        expect(upstreamAuth[0]).toBe(`Bearer ${apiKey}`);
 
         const token = (await aliceAgent.post("/api/auth/tokens").send({ name: "stream-client" }).expect(201)).body.token as string;
         const { port } = server.address() as { port: number };
