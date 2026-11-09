@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Search, Edit2, Trash2, Plus, ArrowLeft } from 'lucide-react'
+import MarkdownRenderer from '../shared/MarkdownRenderer'
 
 export default function CardBrowser({ deck, onBack, onSaveCard, onDeleteCard, onAddCard }) {
   const [searchQuery, setSearchQuery] = useState('')
@@ -146,7 +147,7 @@ export default function CardBrowser({ deck, onBack, onSaveCard, onDeleteCard, on
                           onChange={(e) => setEditFront(e.target.value)}
                         />
                       ) : (
-                        <div style={{ whiteSpace: 'pre-wrap' }}>{c.front}</div>
+                        <MarkdownRenderer content={c.front} className="flashcard-compact-md" />
                       )}
                     </td>
                     <td style={{ padding: 'var(--space-3) var(--space-4)' }}>
@@ -158,7 +159,7 @@ export default function CardBrowser({ deck, onBack, onSaveCard, onDeleteCard, on
                           onChange={(e) => setEditBack(e.target.value)}
                         />
                       ) : (
-                        <div style={{ whiteSpace: 'pre-wrap' }}>{c.back}</div>
+                        <MarkdownRenderer content={c.back} className="flashcard-compact-md" />
                       )}
                     </td>
                     <td style={{ padding: 'var(--space-3) var(--space-4)' }}>

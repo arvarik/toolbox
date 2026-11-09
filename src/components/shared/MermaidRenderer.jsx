@@ -1,26 +1,17 @@
 import { useEffect, useRef, useState, useId } from 'react'
 import { Maximize2, Minimize2, Loader2 } from 'lucide-react'
+import useAppStore from '../../stores/appStore'
 
-let mermaidPromise = null
-function getMermaid() {
-  if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then((mod) => {
-      const instance = mod.default || mod
-      instance.initialize({
-        startOnLoad: false,
-        theme: 'dark',
-        securityLevel: 'loose',
-        fontFamily: 'Inter, system-ui, sans-serif',
-      })
-      return instance
-    })
-  }
-  return mermaidPromise
+const MERMAID_SECURE_KEYS = ['secure', 'securityLevel', 'startOnLoad', 'maxTextSize']
+
+async function getMermaid() {
+  const mod = await import('mermaid')
+  return mod.default || mod
 }
 
 /**
  * @component MermaidRenderer
- * @description Renders a mermaid.js flowchart from raw syntax. Handles parsing errors and provides expand/collapse functionality.
+ * @description Renders a mermaid.js flowchart from raw syntax with strict XSS protection and live light/dark theme sync.
  * @param {Object} props
  * @param {string} props.chart - The raw mermaid diagram syntax string.
  */
@@ -29,39 +20,54 @@ export default function MermaidRenderer({ chart }) {
   const [svgContent, setSvgContent] = useState('')
   const [error, setError] = useState(null)
   const [isExpanded, setIsExpanded] = useState(false)
-  
-  // Use a unique ID for each chart to avoid collisions
-  const baseId = useId().replace(/:/g, '')
-  const idRef = useRef(`mermaid-${baseId}`)
+  const theme = useAppStore((s) => s.theme)
+
+  // Use a unique ID per render so theme/chart updates never collide in Mermaid's DOM cache
+  const baseId = useId().replace(/[^A-Za-z0-9_-]/g, '')
+  const renderSeqRef = useRef(0)
 
   useEffect(() => {
     if (!chart) return
-    
+
     let isMounted = true
+    const renderId = `mermaid-${baseId}-${++renderSeqRef.current}`
 
     const renderChart = async () => {
       try {
         const mermaid = await getMermaid()
-        const { svg } = await mermaid.render(idRef.current, chart)
+        mermaid.initialize({
+          startOnLoad: false,
+          theme: theme === 'light' ? 'default' : 'dark',
+          securityLevel: 'strict',
+          secure: MERMAID_SECURE_KEYS,
+          fontFamily: 'Inter, system-ui, sans-serif',
+        })
+        const { svg } = await mermaid.render(renderId, chart)
         if (isMounted) {
           setSvgContent(svg)
           setError(null)
         }
       } catch (err) {
+        if (typeof document !== 'undefined') {
+          document.getElementById(`d${renderId}`)?.remove()
+        }
         if (isMounted) {
-          console.error("Mermaid parsing error:", err)
-          setError(err.message || "Failed to render diagram.")
+          console.error('Mermaid parsing error:', err)
+          setError(err.message || 'Failed to render diagram.')
         }
       }
     }
 
     renderChart()
     return () => { isMounted = false }
-  }, [chart])
+  }, [chart, theme, baseId])
 
   if (error) {
     return (
-      <div style={{ padding: 'var(--space-4)', background: 'var(--color-error-subtle)', color: 'var(--color-error)', borderRadius: 'var(--radius-md)' }}>
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{ padding: 'var(--space-4)', background: 'var(--color-error-subtle)', color: 'var(--color-error)', borderRadius: 'var(--radius-md)' }}
+      >
         <strong>Diagram Error:</strong>
         <pre style={{ fontSize: '10px', marginTop: 'var(--space-2)' }}>{error}</pre>
         <pre style={{ fontSize: '10px', marginTop: 'var(--space-2)', opacity: 0.7 }}>{chart}</pre>
@@ -70,8 +76,11 @@ export default function MermaidRenderer({ chart }) {
   }
 
   return (
-    <div 
+    <div
       className={`mermaid-wrapper ${isExpanded ? 'expanded' : ''}`}
+      onClick={(e) => {
+        if (isExpanded) e.stopPropagation()
+      }}
       style={{
         position: isExpanded ? 'fixed' : 'relative',
         top: isExpanded ? 0 : 'auto',
@@ -90,8 +99,12 @@ export default function MermaidRenderer({ chart }) {
         transition: 'all 0.2s ease-out'
       }}
     >
-      <button 
-        onClick={() => setIsExpanded(!isExpanded)}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation()
+          setIsExpanded(!isExpanded)
+        }}
         style={{
           position: 'absolute',
           top: isExpanded ? 'var(--space-4)' : 'var(--space-2)',
@@ -104,7 +117,7 @@ export default function MermaidRenderer({ chart }) {
           cursor: 'pointer',
           zIndex: 2,
         }}
-        title={isExpanded ? "Minimize" : "Expand Diagram"}
+        title={isExpanded ? 'Minimize' : 'Expand Diagram'}
       >
         {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
       </button>
