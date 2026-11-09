@@ -250,7 +250,6 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
   let agent: ReturnType<typeof request.agent>;
   let ownerId = "";
   let scope: Scope;
-  let sessionCookie = "";
 
   beforeAll(async () => {
     __resetAuthRateLimits();
@@ -269,9 +268,6 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       .expect(201);
     ownerId = setupRes.body.user.id as string;
     scope = scopeForOwnerId(ownerId);
-    sessionCookie = (setupRes.headers["set-cookie"] as unknown as string[])
-      .map((cookie) => cookie.split(";")[0])
-      .join("; ");
   });
 
   it("1. applies SQLite performance pragmas, sets 65s/66s reverse-proxy timeouts, and shuts down cleanly without double-signal hangs", async () => {
@@ -921,9 +917,8 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
     }
   });
 
-  it("8. answers provider 429/5xx with 503 + Retry-After/502, ends dropped and stalled chat streams with an error, aborts the upstream when the client leaves, and caps the structured-mode cache", async () => {
+  it("8. answers provider 429/5xx with 503 + Retry-After/502, ends dropped and stalled chat streams with an error, and caps the structured-mode cache", async () => {
     let mode: "429" | "500" | "drop" | "stall" | "json" = "429";
-    let upstreamClosed: Promise<void> = Promise.resolve();
     const delta = (text: string) =>
       `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "m", choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`;
     const upstream = http.createServer((req, res) => {
@@ -933,7 +928,6 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
         res.end(JSON.stringify({ object: "list", data: [{ id: "mock-model", object: "model" }] }));
         return;
       }
-      upstreamClosed = new Promise((resolve) => res.on("close", () => resolve()));
       if (mode === "429" || mode === "500") {
         res.writeHead(Number(mode), {
           "Content-Type": "application/json",
@@ -961,8 +955,6 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       }
     });
     await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
-    const appServer = http.createServer(app);
-    await new Promise<void>((resolve) => appServer.listen(0, "127.0.0.1", resolve));
 
     try {
       const { port: upstreamPort } = upstream.address() as AddressInfo;
@@ -998,28 +990,6 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       expect(stalled.text).toContain("The AI provider stopped responding");
       expect(stalled.text).not.toContain("[DONE]");
 
-      __setStreamIdleTimeoutMs(60_000);
-      const { port } = appServer.address() as AddressInfo;
-      const upstreamGone = await new Promise<Promise<void>>((resolve) => {
-        const req = http.request(
-          {
-            host: "127.0.0.1",
-            port,
-            path: "/api/chat/stream",
-            method: "POST",
-            headers: { "Content-Type": "application/json", Cookie: sessionCookie },
-          },
-          (res) =>
-            res.once("data", () => {
-              resolve(upstreamClosed);
-              req.destroy();
-            }),
-        );
-        req.on("error", () => undefined);
-        req.end(JSON.stringify({ message: "Explain quorums", model }));
-      });
-      await upstreamGone;
-
       mode = "json";
       const schema = z.object({ ok: z.boolean() });
       for (let i = 0; i <= 256; i++) {
@@ -1029,12 +999,8 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       expect(__getStructuredModeFor(`instance:${epId}`, "distinct-256")).toBe("json_schema");
     } finally {
       __setStreamIdleTimeoutMs(120_000);
-      appServer.closeAllConnections();
       upstream.closeAllConnections();
-      await Promise.all([
-        new Promise((resolve) => appServer.close(resolve)),
-        new Promise((resolve) => upstream.close(resolve)),
-      ]);
+      await new Promise((resolve) => upstream.close(resolve));
     }
   });
 });

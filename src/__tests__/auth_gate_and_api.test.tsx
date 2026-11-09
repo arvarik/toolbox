@@ -14,12 +14,12 @@ vi.mock("@simplewebauthn/browser", () => ({
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
-describe("api.js HTTP error vs offline queue + AuthGate", () => {
+describe("api.ts HTTP errors + AuthGate", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("throws HTTP 401/403 errors on mutations instead of swallowing them as offline sync", async () => {
+  it("throws HTTP 401 errors on mutations and signals toolbox:unauthorized", async () => {
     const unauthorizedEvents: unknown[] = [];
     const listener = (e: Event) =>
       unauthorizedEvents.push((e as CustomEvent).detail);

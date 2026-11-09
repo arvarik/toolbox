@@ -173,7 +173,6 @@ describe('Sidebar Navigation & Mobile Shell', () => {
 
     expect(useAppStore.getState().searchOpen).toBe(false)
     fireEvent.keyDown(window, { key: '/', metaKey: true })
-    expect(typeof useAppStore.getState().searchOpen).toBe('boolean')
     expect(useAppStore.getState().searchOpen).toBe(true)
 
     fireEvent.keyDown(window, { key: '/', metaKey: true })

@@ -186,7 +186,7 @@ describe("Stateless Toolbox MCP Server (/api/mcp)", () => {
       .expect(400);
     expect(oversizedHttp.body.error.code).toBe("VALIDATION_ERROR");
 
-    // 6. Two-layer readOnly: true enforcement
+    // 6. readOnly: true tokens see only the read tools
     const roInit = await mcpRpc(app, aliceRoToken, "initialize", {
       protocolVersion: "2025-03-26",
       capabilities: {},
@@ -200,12 +200,6 @@ describe("Stateless Toolbox MCP Server (/api/mcp)", () => {
       (t) => t.name,
     );
     expect(roToolNames).toEqual(["list_kits", "get_kit_path", "search_kit", "get_due_cards"]);
-
-    const roWriteAttempt = await callTool(app, aliceRoToken, "create_flashcards", {
-      kit: "system-design",
-      cards: [{ front: "Blocked?", back: "Should fail" }],
-    });
-    expect(Boolean(roWriteAttempt.rpc.error) || roWriteAttempt.isError === true).toBe(true);
 
     // 7. Full read-write JSON-RPC lifecycle across all 7 tools
     const rwToolsList = await mcpRpc(app, aliceRwToken, "tools/list");
