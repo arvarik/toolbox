@@ -60,6 +60,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
           sbom: true
 
+      # Pull the pushed digest on its native runner and probe it before
+      # `merge-image` tags it, so a broken arch never becomes `latest` or a
+      # version tag. The tagged index points at these exact digests.
+      - name: Smoke-test the pushed image
+        env:
+          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+        run: bash .github/scripts/smoke-image.sh "$IMAGE"
+
       - name: Export digest
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

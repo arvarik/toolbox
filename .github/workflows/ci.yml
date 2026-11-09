@@ -1,9 +1,10 @@
 name: CI
 
+# No tag trigger: a tag runs docker-publish.yml, and a cache restored in a
+# tag-triggered run is a cache-poisoning risk (zizmor `cache-poisoning`).
 on:
   push:
     branches: ["main"]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -49,11 +50,17 @@ jobs:
       - name: Dependency Security Audit
         run: npm audit
 
+      - name: Verify npm Registry Signatures & Provenance
+        run: npm audit signatures
+
       - name: Unit & Integration Tests with Coverage
         run: npm run test:coverage
 
       - name: Production Build
         run: npm run build
+
+      - name: Bundle Size Budget
+        run: npm run check:bundle
 
       - name: Read Playwright version
         id: playwright
@@ -76,6 +83,9 @@ jobs:
 
       - name: Playwright Production E2E Suite
         run: npm run test:e2e
+
+      - name: Production Load & Soak Test
+        run: npm run test:load
 
       - name: Upload Playwright Report
         if: ${{ !cancelled() }}
@@ -110,44 +120,39 @@ jobs:
           cache-to: type=gha,mode=max,scope=smoke
 
       - name: Boot container and verify health & auth endpoints
-        run: |
-          set -euo pipefail
-          cleanup() {
-            docker rm -f toolbox-smoke >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
+        run: bash .github/scripts/smoke-image.sh toolbox:smoke
 
-          docker run -d --name toolbox-smoke \
-            -p 127.0.0.1:3100:3100 \
-            -e AUTH_REQUIRED=true \
-            toolbox:smoke
+      # Blocks the merge on a fixed high or critical vulnerability. The same
+      # Grype settings scan the published image in docker-publish.yml.
+      - name: Scan the image for fixed high & critical vulnerabilities
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: toolbox:smoke
+          fail-build: true
+          only-fixed: true
+          severity-cutoff: high
+          output-format: table
 
-          ready=0
-          for _ in $(seq 1 30); do
-            if health=$(curl -fsS http://127.0.0.1:3100/api/health 2>/dev/null) &&
-               jq -e '.status == "ok"' >/dev/null <<<"$health"; then
-              ready=1
-              break
-            fi
-            sleep 1
-          done
+  workflow-lint:
+    name: Workflow Security Lint (zizmor · actionlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
 
-          if [[ "$ready" -ne 1 ]]; then
-            echo "::error::Timed out waiting for /api/health"
-            docker logs toolbox-smoke || true
-            exit 1
-          fi
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-          if ! auth=$(curl -fsS http://127.0.0.1:3100/api/auth/status) ||
-             ! jq -e '.authRequired == true and .authenticated == false' >/dev/null <<<"$auth"; then
-            echo "::error::Unexpected /api/auth/status response: ${auth:-<empty>}"
-            docker logs toolbox-smoke || true
-            exit 1
-          fi
+      - name: Audit workflows with zizmor
+        uses: zizmorcore/zizmor-action@53290badfa369cb0bf7ad16342cb62c2fa47ac7b # v0.8.0
+        with:
+          advanced-security: false
+          annotations: true
 
-          if ! html=$(curl -fsS http://127.0.0.1:3100/) ||
-             ! grep -q '<div id="root"></div>' <<<"$html"; then
-            echo "::error::Unexpected SPA index response from /"
-            docker logs toolbox-smoke || true
-            exit 1
-          fi
+      # Catches expression, syntax, and shellcheck errors in docker-publish.yml,
+      # which runs only on main and tags. Dependabot does not bump this digest.
+      - name: Lint workflows with actionlint
+        run: >-
+          docker run --rm -v "$PWD:/repo:ro" -w /repo
+          rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667

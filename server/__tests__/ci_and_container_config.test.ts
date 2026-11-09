@@ -98,7 +98,7 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
     }
   });
 
-  it("aligns .nvmrc Node major version with package.json engines.node and Dockerfile", () => {
+  it("aligns .nvmrc Node major with package.json engines.node and the digest-pinned Dockerfile base", () => {
     const nvmrc = fs.readFileSync(path.join(ROOT, ".nvmrc"), "utf8").trim();
     const nvmrcMajor = Number.parseInt(nvmrc, 10);
     expect(Number.isInteger(nvmrcMajor) && nvmrcMajor >= 24).toBe(true);
@@ -111,24 +111,49 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
     expect(nvmrcMajor).toBeGreaterThanOrEqual(Number(minEngineMatch?.[1]));
 
     const dockerfile = fs.readFileSync(path.join(ROOT, "Dockerfile"), "utf8");
-    const fromNodeMajors = [...dockerfile.matchAll(/^FROM\s+node:(\d+)/gm)].map((m) =>
-      Number(m[1]),
-    );
-    expect(fromNodeMajors.length).toBeGreaterThan(0);
-    for (const major of fromNodeMajors) {
-      expect(major).toBe(nvmrcMajor);
+    const fromRefs = [...dockerfile.matchAll(/^FROM\s+(\S+)/gm)].map((m) => m[1] ?? "");
+    expect(fromRefs.length).toBeGreaterThan(0);
+    for (const ref of fromRefs) {
+      expect(ref, "Dockerfile FROM must be node:<.nvmrc major>-<variant>@sha256:<digest>").toMatch(
+        new RegExp(`^node:${nvmrcMajor}-[a-z-]+@sha256:[0-9a-f]{64}$`),
+      );
     }
   });
 
   it("verifies multi-arch publish, exact vX.X.X release titling, and container smoke probes", () => {
     const ci = workflows.find((w) => w.file === "ci.yml")?.body ?? "";
-    expect(ci).toContain("http://127.0.0.1:3100/api/health");
-    expect(ci).toContain("http://127.0.0.1:3100/api/auth/status");
-
     const publish = workflows.find((w) => w.file === "docker-publish.yml")?.body ?? "";
+    const smoke = fs.readFileSync(path.join(ROOT, ".github", "scripts", "smoke-image.sh"), "utf8");
+    expect(smoke).toContain("/api/health");
+    expect(smoke).toContain("/api/auth/status");
+    expect(ci).toContain("bash .github/scripts/smoke-image.sh toolbox:smoke");
+
+    // Each arch is probed in build-image, before merge-image tags the index.
+    const probe = publish.indexOf("bash .github/scripts/smoke-image.sh");
+    expect(probe).toBeGreaterThan(0);
+    expect(probe).toBeLessThan(publish.indexOf("merge-image:"));
     expect(publish).toContain("platform: linux/amd64");
     expect(publish).toContain("platform: linux/arm64");
     expect(publish).toContain('--title "$TAG"');
+  });
+
+  it("gates PRs on npm registry signatures, bundle and load budgets, and fixed high/critical image CVEs", () => {
+    const ci = workflows.find((w) => w.file === "ci.yml")?.body ?? "";
+    for (const cmd of ["npm audit signatures", "npm run check:bundle", "npm run test:load"]) {
+      expect(ci).toContain(cmd);
+    }
+    for (const gate of ["fail-build: true", "only-fixed: true", "severity-cutoff: high"]) {
+      expect(ci).toContain(gate);
+    }
+    // The PR gate adds to the post-publish SARIF scan; it does not replace it.
+    const publish = workflows.find((w) => w.file === "docker-publish.yml")?.body ?? "";
+    expect(publish).toContain("output-format: sarif");
+  });
+
+  it("lints workflows with pinned zizmor and actionlint", () => {
+    const ci = workflows.find((w) => w.file === "ci.yml")?.body ?? "";
+    expect(ci).toMatch(/uses: zizmorcore\/zizmor-action@/);
+    expect(ci).toMatch(/rhysd\/actionlint:[\w.]+@sha256:[0-9a-f]{64}/);
   });
 
   it("keeps production dependencies exact: every server/shared/CLI external import is in dependencies and pure-client packages stay in devDependencies", () => {
