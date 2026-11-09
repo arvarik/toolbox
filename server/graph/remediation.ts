@@ -1,3 +1,6 @@
+import type Database from "better-sqlite3";
+import type { Scope } from "../platform/tenancy/scope.ts";
+import type { ActiveKitContext } from "../kits/kitContext.ts";
 import {
   nodeMap,
   prerequisitesOf,
@@ -9,6 +12,7 @@ import {
 import { SYSTEM_DESIGN_KIT_SKELETON } from "../../shared/kits/systemDesignKit.ts";
 
 export const MAX_REMEDIATION_CARDS = 3;
+export const MAX_CARDS_PER_LAPSE = MAX_REMEDIATION_CARDS;
 export const SHAKY_EASE = 2.3;
 export const SHAKY_INTERVAL_DAYS = 4;
 
@@ -23,6 +27,14 @@ export interface RemediationCardRow extends CardForNodeMatching {
 
 export interface RemediationPlanItem {
   cardId: string;
+  nodeId: string | null;
+  nodeName: string | null;
+  reason: string;
+}
+
+export interface QueuedRemediationItem {
+  cardId: string;
+  front: string;
   nodeId: string | null;
   nodeName: string | null;
   reason: string;
@@ -118,4 +130,104 @@ export function planRemediation(
   }
 
   return plan.slice(0, MAX_REMEDIATION_CARDS);
+}
+
+/**
+ * Downward remediation triggered when failing a node's `GuidedDrill` (`score < 0.6`).
+ * Queues up to `MAX_CARDS_PER_LAPSE` shaky prerequisite (or same-node fallback) cards
+ * into `remediation_queue` without duplicating already-open remediation items.
+ */
+export function planNodeFailureRemediation(
+  db: Database.Database,
+  scope: Scope,
+  kit: Pick<ActiveKitContext, "id" | "skeleton">,
+  opts: {
+    failedNodeId: string;
+    sourceRefId: string;
+    now?: Date;
+  },
+): QueuedRemediationItem[] {
+  const now = opts.now ?? new Date();
+  const { nodes, edges } = kit.skeleton.graph;
+  const byId = nodeMap(nodes);
+  if (!byId.has(opts.failedNodeId)) return [];
+
+  const allCards = db
+    .prepare(
+      `SELECT f.id, f.node_id, f.front, f.back, f.state, f.ease_factor, f.interval,
+              f.next_review, f.prerequisite_id, f.source_topic_id
+       FROM flashcards f
+       JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+       WHERE f.ownerId = ? AND d.kit_id = ?`,
+    )
+    .all(scope.ownerId, kit.id) as RemediationCardRow[];
+
+  if (allCards.length === 0) return [];
+
+  let plan = planRemediation(
+    {
+      id: opts.sourceRefId,
+      node_id: opts.failedNodeId,
+      front: "",
+      back: "",
+    },
+    allCards,
+    { now, nodes, edges },
+  );
+
+  // If prerequisite nodes had no shaky cards (e.g., root node), fall back to shaky cards on the failed node itself.
+  if (plan.length === 0) {
+    const nodeName = byId.get(opts.failedNodeId)?.name || opts.failedNodeId;
+    const directCandidates = allCards
+      .filter(
+        (c) =>
+          nodesForCard(c, nodes).includes(opts.failedNodeId) && isShaky(c, now),
+      )
+      .sort(byWeakness)
+      .slice(0, MAX_CARDS_PER_LAPSE);
+
+    plan = directCandidates.map((c) => ({
+      cardId: c.id,
+      nodeId: opts.failedNodeId,
+      nodeName,
+      reason: `Reinforce ${nodeName} after missed drill`,
+    }));
+  }
+
+  if (plan.length === 0) return [];
+
+  const hasOpenRow = db.prepare(
+    "SELECT 1 FROM remediation_queue WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL",
+  );
+  const insert = db.prepare(
+    `INSERT INTO remediation_queue (ownerId, kit_id, card_id, source_card_id, node_id, node_name, reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  const queued: QueuedRemediationItem[] = [];
+  const enqueueTx = db.transaction(() => {
+    for (const item of plan.slice(0, MAX_CARDS_PER_LAPSE)) {
+      if (hasOpenRow.get(scope.ownerId, item.cardId)) continue;
+      insert.run(
+        scope.ownerId,
+        kit.id,
+        item.cardId,
+        opts.sourceRefId,
+        item.nodeId,
+        item.nodeName,
+        item.reason,
+      );
+      const cardRow = allCards.find((c) => c.id === item.cardId);
+      queued.push({
+        cardId: item.cardId,
+        front: cardRow?.front || "",
+        nodeId: item.nodeId,
+        nodeName: item.nodeName,
+        reason: item.reason,
+      });
+    }
+  });
+
+  enqueueTx();
+  return queued;
 }
