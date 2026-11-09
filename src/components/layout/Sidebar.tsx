@@ -283,7 +283,7 @@ export default function Sidebar() {
           <button
             className="sidebar-collapse-btn"
             onClick={handleSignOut}
-            aria-label={`Sign out ${user.username}`}
+            aria-label={collapsed ? `Sign out ${user.username}` : undefined}
             title={`Signed in as @${user.username} — click to sign out`}
             style={{ marginBottom: '4px' }}
           >

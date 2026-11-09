@@ -216,7 +216,7 @@ function CanvasInner({ defaultEdgeLabel = '', isConceptMode = false }: CanvasPro
         fitView
         fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
         connectionRadius={28}
-        proOptions={{ hideAttribution: false }}
+        proOptions={{ hideAttribution: true }}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.2} />
         <Controls showInteractive={false} position="bottom-right" />

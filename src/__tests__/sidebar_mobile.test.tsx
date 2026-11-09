@@ -210,7 +210,7 @@ describe('Sidebar Navigation & Mobile Shell', () => {
         </AuthGate>,
       )
 
-      const signOutBtn = await screen.findByRole('button', { name: 'Sign out dev' })
+      const signOutBtn = await screen.findByRole('button', { name: '@dev · Sign out' })
       fireEvent.click(signOutBtn)
 
       expect(useAppStore.getState().nodes).toEqual([])

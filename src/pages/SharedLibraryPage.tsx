@@ -248,7 +248,7 @@ export default function SharedLibraryPage() {
                           )}
                         </div>
                         <div className="text-xs text-on-surface-variant truncate">
-                          by {item.authorName} •{" "}
+                          by {item.authorName || (item.isOfficial ? "Toolbox" : "Community")} •{" "}
                           <Download size={11} className="inline -mt-0.5" />{" "}
                           {item.downloadsCount}
                         </div>
@@ -271,19 +271,21 @@ export default function SharedLibraryPage() {
                     </p>
                   )}
 
-                  <div className="text-xs text-on-surface-variant flex flex-wrap gap-x-3 gap-y-1">
-                    <span>{item.pillarCount} pillars</span>
-                    <span>•</span>
-                    <span>{item.topicCount} topics</span>
-                    <span>•</span>
-                    <span>{item.starterCardCount} starter cards</span>
-                    {item.starterDrillCount > 0 && (
-                      <>
-                        <span>•</span>
-                        <span>{item.starterDrillCount} drills</span>
-                      </>
-                    )}
-                  </div>
+                  {typeof item.pillarCount === "number" && (
+                    <div className="text-xs text-on-surface-variant flex flex-wrap gap-x-3 gap-y-1">
+                      <span>{item.pillarCount} pillars</span>
+                      <span>•</span>
+                      <span>{item.topicCount ?? 0} topics</span>
+                      <span>•</span>
+                      <span>{item.starterCardCount ?? 0} starter cards</span>
+                      {(item.starterDrillCount ?? 0) > 0 && (
+                        <>
+                          <span>•</span>
+                          <span>{item.starterDrillCount} drills</span>
+                        </>
+                      )}
+                    </div>
+                  )}
 
                   {item.tags?.length > 0 && (
                     <div className="flex flex-wrap gap-1">

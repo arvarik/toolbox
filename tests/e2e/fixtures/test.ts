@@ -109,6 +109,14 @@ export async function expectNoCriticalA11yViolations(
     disableRules?: string[];
   },
 ): Promise<void> {
+  await page.evaluate(() =>
+    Promise.all(
+      document
+        .getAnimations()
+        .filter((anim) => anim.effect?.getTiming().iterations !== Infinity)
+        .map((anim) => anim.finished.catch(() => {})),
+    ),
+  );
   let builder = new AxeBuilder({
     page: page as unknown as AxePage,
   }).withTags([...WCAG_TAGS]);
