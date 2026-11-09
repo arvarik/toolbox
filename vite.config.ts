@@ -64,9 +64,9 @@ export default defineConfig({
       exclude: ["**/__tests__/**", "**/*.d.ts"],
       // Ratchet: raise these when coverage grows; never lower them to pass CI.
       thresholds: {
-        statements: 66,
-        branches: 54,
-        functions: 59,
+        statements: 67,
+        branches: 56,
+        functions: 60,
         lines: 68,
       },
     },
