@@ -5,10 +5,23 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Skip onnxruntime-node's postinstall CUDA binary download from api.nuget.org
+# on linux/x64 runners; Toolbox runs CPU-only embeddings and does not use CUDA.
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+permissions:
+  contents: read
+
 jobs:
   ci:
-    name: Lint · Typecheck · Audit · Test · Build
+    name: Lint · Typecheck · Audit · Test · Build · E2E
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     steps:
       - name: Checkout
@@ -29,8 +42,38 @@ jobs:
       - name: Dependency Security Audit
         run: npm audit --omit=dev
 
-      - name: Test
+      - name: Unit & Integration Tests
         run: npm test
 
-      - name: Build
+      - name: Production Build
         run: npm run build
+
+      - name: Read Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright Chromium
+        id: browser-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+
+      - name: Install Playwright Chromium
+        if: steps.browser-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright Chromium system dependencies
+        if: steps.browser-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium
+
+      - name: Playwright Production E2E Suite
+        run: npm run test:e2e
+
+      - name: Upload Playwright Report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
