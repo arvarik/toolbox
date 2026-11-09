@@ -187,7 +187,7 @@ A source install reads these from `.env` (see [`.env.example`](../.env.example))
 | `MODELS_DIR` | `${DATA_DIR}/models` | Directory for local ONNX embedding models |
 | `TRANSFORMERS_OFFLINE` | — | Set `1` to forbid runtime HuggingFace network fetches |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | — | Optional OIDC SSO credentials (`OIDC_NAME`, `OIDC_MATCH_BY_EMAIL`) |
-| `SMTP_URL` / `MAIL_FROM` / `MAIL_REPLY_TO` | — | Optional SMTP transport for invites, magic links, and resets |
+| `SMTP_URL` / `MAIL_FROM` / `MAIL_REPLY_TO` | — | Optional SMTP transport for invitations. Password-reset, sign-in, and email-change emails link to pages the web app does not have yet |
 | `BACKUP_KEEP` | `7` | Number of SQLite backups to keep (`1`–`50`); older ones are deleted after each new backup |
 | `BACKUP_INTERVAL_HOURS` | `24` | Saved and shown in the admin settings API (`0`–`168`). No scheduler runs backups yet, see [section 7](#7-data-persistence-backups--upgrading) |
 

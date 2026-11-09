@@ -71,6 +71,8 @@ npm run test:e2e       # Playwright end-to-end browser suite (needs npm run buil
 
 Before the first `npm run test:e2e`, install the Playwright browser once with `npx playwright install chromium`.
 
+CI also runs `npm audit` and `npm audit signatures`, a Grype scan of the container image (it fails on fixed HIGH or CRITICAL CVEs), and a `workflow-lint` job (zizmor and actionlint). If the image scan fails on a new OS package CVE, bump the base image digest in the `Dockerfile`, or add the package to its `apt-get install --only-upgrade` line.
+
 For locked-out self-hosted operators on `AUTH_REQUIRED=true` instances, recover account access via CLI:
 
 ```bash

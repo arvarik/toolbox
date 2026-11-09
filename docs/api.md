@@ -32,7 +32,7 @@ Complete reference for Toolbox v2's HTTP REST API (`/api/*`) and Stateless Strea
 | `GET` | `/api/auth/status` | Public | Instance auth state (`authRequired`, `authenticated`, `setupRequired`, `hasAccounts`, `user`, `deviceItems`, `registrationOpen`, `mailConfigured`, `magicLinkSignIn`, `localOwnerPresent`, `publicUrl`, `oidc`, `instanceName`). |
 | `POST` | `/api/auth/setup` | Public (once) | Bootstrap initial admin account (`{ email, username, password, displayName? }`) and enable multi-tenant auth. |
 | `POST` | `/api/auth/register` | Public (if enabled) | Self-register account when open registration is enabled (same fields as setup; password of 8+ characters). |
-| `POST` | `/api/auth/login` | Public | Password login (`{ identifier, password, remember? }`, where `identifier` is a username or email); sets `toolbox_session`. |
+| `POST` | `/api/auth/login` | Public | Password login (`{ identifier, password, remember? }`, where `identifier` is a username or email; the server also reads it from `username` or `email`); sets `toolbox_session`. |
 | `POST` | `/api/auth/logout` | Public | Revoke the current session (if any) and clear the cookie. |
 | `POST` | `/api/auth/invitations/check` | Public | Check that an invitation token (`{ token }`) is valid; returns `{ ok: true }`. |
 | `POST` | `/api/auth/accept-invitation` | Public | Claim an admin-issued invitation (`{ token, email, username, password, displayName? }`). |
@@ -64,6 +64,8 @@ Complete reference for Toolbox v2's HTTP REST API (`/api/*`) and Stateless Strea
 | `GET` | `/api/auth/identities` | Session | List linked external OIDC identities. |
 | `DELETE` | `/api/auth/identities/:id` | Session | Unlink an external OIDC identity. |
 
+> **Email links**: Invitation emails link to `/join`, which the web app opens. Password-reset (`/reset-password`), sign-in (`/signin-link`), and email-change (`/confirm-email`) emails link to pages that the web app does not have yet. Complete those flows with the `*/complete` endpoints above.
+
 ---
 
 ## 3. Instance Administration (`/api/admin`)
@@ -77,7 +79,7 @@ Requires `role === "admin"` and a session cookie (or the implicit local owner wh
 | `GET` | `/api/admin/users/:id` | Inspect user details. |
 | `PATCH` | `/api/admin/users/:id` | Update user role or profile fields. |
 | `POST` | `/api/admin/users/:id/reset-password` | Set temporary password (`mustChangePassword = 1`). |
-| `POST` | `/api/admin/users/:id/reset-link` | Generate one-time password-reset URL. |
+| `POST` | `/api/admin/users/:id/reset-link` | Generate one-time password-reset URL (`/reset-password?token=…`, see **Email links** in section 2). |
 | `POST` | `/api/admin/users/:id/disable` | Disable user login & revoke active sessions. |
 | `POST` | `/api/admin/users/:id/enable` | Re-enable disabled user. |
 | `DELETE` | `/api/admin/users/:id` | Delete user and cascade-remove owned tenant rows. The body must be `{ "decision": "purge" }`, or the server returns `409`. |

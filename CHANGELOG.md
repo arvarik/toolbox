@@ -23,8 +23,8 @@ on the first start.
   queues, attempt-gated drills, Challenge Node, a Feynman evaluator, and a
   review queue across all Kits.
 - Accounts: optional sign-in with passwords, passkeys, or OIDC single sign-on,
-  plus invitations, magic links, an admin console, an audit log, SQLite
-  backups, personal API tokens, and the `npm run reset-password` command.
+  plus invitations, an admin console, an audit log, SQLite backups, personal
+  API tokens, and the `npm run reset-password` command.
 - AI: quick, deep, and research model tiers across Gemini, OpenAI, Claude, and
   OpenAI-compatible endpoints, per-user API keys, and local hybrid search
   (FTS5 and sqlite-vec with ONNX embeddings).
