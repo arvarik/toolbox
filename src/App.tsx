@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router'
-import Layout from './components/layout/Layout'
+import Layout, { PageFallback } from './components/layout/Layout'
 import AhaMoment from './components/shared/AhaMoment'
 import TaskWorkingBar from './components/shared/TaskWorkingBar'
 import useAppStore from './stores/appStore'
@@ -24,32 +24,6 @@ const InterleavedPage = lazy(() => import('./pages/InterleavedPage'))
 const CalculatorPage = lazy(() => import('./pages/CalculatorPage'))
 const GraphPage = lazy(() => import('./pages/GraphPage'))
 const NewKitStudioPage = lazy(() => import('./pages/NewKitStudioPage'))
-
-function PageFallback() {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        minHeight: '50vh',
-        flexDirection: 'column',
-        gap: 'var(--space-3)',
-      }}
-    >
-      <div
-        style={{
-          width: 32,
-          height: 32,
-          border: '2px solid var(--color-border)',
-          borderTopColor: 'var(--color-accent)',
-          borderRadius: '50%',
-          animation: 'spin 0.8s linear infinite',
-        }}
-      />
-    </div>
-  )
-}
 
 export default function App() {
   const calcModalOpen = useAppStore((s) => s.calcModalOpen)

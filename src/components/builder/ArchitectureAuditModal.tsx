@@ -1,52 +1,17 @@
-import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import {
   ShieldCheck, AlertOctagon, AlertTriangle, Info, CheckCircle2,
   MessageSquare, Sparkles, RefreshCw,
   type LucideIcon,
 } from 'lucide-react'
-import ModalRaw from '../shared/Modal'
+import Modal from '../shared/Modal'
 import RubricFeedbackCard from '../drills/RubricFeedbackCard'
 import useAppStore from '../../stores/appStore'
 import { useKitRoutePrefix } from '../../stores/useKitStore'
 import { canvasCritiqueApi, type CanvasCritiqueResult } from '../../utils/pedagogyApi'
+import type { AuditReport, AuditSeverity } from '../../utils/architectureLinter'
 import type { PersistedBoardData } from './boardModel'
-
-const Modal = ModalRaw as unknown as ComponentType<{
-  open: boolean
-  onClose: () => void
-  title: ReactNode
-  children: ReactNode
-  footer?: ReactNode
-}>
-
-export type AuditSeverity = 'critical' | 'warning' | 'info'
-
-export interface AuditFinding {
-  id: string
-  severity: AuditSeverity | string
-  title: string
-  message: string
-  recommendation: string
-  nodeIds?: string[]
-}
-
-export interface AuditStats {
-  totalNodes: number
-  totalEdges: number
-  criticalCount: number
-  warningCount: number
-  infoCount: number
-}
-
-export interface ArchitectureAuditReport {
-  score: number
-  rating: string
-  color: string
-  findings: AuditFinding[]
-  passes: string[]
-  stats: AuditStats
-}
 
 interface SeverityMeta {
   label: string
@@ -80,17 +45,10 @@ const SEVERITY_CONFIG: Record<AuditSeverity, SeverityMeta> = {
   },
 }
 
-function getSeverityMeta(severity: string): SeverityMeta {
-  if (severity === 'critical' || severity === 'warning' || severity === 'info') {
-    return SEVERITY_CONFIG[severity]
-  }
-  return SEVERITY_CONFIG.info
-}
-
 export interface ArchitectureAuditModalProps {
   open: boolean
   onClose: () => void
-  audit: ArchitectureAuditReport | null
+  audit: AuditReport | null
   mode?: 'architecture' | 'concept'
   boardId: string | null
   onEnsureSavedBoard?: () => Promise<string | null>
@@ -285,7 +243,7 @@ export default function ArchitectureAuditModal({
           )}
 
           {findings.map((f) => {
-            const meta = getSeverityMeta(f.severity)
+            const meta = SEVERITY_CONFIG[f.severity]
             const IconComponent = meta.icon
 
             return (

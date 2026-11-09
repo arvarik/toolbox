@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type ComponentType, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Plus,
   Trash2,
@@ -15,62 +15,23 @@ import {
 import Skeleton from '../components/shared/Skeleton'
 import PullToRefresh from '../components/shared/PullToRefresh'
 import DeckCard from '../components/study/DeckCard'
-import FlashcardView, { type FlashcardItem, type SrsPreviews } from '../components/study/FlashcardView'
+import FlashcardView, { type FlashcardItem } from '../components/study/FlashcardView'
 import DeckEditor, { type DeckSavePayload } from '../components/study/DeckEditor'
 import StudyHeatmap, { type StudySessionDay } from '../components/study/StudyHeatmap'
 import ChatPanel from '../components/shared/ChatPanel'
-import EmptyStateRaw from '../components/shared/EmptyState'
-import ModalRaw from '../components/shared/Modal'
+import EmptyState from '../components/shared/EmptyState'
+import Modal from '../components/shared/Modal'
 
-const EmptyState = EmptyStateRaw as unknown as ComponentType<{
-  icon?: ReactNode
-  title: string
-  description?: string
-  action?: ReactNode
-}>
-
-const Modal = ModalRaw as unknown as ComponentType<{
-  open: boolean
-  onClose: () => void
-  title: ReactNode
-  children: ReactNode
-  footer?: ReactNode
-}>
 import useAppStore from '../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
 import { decksApi, flashcardsApi, studySessionsApi } from '../utils/api'
-import DeckOptionsModal, { type DeckSchedulerSettings } from '../components/study/DeckOptionsModal'
+import DeckOptionsModal, { DEFAULT_DECK_SETTINGS, type DeckSchedulerSettings } from '../components/study/DeckOptionsModal'
 import CardBrowser from '../components/study/CardBrowser'
 import StatsDashboard from '../components/study/StatsDashboard'
 import useIsMobile from '../hooks/useIsMobile'
 import { seedCuratedStarterDeck } from '../utils/starterDeck'
 
 type StudyViewMode = 'list' | 'study' | 'review' | 'edit' | 'new' | 'browser' | 'stats'
-
-interface RawApiCard {
-  id: string
-  deck_id?: string
-  deckName?: string
-  front: string
-  back: string
-  ease_factor?: number
-  interval?: number
-  repetitions?: number
-  next_review?: string | null
-  state?: number
-  learning_step?: number
-  position?: number
-  prerequisite_id?: string | null
-  srs_previews?: SrsPreviews
-  source_pillar_id?: string | null
-  source_topic_id?: string | null
-  source_section_id?: string | null
-  is_reverse?: number
-  reverse_of_id?: string | null
-  is_remediation?: number
-  remediation_node?: string | null
-  remediation_reason?: string | null
-}
 
 interface RawApiDeck {
   id: string
@@ -86,7 +47,7 @@ interface RawApiDeck {
   lastStudied?: string
   progress?: number
   settings?: Partial<DeckSchedulerSettings>
-  cards?: RawApiCard[]
+  cards?: FlashcardItem[]
 }
 
 export interface StudyDeckItem {
@@ -105,14 +66,6 @@ export interface StudyDeckItem {
   cards: FlashcardItem[]
 }
 
-const DEFAULT_DECK_SETTINGS: DeckSchedulerSettings = {
-  new_limit: 20,
-  review_limit: 200,
-  steps: '1m 10m',
-  lapse_steps: '10m',
-  easy_bonus: 1.3,
-}
-
 const errMsg = (err: unknown, fallback: string) =>
   err instanceof Error && err.message ? err.message : fallback
 
@@ -127,7 +80,7 @@ const tagChipStyle = (active: boolean) => ({
 
 const QUICK_BTN_STYLE = { width: 28, height: 28 } as const
 
-const mapCardFromApi = (c: RawApiCard): FlashcardItem => ({
+const mapCardFromApi = (c: FlashcardItem): FlashcardItem => ({
   id: c.id,
   deck_id: c.deck_id,
   deckName: c.deckName,
@@ -197,9 +150,7 @@ export default function StudyPage() {
     const seq = ++fetchSeqRef.current
     if (!isRefresh) setIsLoading(true)
     try {
-      const fetchStudySessions = studySessionsApi
-        ? studySessionsApi.list()
-        : Promise.resolve([])
+      const fetchStudySessions = studySessionsApi.list()
       const [list, sessions] = await Promise.all([
         decksApi.list(),
         fetchStudySessions,
@@ -321,7 +272,7 @@ export default function StudyPage() {
     setSelectedDeck(deck)
     setView('review')
     try {
-      const dueCards = (await flashcardsApi.due(deck.id)) as RawApiCard[]
+      const dueCards = (await flashcardsApi.due(deck.id)) as FlashcardItem[]
       setSelectedDeck({
         ...deck,
         cards: Array.isArray(dueCards) ? dueCards.map(mapCardFromApi) : [],

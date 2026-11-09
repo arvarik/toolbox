@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   ArrowLeft,
@@ -10,15 +10,11 @@ import {
   Loader2,
   Wrench,
 } from "lucide-react";
-import MarkdownRendererRaw from "../components/shared/MarkdownRenderer";
+import MarkdownRenderer from "../components/shared/MarkdownRenderer";
+import type { SrsPreviews } from "../components/study/FlashcardView";
 import useAppStore from "../stores/appStore";
 import { useKitStore } from "../stores/useKitStore";
 import { flashcardsApi } from "../utils/api";
-
-const MarkdownRenderer = MarkdownRendererRaw as unknown as React.ComponentType<{
-  content?: string;
-  className?: string;
-}>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FSRS6_DECAY = 0.1542;
@@ -46,31 +42,16 @@ export interface DueReviewCard {
   state?: number;
   stability?: number | null;
   difficulty?: number | null;
-  interval?: number;
-  ease_factor?: number;
   last_reviewed?: string | null;
-  next_review?: string | null;
   deckName?: string;
   is_remediation?: number;
   remediation_reason?: string;
   remediation_node?: string | null;
-  // Support both snake_case from server SQL alias and camelCase
-  kit_id?: string;
-  kitId?: string;
   kit_slug?: string;
-  kitSlug?: string;
   kit_name?: string;
-  kitName?: string;
   kit_icon?: string;
-  kitIcon?: string;
   kit_color?: string;
-  kitColor?: string;
-  srs_previews?: {
-    again: string;
-    hard: string;
-    good: string;
-    easy: string;
-  };
+  srs_previews?: SrsPreviews;
 }
 
 interface ReviewResponse extends DueReviewCard {
@@ -111,22 +92,12 @@ export default function ReviewPage() {
   const requeuedOnceRef = useRef<Set<string>>(new Set());
   const kitsTouchedRef = useRef<Set<string>>(new Set());
 
+  // Runs once on mount, so the session state still holds its initial values.
   const loadDueQueue = useCallback(async () => {
     void useKitStore.getState().selectKitBySlug(null);
-    setLoading(true);
     try {
       const rows = (await flashcardsApi.dueAll()) as DueReviewCard[] | null;
-      const cards = Array.isArray(rows) ? rows : [];
-      setQueue(cards);
-      setCurrentIndex(0);
-      setRevealed(false);
-      setReviewedCount(0);
-      setCorrectCount(0);
-      setTotalFireCredits(0);
-      setLastFeedbackBanner(null);
-      setSessionDone(false);
-      requeuedOnceRef.current = new Set();
-      kitsTouchedRef.current = new Set();
+      setQueue(Array.isArray(rows) ? rows : []);
     } catch (err) {
       addToast({
         type: "error",
@@ -160,7 +131,7 @@ export default function ReviewPage() {
 
         useAppStore.getState().bumpSrsVersion();
 
-        const kName = currentCard.kitName ?? currentCard.kit_name;
+        const kName = currentCard.kit_name;
         if (kName) kitsTouchedRef.current.add(kName);
 
         const fireCount = res?.implicit_credit_count ?? 0;
@@ -377,10 +348,10 @@ export default function ReviewPage() {
     );
   }
 
-  const kitName = currentCard.kitName ?? currentCard.kit_name ?? "Study Kit";
-  const kitIcon = currentCard.kitIcon ?? currentCard.kit_icon ?? "📚";
-  const kitColor = currentCard.kitColor ?? currentCard.kit_color ?? "#818cf8";
-  const kitSlug = currentCard.kitSlug ?? currentCard.kit_slug ?? "";
+  const kitName = currentCard.kit_name ?? "Study Kit";
+  const kitIcon = currentCard.kit_icon ?? "📚";
+  const kitColor = currentCard.kit_color ?? "#818cf8";
+  const kitSlug = currentCard.kit_slug ?? "";
   const deckName = currentCard.deckName ?? "Deck";
   const retrievabilityPct = computeFsrsRetrievabilityPct(currentCard);
   const previews = currentCard.srs_previews ?? {

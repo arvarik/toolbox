@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   Activity,
@@ -15,8 +15,8 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import StudyHeatmapRaw from "../components/study/StudyHeatmap";
-import ModalRaw from "../components/shared/Modal";
+import StudyHeatmap from "../components/study/StudyHeatmap";
+import Modal from "../components/shared/Modal";
 import {
   ExportKitModal,
   ImportKitModal,
@@ -26,18 +26,6 @@ import { ExpandKitModal } from "../components/kits/ExpandKitModal";
 import useAppStore from "../stores/appStore";
 import useKitStore, { type KitSummaryItem } from "../stores/useKitStore";
 import { kitsApi, sharedKitsApi, studySessionsApi } from "../utils/api";
-
-const StudyHeatmap = StudyHeatmapRaw as unknown as React.ComponentType<{
-  sessions: Array<{ date: string; count: number }>;
-}>;
-
-const Modal = ModalRaw as unknown as React.ComponentType<{
-  open: boolean;
-  onClose?: () => void;
-  title: React.ReactNode;
-  footer?: React.ReactNode;
-  children?: React.ReactNode;
-}>;
 
 export default function LibraryHomePage() {
   const navigate = useNavigate();

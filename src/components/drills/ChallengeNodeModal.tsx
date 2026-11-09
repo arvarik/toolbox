@@ -7,8 +7,8 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
-import ModalRaw from "../shared/Modal";
-import MarkdownRendererRaw from "../shared/MarkdownRenderer";
+import Modal from "../shared/Modal";
+import MarkdownRenderer from "../shared/MarkdownRenderer";
 import RubricFeedbackCard from "./RubricFeedbackCard.tsx";
 import useAppStore from "../../stores/appStore";
 import {
@@ -16,19 +16,6 @@ import {
   type ChallengeNodePayload,
   type ChallengeSubmitResult,
 } from "../../utils/pedagogyApi.ts";
-
-const Modal = ModalRaw as unknown as React.ComponentType<{
-  open: boolean;
-  onClose?: () => void;
-  title: React.ReactNode;
-  footer?: React.ReactNode;
-  children?: React.ReactNode;
-}>;
-
-const MarkdownRenderer = MarkdownRendererRaw as unknown as React.ComponentType<{
-  content?: string;
-  className?: string;
-}>;
 
 export interface ChallengeNodeModalProps {
   nodeId: string | null;

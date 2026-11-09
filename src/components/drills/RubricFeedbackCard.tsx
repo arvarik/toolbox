@@ -1,4 +1,3 @@
-import React from "react";
 import { Link } from "react-router";
 import {
   AlertOctagon,
@@ -11,18 +10,13 @@ import {
   Wrench,
   XCircle,
 } from "lucide-react";
-import MarkdownRendererRaw from "../shared/MarkdownRenderer";
+import MarkdownRenderer from "../shared/MarkdownRenderer";
 import { useKitRoutePrefix } from "../../stores/useKitStore.ts";
 import type {
   EvaluationFeedback,
   ImplicitCreditSummary,
   RemediationItem,
 } from "../../utils/pedagogyApi.ts";
-
-const MarkdownRenderer = MarkdownRendererRaw as unknown as React.ComponentType<{
-  content?: string;
-  className?: string;
-}>;
 
 export interface RubricFeedbackCardProps {
   result: EvaluationFeedback & {

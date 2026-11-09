@@ -19,6 +19,32 @@ import useIsMobile from '../../hooks/useIsMobile'
 import KeyboardShortcutsModal from '../shared/KeyboardShortcutsModal'
 import { configApi } from '../../utils/api'
 
+export function PageFallback() {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minHeight: '50vh',
+        flexDirection: 'column',
+        gap: 'var(--space-3)',
+      }}
+    >
+      <div
+        style={{
+          width: 32,
+          height: 32,
+          border: '2px solid var(--color-border)',
+          borderTopColor: 'var(--color-accent)',
+          borderRadius: '50%',
+          animation: 'spin 0.8s linear infinite',
+        }}
+      />
+    </div>
+  )
+}
+
 export default function Layout() {
   const location = useLocation()
   const isMobile = useIsMobile()
@@ -122,31 +148,7 @@ export default function Layout() {
       <main className="app-main">
         <div className="app-content">
           <ErrorBoundary>
-            <Suspense
-              fallback={
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    minHeight: '50vh',
-                    flexDirection: 'column',
-                    gap: 'var(--space-3)',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: 32,
-                      height: 32,
-                      border: '2px solid var(--color-border)',
-                      borderTopColor: 'var(--color-accent)',
-                      borderRadius: '50%',
-                      animation: 'spin 0.8s linear infinite',
-                    }}
-                  />
-                </div>
-              }
-            >
+            <Suspense fallback={<PageFallback />}>
               <Outlet />
             </Suspense>
           </ErrorBoundary>

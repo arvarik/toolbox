@@ -10,6 +10,19 @@ export type TimerMode = 'pomodoro' | 'shortBreak' | 'longBreak'
 export type TimerStatus = 'idle' | 'running' | 'paused' | 'finished'
 export type PlantState = 'seed' | 'sprout' | 'plant' | 'flower' | 'dead'
 
+const PLANT_EMOJI: Record<PlantState, string> = { seed: '🌱', sprout: '🌿', plant: '🪴', flower: '🌸', dead: '🥀' }
+
+/** Falls back to the seed for an unknown state restored from localStorage. */
+export const plantEmoji = (state: PlantState): string => PLANT_EMOJI[state] ?? '🌱'
+
+/** 90_000 → "01:30". */
+export function formatTime(ms: number): string {
+  const totalSec = Math.floor(ms / 1000)
+  const mins = Math.floor(totalSec / 60)
+  const secs = totalSec % 60
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+}
+
 export type TimerDurations = Record<TimerMode, number>
 
 const POMODORO_DURATIONS: TimerDurations = {

@@ -21,7 +21,6 @@ export interface ModelPickerProps {
 
 interface ResolvedModel extends ModelCatalogItem {
   providerColor?: string
-  providerName: string
 }
 
 function findModel(groups: readonly ModelGroup[], id: string): ResolvedModel | null {
@@ -31,7 +30,6 @@ function findModel(groups: readonly ModelGroup[], id: string): ResolvedModel | n
       return {
         ...m,
         providerColor: group.provider.color,
-        providerName: group.provider.name,
       }
     }
   }

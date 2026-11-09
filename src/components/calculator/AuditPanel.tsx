@@ -17,17 +17,8 @@ import {
   formatBytesPerSec,
   formatBitrate,
   type BoteEstimates,
+  type BoteScenario,
 } from '../../utils/bote'
-
-export type { BoteEstimates }
-
-export interface BoteScenario {
-  id: string
-  name: string
-  emoji?: string
-  description: string
-  inputs?: Record<string, number>
-}
 
 interface CalcAuditFinding {
   severity: 'critical' | 'warning' | 'info' | string

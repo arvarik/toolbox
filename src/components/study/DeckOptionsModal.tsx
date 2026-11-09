@@ -1,14 +1,6 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
-import ModalRaw from '../shared/Modal'
+import { useEffect, useState } from 'react'
+import Modal from '../shared/Modal'
 import { Save, RotateCcw } from 'lucide-react'
-
-const Modal = ModalRaw as unknown as ComponentType<{
-  open: boolean
-  onClose: () => void
-  title: ReactNode
-  children: ReactNode
-  footer?: ReactNode
-}>
 
 export interface DeckSchedulerSettings {
   new_limit: number
@@ -31,7 +23,7 @@ export interface DeckOptionsModalProps {
   onSave: (settings: DeckSchedulerSettings) => void
 }
 
-const DEFAULT_SETTINGS: DeckSchedulerSettings = {
+export const DEFAULT_DECK_SETTINGS: DeckSchedulerSettings = {
   new_limit: 20,
   review_limit: 200,
   steps: '1m 10m',
@@ -45,7 +37,7 @@ export default function DeckOptionsModal({
   deck,
   onSave,
 }: DeckOptionsModalProps) {
-  const settings = { ...DEFAULT_SETTINGS, ...(deck?.settings || {}) }
+  const settings = { ...DEFAULT_DECK_SETTINGS, ...(deck?.settings || {}) }
 
   const [newLimit, setNewLimit] = useState<string>(String(settings.new_limit))
   const [reviewLimit, setReviewLimit] = useState<string>(String(settings.review_limit))
@@ -55,7 +47,7 @@ export default function DeckOptionsModal({
 
   // Sync form fields whenever a different deck is opened
   useEffect(() => {
-    const next = { ...DEFAULT_SETTINGS, ...(deck?.settings || {}) }
+    const next = { ...DEFAULT_DECK_SETTINGS, ...(deck?.settings || {}) }
     setNewLimit(String(next.new_limit))
     setReviewLimit(String(next.review_limit))
     setSteps(next.steps)
@@ -64,11 +56,11 @@ export default function DeckOptionsModal({
   }, [deck?.id, deck?.settings, open])
 
   const handleReset = () => {
-    setNewLimit(String(DEFAULT_SETTINGS.new_limit))
-    setReviewLimit(String(DEFAULT_SETTINGS.review_limit))
-    setSteps(DEFAULT_SETTINGS.steps)
-    setLapseSteps(DEFAULT_SETTINGS.lapse_steps)
-    setEasyBonus(String(DEFAULT_SETTINGS.easy_bonus))
+    setNewLimit(String(DEFAULT_DECK_SETTINGS.new_limit))
+    setReviewLimit(String(DEFAULT_DECK_SETTINGS.review_limit))
+    setSteps(DEFAULT_DECK_SETTINGS.steps)
+    setLapseSteps(DEFAULT_DECK_SETTINGS.lapse_steps)
+    setEasyBonus(String(DEFAULT_DECK_SETTINGS.easy_bonus))
   }
 
   const handleSave = () => {

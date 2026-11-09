@@ -1,52 +1,4 @@
-import { getActiveKitSlugForRequest } from "../stores/useKitStore.ts";
-
-const API_BASE = "/api";
-
-function buildHeaders(extra?: Record<string, string>): Record<string, string> {
-  const slug = getActiveKitSlugForRequest();
-  return {
-    "Content-Type": "application/json",
-    ...(slug ? { "X-Toolbox-Kit": slug } : {}),
-    ...(extra ?? {}),
-  };
-}
-
-async function pedagogyRequest<T>(
-  path: string,
-  options: {
-    method?: string;
-    body?: unknown;
-    headers?: Record<string, string>;
-  } = {},
-): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: options.method ?? "GET",
-    headers: buildHeaders(options.headers),
-    ...(options.body !== undefined ? { body: JSON.stringify(options.body) } : {}),
-  });
-
-  if (!res.ok) {
-    const body = (await res
-      .json()
-      .catch(() => ({ message: res.statusText }))) as {
-      message?: string;
-      error?: { message?: string; code?: string; details?: unknown };
-    };
-    const message =
-      body?.error?.message || body?.message || `Request failed: ${res.status}`;
-    if (res.status === 401 && typeof window !== "undefined") {
-      window.dispatchEvent(
-        new CustomEvent("toolbox:unauthorized", {
-          detail: { code: body?.error?.code },
-        }),
-      );
-    }
-    throw new Error(message);
-  }
-
-  if (res.status === 204) return null as T;
-  return (await res.json()) as T;
-}
+import { request } from "./api";
 
 interface RubricCheckItem {
   point: string;
@@ -148,14 +100,14 @@ export const drillsApi = {
     const qs = nodeId?.trim()
       ? `?nodeId=${encodeURIComponent(nodeId.trim())}`
       : "";
-    return pedagogyRequest<DrillItem[]>(`/drills${qs}`);
+    return request<DrillItem[]>(`/drills${qs}`);
   },
   generate: (payload: {
     nodeId: string;
     difficulty: 1 | 2 | 3;
     model?: string;
   }) =>
-    pedagogyRequest<DrillItem>("/drills/generate", {
+    request<DrillItem>("/drills/generate", {
       method: "POST",
       body: payload,
     }),
@@ -168,7 +120,7 @@ export const drillsApi = {
       model?: string;
     },
   ) =>
-    pedagogyRequest<DrillSubmitResult>(
+    request<DrillSubmitResult>(
       `/drills/${encodeURIComponent(id)}/submit`,
       {
         method: "POST",
@@ -179,7 +131,7 @@ export const drillsApi = {
     const qs = model?.trim()
       ? `?model=${encodeURIComponent(model.trim())}`
       : "";
-    return pedagogyRequest<ChallengeNodePayload>(
+    return request<ChallengeNodePayload>(
       `/drills/challenge/${encodeURIComponent(nodeId)}${qs}`,
     );
   },
@@ -192,7 +144,7 @@ export const drillsApi = {
       model?: string;
     },
   ) =>
-    pedagogyRequest<ChallengeSubmitResult>(
+    request<ChallengeSubmitResult>(
       `/drills/challenge/${encodeURIComponent(nodeId)}`,
       {
         method: "POST",
@@ -210,7 +162,7 @@ export const feynmanApi = {
     explanation: string;
     model?: string;
   }) =>
-    pedagogyRequest<FeynmanEvaluateResult>("/feynman/evaluate", {
+    request<FeynmanEvaluateResult>("/feynman/evaluate", {
       method: "POST",
       body: payload,
     }),
@@ -225,7 +177,7 @@ export const canvasCritiqueApi = {
       data?: { nodes: unknown[]; edges: unknown[] };
     } = {},
   ) =>
-    pedagogyRequest<CanvasCritiqueResult>(
+    request<CanvasCritiqueResult>(
       `/boards/${encodeURIComponent(boardId)}/critique`,
       {
         method: "POST",

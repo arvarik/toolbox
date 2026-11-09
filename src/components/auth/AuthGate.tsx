@@ -111,7 +111,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
         setScreen("open");
       }
     } catch {
-      // Offline / dev fallback: let local IndexedDB cache render cleanly
+      // Offline / dev fallback: render the app when the status request fails
       setIsResolved(true);
       setScreen("open");
     }

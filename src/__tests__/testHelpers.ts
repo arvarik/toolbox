@@ -85,7 +85,6 @@ export function resetKitStore(
     activeKit,
     kitCache: cache,
     isLoadingList: false,
-    isLoadingActive: false,
   })
 }
 

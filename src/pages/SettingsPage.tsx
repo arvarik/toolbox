@@ -1,28 +1,16 @@
-import { useState, useEffect, useCallback, useRef, type ChangeEvent, type ComponentType, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef, type ChangeEvent } from 'react'
 import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon, RefreshCw, Plus, Server } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { useKitStore } from '../stores/useKitStore'
 import * as apiModule from '../utils/api'
 import { configApi, systemApi, profileApi, guideContentApi, endpointsApi } from '../utils/api'
-import ModalRaw from '../components/shared/Modal'
-import ModelPickerRaw from '../components/shared/ModelPicker'
+import Modal from '../components/shared/Modal'
+import ModelPicker from '../components/shared/ModelPicker'
 import { useAuth } from '../components/auth/AuthGate'
 import { AccountSecuritySection, InstanceAdminSection } from '../components/settings/AccountAndAdminSections'
 import { AiSettingsSection } from '../components/settings/AiSettingsSection'
 import { UserByokSection } from '../components/settings/UserByokSection'
 import { McpSettingsSection } from '../components/settings/McpSettingsSection'
-
-const Modal = ModalRaw as unknown as ComponentType<{
-  open: boolean
-  onClose: () => void
-  title: ReactNode
-  children: ReactNode
-  footer?: ReactNode
-}>
-
-const ModelPicker = ModelPickerRaw as unknown as ComponentType<{
-  variant?: string
-}>
 
 type KeyConnectionStatus = 'connected' | 'disconnected' | 'error'
 
@@ -50,16 +38,6 @@ interface CustomEndpointRecord {
   hasApiKey?: boolean
   apiKeyMasked?: string
   models: Array<{ id: string; name?: string }>
-}
-
-interface ModelGroupEntry {
-  provider: { id?: string; name: string; color: string }
-  models: Array<{
-    id: string
-    name: string
-    family?: string
-    description?: string
-  }>
 }
 
 interface SystemStatsSummary {
@@ -662,10 +640,7 @@ export default function SettingsPage() {
   const handleRefreshModels = async () => {
     setIsRefreshingModels(true)
     try {
-      const data = (await useAppStore.getState().refreshModels()) as {
-        errors?: Record<string, string>
-        groups?: ModelGroupEntry[]
-      }
+      const data = await useAppStore.getState().refreshModels()
       const errorEntries = Object.entries(data.errors || {})
       if (errorEntries.length > 0) {
         addToast({
@@ -750,8 +725,7 @@ export default function SettingsPage() {
     }
   }
 
-  const modelGroups = availableModels as ModelGroupEntry[]
-  const allModels = modelGroups.flatMap((group) =>
+  const allModels = availableModels.flatMap((group) =>
     group.models.map((m) => ({
       ...m,
       providerColor: group.provider.color,

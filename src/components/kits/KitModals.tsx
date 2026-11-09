@@ -10,18 +10,10 @@ import {
   RefreshCw,
   Upload,
 } from "lucide-react";
-import ModalRaw from "../shared/Modal";
+import Modal from "../shared/Modal";
 import useAppStore from "../../stores/appStore";
-import { kitsApi, sharedKitsApi } from "../../utils/api";
+import { kitsApi, sharedKitsApi, type SharedKitDetailEntry } from "../../utils/api";
 import type { KitDetailItem, KitSummaryItem } from "../../stores/useKitStore";
-
-const Modal = ModalRaw as unknown as React.ComponentType<{
-  open: boolean;
-  onClose?: () => void;
-  title: React.ReactNode;
-  footer?: React.ReactNode;
-  children?: React.ReactNode;
-}>;
 
 type CollisionChoice = "update" | "copy" | "replace";
 
@@ -541,36 +533,6 @@ export function ImportKitModal({
 /* ============================================================================
  * Shared Kit Changelog & Details Modal
  * ========================================================================== */
-export interface SharedKitListEntry {
-  id: string;
-  slug: string;
-  name: string;
-  description: string;
-  icon: string;
-  color: string;
-  authorId: string | null;
-  authorName: string;
-  isOfficial: boolean;
-  latestVersion: number;
-  tags: string[];
-  downloadsCount: number;
-  pillarCount: number;
-  topicCount: number;
-  nodeCount: number;
-  starterCardCount: number;
-  starterDrillCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface SharedKitDetailEntry extends SharedKitListEntry {
-  versions: Array<{
-    version: number;
-    changelog: string;
-    createdAt: string;
-  }>;
-}
-
 export function SharedKitChangelogModal({
   slug,
   open,

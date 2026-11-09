@@ -59,32 +59,6 @@ const DEPTH_OPTIONS: Array<{
   },
 ];
 
-const DEFAULT_LENSES = [
-  {
-    id: "mental-model",
-    name: "Core Mental Model",
-    icon: "compass",
-    promptHint: "Explain first principles and intuition.",
-    ownershipRule: "Core definitions, intuition, and invariants.",
-  },
-  {
-    id: "mechanics-tradeoffs",
-    name: "Mechanics & Tradeoffs",
-    icon: "sliders",
-    promptHint: "Break down internals, failure modes, and tradeoffs.",
-    ownershipRule: "Algorithms, complexity, and failure modes.",
-  },
-];
-
-function slugifyLocal(raw: string, fallback: string): string {
-  const s = raw
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return s || fallback;
-}
-
 export default function NewKitStudioPage() {
   const navigate = useNavigate();
   const addToast = useAppStore((s) => s.addToast);
@@ -342,10 +316,7 @@ export default function NewKitStudioPage() {
   const handleAddPillar = () => {
     if (!draftSkeleton) return;
     const nextNum = draftSkeleton.pillars.length + 1;
-    const pillarId = slugifyLocal(
-      `pillar-${nextNum}-${Date.now().toString(36).slice(-4)}`,
-      `pillar-${nextNum}`,
-    );
+    const pillarId = `pillar-${nextNum}-${Date.now().toString(36).slice(-4)}`;
     const topicId = `${pillarId}-core`;
     const nodeId = `${pillarId}-concept`;
 
@@ -357,7 +328,8 @@ export default function NewKitStudioPage() {
         name: `New Pillar ${prev.pillars.length + 1}`,
         shortName: `Pillar ${prev.pillars.length + 1}`,
         color: "#006a91",
-        sections: prev.pillars[0]?.sections ?? DEFAULT_LENSES,
+        // Server-validated drafts always have a pillar, and handleRemovePillar keeps one.
+        sections: prev.pillars[0].sections,
         topics: [{ id: topicId, name: "Core Concepts" }],
       };
       return {

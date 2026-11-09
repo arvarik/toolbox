@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { flashcardsApi, chatApi } from '../../utils/api'
-import { BLUEPRINT_SECTIONS } from '../../utils/constants'
+import { SYSTEM_DESIGN_KIT_SKELETON } from '../../../shared/kits/systemDesignKit'
 import StudySessionSummary, { type StudySessionStats } from './StudySessionSummary'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import useAppStore from '../../stores/appStore'
@@ -74,11 +74,6 @@ export interface FlashcardViewProps {
   deckName?: string
   deckId?: string
   reviewMode?: boolean
-  onCardReviewed?: (cardId: string, quality: number) => void
-}
-
-function getCurrentTime(): number {
-  return Date.now()
 }
 
 export default function FlashcardView({
@@ -87,7 +82,6 @@ export default function FlashcardView({
   deckName,
   deckId,
   reviewMode = false,
-  onCardReviewed,
 }: FlashcardViewProps) {
   const navigate = useNavigate()
   const { skeleton, capabilities, sectionsByPillar } = useActiveKit()
@@ -122,7 +116,7 @@ export default function FlashcardView({
       setIsReviewing(false)
       setReviewedCount(0)
       setSessionStats(null)
-      startTimeRef.current = getCurrentTime()
+      startTimeRef.current = Date.now()
       ratingsRef.current = {}
       correctCountRef.current = 0
       setInterceptorActive(false)
@@ -243,16 +237,14 @@ export default function FlashcardView({
 
       ratingsRef.current[quality] = (ratingsRef.current[quality] || 0) + 1
       if (quality >= 3) correctCountRef.current += 1
-      if (onCardReviewed) onCardReviewed(currentCard.id, quality)
 
       // Show "Review in Guide" link when rated Again and card has source metadata
       if (quality === 1 && currentCard.source_pillar_id && currentCard.source_topic_id) {
         const sectionId = currentCard.source_section_id
+        const pillarId = currentCard.source_pillar_id
         const activePillarSections =
-          sectionsByPillar[currentCard.source_pillar_id] ||
-          (BLUEPRINT_SECTIONS as Record<string, ReadonlyArray<{ id: string; name: string }>>)[
-            currentCard.source_pillar_id
-          ] ||
+          sectionsByPillar[pillarId] ||
+          SYSTEM_DESIGN_KIT_SKELETON.pillars.find((p) => p.id === pillarId)?.sections ||
           []
         const sectionDef = activePillarSections.find((s) => s.id === sectionId)
         const sectionName = sectionDef?.name || 'this section'
@@ -284,7 +276,7 @@ export default function FlashcardView({
         const finalStats: StudySessionStats = {
           totalCards: newReviewedCount,
           correctCards: correctCountRef.current,
-          totalTimeMs: getCurrentTime() - (startTimeRef.current || getCurrentTime()),
+          totalTimeMs: Date.now() - (startTimeRef.current || Date.now()),
           ratings: { ...ratingsRef.current },
         }
         setSessionStats(finalStats)
@@ -403,7 +395,7 @@ export default function FlashcardView({
             setSessionQueue([...cards])
             setCurrentIndex(0)
             setReviewedCount(0)
-            startTimeRef.current = getCurrentTime()
+            startTimeRef.current = Date.now()
             ratingsRef.current = {}
             correctCountRef.current = 0
             setSessionStats(null)

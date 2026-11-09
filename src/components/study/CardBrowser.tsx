@@ -36,8 +36,6 @@ export default function CardBrowser({
 
   const getCardStateLabel = (state?: number): { label: string; color: string } => {
     switch (state) {
-      case 0:
-        return { label: 'New', color: 'var(--color-info)' }
       case 1:
       case 3:
         return { label: 'Learning', color: 'var(--color-warning)' }

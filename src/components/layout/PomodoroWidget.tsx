@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { MouseEvent } from 'react'
 import { Timer as TimerIcon, Play, Pause } from 'lucide-react'
-import useTimerStore from '../../stores/useTimerStore'
+import useTimerStore, { formatTime, plantEmoji } from '../../stores/useTimerStore'
 import useAppStore from '../../stores/appStore'
 import PomodoroModal from './PomodoroModal'
 
@@ -15,30 +15,6 @@ export default function PomodoroWidget() {
     window.addEventListener('toggle-pomodoro', handler)
     return () => window.removeEventListener('toggle-pomodoro', handler)
   }, [])
-
-  const formatTime = (ms: number): string => {
-    const totalSec = Math.floor(ms / 1000)
-    const mins = Math.floor(totalSec / 60)
-    const secs = totalSec % 60
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-  }
-
-  const getPlantEmoji = (): string => {
-    switch (plantState) {
-      case 'seed':
-        return '🌱'
-      case 'sprout':
-        return '🌿'
-      case 'plant':
-        return '🪴'
-      case 'flower':
-        return '🌸'
-      case 'dead':
-        return '🥀'
-      default:
-        return '🌱'
-    }
-  }
 
   const handleAction = (e: MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation()
@@ -67,7 +43,7 @@ export default function PomodoroWidget() {
           />
           {collapsed && isActive && (
             <div style={{ position: 'absolute', bottom: -6, right: -6, fontSize: '10px' }}>
-              {getPlantEmoji()}
+              {plantEmoji(plantState)}
             </div>
           )}
         </div>
@@ -92,7 +68,7 @@ export default function PomodoroWidget() {
                 marginTop: '2px',
               }}
             >
-              {getPlantEmoji()} {formatTime(timeLeft)}
+              {plantEmoji(plantState)} {formatTime(timeLeft)}
             </span>
           )}
         </span>

@@ -3,18 +3,21 @@ import { useNavigate } from 'react-router'
 import { Share2, Copy, MessageSquare, BookOpen, Check, Loader2, Layers } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
-import { buildMarkdownSummary, formatCount } from '../../utils/bote'
-import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
+import {
+  buildMarkdownSummary,
+  formatCount,
+  type BoteEstimates,
+  type BoteScenario,
+  type LatencyBudgetItem,
+} from '../../utils/bote'
 import { guideContentApi } from '../../utils/api'
 import {
   readStoreNodes,
   writeStoreGraph,
   type BuilderFlowNode,
 } from '../builder/boardModel'
-import type { BoteEstimates, BoteScenario } from './AuditPanel'
-import type { LatencyBudgetItem } from './LatencyReference'
 
-/** sessionStorage key LearningChat polls for a prefilled draft. */
+/** sessionStorage key LearningChat reads for a prefilled draft. */
 export const CHAT_DRAFT_KEY = 'toolbox_chat_draft'
 
 export interface ExportMenuProps {
@@ -168,26 +171,12 @@ interface GuidePickerProps {
   onClose: () => void
 }
 
-interface PickerPillar {
-  id: string
-  name: string
-  topics: ReadonlyArray<{ id: string; name: string }>
-}
-
 /** Small modal: choose pillar → topic → section, then append the summary. */
 function GuidePicker({ markdown, onClose }: GuidePickerProps) {
   const addToast = useAppStore((s) => s.addToast)
-  const { pillars: kitPillars, sectionsByPillar } = useActiveKit()
-
-  const activePillars: ReadonlyArray<PickerPillar> =
-    kitPillars && kitPillars.length > 0
-      ? kitPillars
-      : (PILLARS as ReadonlyArray<PickerPillar>)
-
-  const resolveSections = (pId: string): ReadonlyArray<{ id: string; name: string }> =>
-    sectionsByPillar[pId] ||
-    (BLUEPRINT_SECTIONS as Record<string, ReadonlyArray<{ id: string; name: string }>>)[pId] ||
-    []
+  // The active kit, or the System Design fallback, always has at least one pillar.
+  const { pillars: activePillars, sectionsByPillar } = useActiveKit()
+  const resolveSections = (pId: string) => sectionsByPillar[pId] || []
 
   const defaultPillar =
     activePillars.find((p) => p.id === 'distributed-mechanics') || activePillars[0]

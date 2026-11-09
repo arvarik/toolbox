@@ -1,7 +1,6 @@
 /**
  * Typed client helpers for `/api/auth/*` and `/api/admin/*`.
- * Reuses canonical types from `shared/platform/auth.ts` and stays separate from
- * `src/utils/api.js` so auth mutations never enter the offline sync queue.
+ * Reuses canonical types from `shared/platform/auth.ts`.
  */
 import type {
   ApiToken,

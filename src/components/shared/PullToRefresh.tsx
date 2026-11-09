@@ -6,41 +6,34 @@ import useIsMobile from '../../hooks/useIsMobile'
 export interface PullToRefreshProps {
   onRefresh: () => Promise<unknown> | unknown
   children: ReactNode
-  isEnabled?: boolean
 }
 
 export default function PullToRefresh({
   onRefresh,
   children,
-  isEnabled = true,
 }: PullToRefreshProps) {
   const isMobile = useIsMobile()
   const [pullDistance, setPullDistance] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const startY = useRef(0)
-  const currentY = useRef(0)
   const contentRef = useRef<HTMLDivElement | null>(null)
-
-  const active = isEnabled && isMobile
 
   const MAX_PULL = 120
   const THRESHOLD = 70
 
   useEffect(() => {
-    if (!active) return
+    if (!isMobile) return
     const el = contentRef.current
     if (!el) return
 
     const handleTouchStart = (e: TouchEvent) => {
       if (window.scrollY > 0 || isRefreshing || !e.touches[0]) return
       startY.current = e.touches[0].clientY
-      currentY.current = startY.current
     }
 
     const handleTouchMove = (e: TouchEvent) => {
       if (window.scrollY > 0 || isRefreshing || !e.touches[0]) return
-      currentY.current = e.touches[0].clientY
-      const dist = currentY.current - startY.current
+      const dist = e.touches[0].clientY - startY.current
       if (dist > 0) {
         if (e.cancelable) e.preventDefault()
         setPullDistance(Math.min(dist * 0.4, MAX_PULL))
@@ -71,9 +64,9 @@ export default function PullToRefresh({
       el.removeEventListener('touchmove', handleTouchMove)
       el.removeEventListener('touchend', handleTouchEnd)
     }
-  }, [active, isRefreshing, pullDistance, onRefresh])
+  }, [isMobile, isRefreshing, pullDistance, onRefresh])
 
-  if (!active) return <>{children}</>
+  if (!isMobile) return <>{children}</>
 
   return (
     <div ref={contentRef} style={{ position: 'relative', touchAction: 'pan-y' }}>

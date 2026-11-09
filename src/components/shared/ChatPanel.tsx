@@ -90,14 +90,6 @@ const saveHistoryForKey = (storageKey: string, messages: ChatPanelMessage[]): vo
   safeStorage.setItem('toolbox_chat_history', JSON.stringify(parsed))
 }
 
-function resolveCurrentKitSlug(storeSlug: string | null): string | null {
-  if (typeof window !== 'undefined' && window.location?.pathname) {
-    const urlSlug = extractKitSlugFromPathname(window.location.pathname)
-    if (urlSlug) return urlSlug
-  }
-  return storeSlug
-}
-
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
 
@@ -365,14 +357,11 @@ function ChatPanelContent({
     if (isMobile) return
     e.preventDefault()
     const startX = e.clientX
-    const startWidth = Number.isNaN(width) ? 350 : width
+    const startWidth = width
 
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const deltaX = moveEvent.clientX - startX
       let newWidth = startWidth - deltaX
-      if (Number.isNaN(newWidth) || typeof newWidth !== 'number') {
-        newWidth = 350
-      }
       if (newWidth < 300) newWidth = 300
       if (newWidth > 600) newWidth = 600
       setWidth(newWidth)
@@ -673,7 +662,7 @@ function ChatPanelContent({
 export default function ChatPanel(props: ChatPanelProps) {
   const activeKitSlug = useKitStore((s) => s.activeKitSlug)
   const { kit } = useActiveKit()
-  const effectiveKitSlug = resolveCurrentKitSlug(activeKitSlug)
+  const effectiveKitSlug = extractKitSlugFromPathname(window.location.pathname) || activeKitSlug
   const storageKey = effectiveKitSlug ? `${effectiveKitSlug}:${props.page}` : props.page
   const kitName = effectiveKitSlug && kit ? kit.name : null
 

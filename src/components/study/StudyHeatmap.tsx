@@ -5,11 +5,6 @@ export interface StudySessionDay {
   count: number
 }
 
-interface HeatmapCell {
-  date: string
-  count: number
-}
-
 /**
  * Parses YYYY-MM-DD string into Date object.
  */
@@ -51,9 +46,6 @@ export default function StudyHeatmap({ sessions = [] }: StudyHeatmapProps) {
       total += s.count
     })
 
-    // Sort dates descending
-    const sortedDates = Object.keys(sessionMap).sort((a, b) => (a < b ? 1 : -1))
-
     let cStreak = 0
     let mStreak = 0
 
@@ -78,8 +70,8 @@ export default function StudyHeatmap({ sessions = [] }: StudyHeatmapProps) {
     }
 
     // Calculate max streak
-    const allDates = new Set(sortedDates)
-    for (const date of sortedDates) {
+    const allDates = new Set(Object.keys(sessionMap))
+    for (const date of allDates) {
       let run = 1
       const d = parseDate(date)
       d.setDate(d.getDate() - 1)
@@ -99,8 +91,8 @@ export default function StudyHeatmap({ sessions = [] }: StudyHeatmapProps) {
     const startDay = start.getDay()
     start.setDate(start.getDate() - startDay)
 
-    const gridWeeks: Array<Array<HeatmapCell | null>> = []
-    let currentWeek: Array<HeatmapCell | null> = []
+    const gridWeeks: Array<Array<StudySessionDay | null>> = []
+    let currentWeek: Array<StudySessionDay | null> = []
     const curr = new Date(start)
 
     while (curr <= end) {

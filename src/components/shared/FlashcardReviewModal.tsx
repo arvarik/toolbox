@@ -18,11 +18,9 @@ export interface FlashcardReviewModalProps {
   topicName?: string
   pillarId?: string | null
   topicId?: string | null
-  onSaveSuccess?: () => void
 }
 
 interface SectionCardGroup {
-  sectionId: string | null
   sectionName: string | null
   cards: Array<{ card: GeneratedFlashcardDraft; index: number }>
 }
@@ -234,7 +232,6 @@ export default function FlashcardReviewModal({
   topicName,
   pillarId,
   topicId,
-  onSaveSuccess,
 }: FlashcardReviewModalProps) {
   const addToast = useAppStore((s) => s.addToast)
   const selectedModel = useAppStore((s) => s.model)
@@ -536,7 +533,6 @@ export default function FlashcardReviewModal({
           ? `Saved ${originalCount} card(s) + ${reverseCount} reverse card(s) to "${deck.name}"`
           : `Saved ${originalCount} flashcard(s) to "${deck.name}" deck.`
       addToast({ type: 'success', message: msg })
-      onSaveSuccess?.()
       onClose()
     } catch (err) {
       addToast({
@@ -560,7 +556,6 @@ export default function FlashcardReviewModal({
       const key = card.sourceSectionId || '__unsorted__'
       if (!groupMap.has(key)) {
         groupMap.set(key, {
-          sectionId: card.sourceSectionId || null,
           sectionName: card.sourceSectionName || 'Other',
           cards: [],
         })
@@ -570,7 +565,6 @@ export default function FlashcardReviewModal({
     sectionGroups.push(...groupMap.values())
   } else {
     sectionGroups.push({
-      sectionId: null,
       sectionName: null,
       cards: cards.map((card, i) => ({ card, index: i })),
     })

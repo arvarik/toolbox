@@ -5,15 +5,13 @@ import Toolbox from '../components/builder/Toolbox'
 import Canvas from '../components/builder/Canvas'
 import BoardList, { type BoardTabItem } from '../components/builder/BoardList'
 import TemplateGallery, { type CanvasTemplateItem } from '../components/builder/TemplateGallery'
-import ArchitectureAuditModal, {
-  type ArchitectureAuditReport,
-} from '../components/builder/ArchitectureAuditModal'
+import ArchitectureAuditModal from '../components/builder/ArchitectureAuditModal'
 import ChatPanel from '../components/shared/ChatPanel'
 import useAppStore from '../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
 import useIsMobile from '../hooks/useIsMobile'
 import { boardsApi } from '../utils/api'
-import { auditArchitecture } from '../utils/architectureLinter'
+import { auditArchitecture, type AuditReport } from '../utils/architectureLinter'
 import {
   toFlowNodes,
   toFlowEdges,
@@ -64,8 +62,8 @@ export default function BuilderPage() {
   const [activeBoard, setActiveBoard] = useState<string | null>(null)
   const [showTemplates, setShowTemplates] = useState(false)
   const [showAuditModal, setShowAuditModal] = useState(false)
-  const auditReport = useMemo<ArchitectureAuditReport>(
-    () => auditArchitecture(nodes, edges, { mode: canvasMode }) as ArchitectureAuditReport,
+  const auditReport = useMemo<AuditReport>(
+    () => auditArchitecture(nodes, edges, { mode: canvasMode }),
     [nodes, edges, canvasMode]
   )
   const isMobile = useIsMobile()
@@ -96,31 +94,8 @@ export default function BuilderPage() {
     setShowAuditModal(false)
     writeStoreGraph({ nodes: [], edges: [] })
 
-    boardsApi.list<BoardTabItem>().then((rawList) => {
-      if (cancelled) return
-      const list = Array.isArray(rawList) ? rawList : []
-      if (list.length > 0) {
-        setBoards(list)
-        // Deep link support: /builder?board=<id> (e.g. from the Knowledge Graph)
-        const requested = searchParams.get('board')
-        const match = requested ? list.find((b) => b.id === requested) : undefined
-        const firstBoard = list[0]
-        if (match || firstBoard) {
-          setActiveBoard((match ?? firstBoard).id)
-        }
-      } else {
-        // No saved boards — create a default local board
-        const newBoard: BoardTabItem = {
-          id: `local-${Date.now()}`,
-          name: isConceptMode ? 'Untitled Concept Map' : 'Untitled Board',
-        }
-        skipNextLoad.current = true
-        setBoards([newBoard])
-        setActiveBoard(newBoard.id)
-        setUnsavedIds(new Set([newBoard.id]))
-      }
-    }).catch(() => {
-      if (cancelled) return
+    // No saved boards, or the list request failed: start a default local board
+    const startLocalBoard = () => {
       const newBoard: BoardTabItem = {
         id: `local-${Date.now()}`,
         name: isConceptMode ? 'Untitled Concept Map' : 'Untitled Board',
@@ -129,6 +104,22 @@ export default function BuilderPage() {
       setBoards([newBoard])
       setActiveBoard(newBoard.id)
       setUnsavedIds(new Set([newBoard.id]))
+    }
+
+    boardsApi.list<BoardTabItem>().then((rawList) => {
+      if (cancelled) return
+      const list = Array.isArray(rawList) ? rawList : []
+      if (list.length > 0) {
+        setBoards(list)
+        // Deep link support: /builder?board=<id> (e.g. from the Knowledge Graph)
+        const requested = searchParams.get('board')
+        const match = requested ? list.find((b) => b.id === requested) : undefined
+        setActiveBoard((match ?? list[0]).id)
+      } else {
+        startLocalBoard()
+      }
+    }).catch(() => {
+      if (!cancelled) startLocalBoard()
     })
 
     return () => { cancelled = true }

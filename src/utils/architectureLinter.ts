@@ -48,7 +48,7 @@ interface AuditStats {
   infoCount: number
 }
 
-interface AuditReport {
+export interface AuditReport {
   score: number
   rating: string
   color: string
@@ -181,27 +181,32 @@ function auditConceptMap(
     )
   }
 
-  let score = 100
-  for (const f of findings) {
-    if (f.severity === 'critical') score -= 25
-    else if (f.severity === 'warning') score -= 10
-    else if (f.severity === 'info') score -= 5
-  }
-  score = Math.max(0, Math.min(100, score))
+  return buildReport(nodes, edges, findings, passes, [
+    'Unstructured Concept Sketch',
+    'Fragmented Concept Map',
+    'Coherent Map with Refinement Gaps',
+    'Well-Structured Concept Map',
+  ])
+}
 
-  let rating = 'Well-Structured Concept Map'
-  let color = 'var(--color-success, #22c55e)'
-  if (score < 50) {
-    rating = 'Unstructured Concept Sketch'
-    color = 'var(--color-error, #ef4444)'
-  } else if (score < 75) {
-    rating = 'Fragmented Concept Map'
-    color = 'var(--color-warning, #f59e0b)'
-  } else if (score < 90) {
-    rating = 'Coherent Map with Refinement Gaps'
-    color = 'var(--color-info, #60a5fa)'
-  }
+const SEVERITY_PENALTY: Record<AuditSeverity, number> = { critical: 25, warning: 10, info: 5 }
 
+/** Scores the findings and names the score band: below 50, below 75, below 90, then the rest. */
+function buildReport(
+  nodes: readonly AuditNode[],
+  edges: readonly AuditEdge[],
+  findings: AuditFinding[],
+  passes: string[],
+  ratings: readonly [string, string, string, string],
+): AuditReport {
+  const penalty = findings.reduce((sum, f) => sum + SEVERITY_PENALTY[f.severity], 0)
+  const score = Math.max(0, Math.min(100, 100 - penalty))
+  const [rating, color] =
+    score < 50 ? [ratings[0], 'var(--color-error, #ef4444)']
+    : score < 75 ? [ratings[1], 'var(--color-warning, #f59e0b)']
+    : score < 90 ? [ratings[2], 'var(--color-info, #60a5fa)']
+    : [ratings[3], 'var(--color-success, #22c55e)']
+  const count = (severity: AuditSeverity) => findings.filter((f) => f.severity === severity).length
   return {
     score,
     rating,
@@ -211,9 +216,9 @@ function auditConceptMap(
     stats: {
       totalNodes: nodes.length,
       totalEdges: edges.length,
-      criticalCount: findings.filter((f) => f.severity === 'critical').length,
-      warningCount: findings.filter((f) => f.severity === 'warning').length,
-      infoCount: findings.filter((f) => f.severity === 'info').length,
+      criticalCount: count('critical'),
+      warningCount: count('warning'),
+      infoCount: count('info'),
     },
   }
 }
@@ -483,40 +488,10 @@ export function auditArchitecture(
     passes.push('Fault Isolation: Circuit breaker prevents cascading failures.')
   }
 
-  // Calculate Health Score
-  let score = 100
-  for (const f of findings) {
-    if (f.severity === 'critical') score -= 25
-    else if (f.severity === 'warning') score -= 10
-    else if (f.severity === 'info') score -= 5
-  }
-  score = Math.max(0, Math.min(100, score))
-
-  let rating = 'Production Ready'
-  let color = 'var(--color-success, #22c55e)'
-  if (score < 50) {
-    rating = 'Fragile Architecture'
-    color = 'var(--color-error, #ef4444)'
-  } else if (score < 75) {
-    rating = 'High Risk Gaps'
-    color = 'var(--color-warning, #f59e0b)'
-  } else if (score < 90) {
-    rating = 'Solid with Hardening Gaps'
-    color = 'var(--color-info, #60a5fa)'
-  }
-
-  return {
-    score,
-    rating,
-    color,
-    findings,
-    passes,
-    stats: {
-      totalNodes: nodes.length,
-      totalEdges: edges.length,
-      criticalCount: findings.filter((f) => f.severity === 'critical').length,
-      warningCount: findings.filter((f) => f.severity === 'warning').length,
-      infoCount: findings.filter((f) => f.severity === 'info').length,
-    },
-  }
+  return buildReport(nodes, edges, findings, passes, [
+    'Fragile Architecture',
+    'High Risk Gaps',
+    'Solid with Hardening Gaps',
+    'Production Ready',
+  ])
 }

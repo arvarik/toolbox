@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { X, Play, Pause, Square, Settings2, Timer as TimerIcon } from 'lucide-react'
-import useTimerStore from '../../stores/useTimerStore'
-import type { TimerMode } from '../../stores/useTimerStore'
+import useTimerStore, { formatTime, plantEmoji, type TimerMode } from '../../stores/useTimerStore'
 
 const TIMER_MODES: readonly TimerMode[] = ['pomodoro', 'shortBreak', 'longBreak']
 
@@ -36,30 +35,6 @@ export default function PomodoroModal({ onClose }: PomodoroModalProps) {
     shortBreak: durations.shortBreak / 60000,
     longBreak: durations.longBreak / 60000,
   })
-
-  const getPlantEmoji = (): string => {
-    switch (plantState) {
-      case 'seed':
-        return '🌱'
-      case 'sprout':
-        return '🌿'
-      case 'plant':
-        return '🪴'
-      case 'flower':
-        return '🌸'
-      case 'dead':
-        return '🥀'
-      default:
-        return '🌱'
-    }
-  }
-
-  const formatTime = (ms: number): string => {
-    const totalSec = Math.floor(ms / 1000)
-    const mins = Math.floor(totalSec / 60)
-    const secs = totalSec % 60
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
-  }
 
   const handleSaveSettings = () => {
     setDuration('pomodoro', tempDurations.pomodoro * 60000)
@@ -323,7 +298,7 @@ export default function PomodoroModal({ onClose }: PomodoroModalProps) {
                       marginBottom: 'var(--space-2)',
                     }}
                   >
-                    {getPlantEmoji()}
+                    {plantEmoji(plantState)}
                   </div>
                   <div
                     style={{

@@ -33,6 +33,15 @@ import { passkeysAvailable, useAuth } from "../auth/AuthGate.tsx";
 const errMessage = (err: unknown, fallback: string) =>
   err instanceof Error ? err.message : fallback;
 
+/** Runs fn and shows any failure as an error toast (the fallback text for a non-Error). */
+async function runGuarded(fallback: string, fn: () => Promise<void>) {
+  try {
+    await fn();
+  } catch (err) {
+    useAppStore.getState().addToast({ type: "error", message: errMessage(err, fallback) });
+  }
+}
+
 export function AccountSecuritySection() {
   const { user, authRequired, localOwnerPresent, isResolved, beginSetup, logout, refresh } =
     useAuth();
@@ -100,14 +109,6 @@ export function AccountSecuritySection() {
   }
 
   if (!authRequired || !user) return null;
-
-  const runGuarded = async (fallback: string, fn: () => Promise<void>) => {
-    try {
-      await fn();
-    } catch (err) {
-      addToast({ type: "error", message: errMessage(err, fallback) });
-    }
-  };
 
   const handleCreateToken = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -449,16 +450,8 @@ export function InstanceAdminSection() {
 
   if (!isResolved || !authRequired || !isAdmin) return null;
 
-  const runAdmin = async (fallback: string, fn: () => Promise<void>) => {
-    try {
-      await fn();
-    } catch (err) {
-      addToast({ type: "error", message: errMessage(err, fallback) });
-    }
-  };
-
   const handleToggleRegistration = () =>
-    runAdmin("Update failed", async () => {
+    runGuarded("Update failed", async () => {
       const next = !registrationOpen;
       await adminApi.updateSettings({ registrationOpen: next });
       setRegistrationOpen(next);
@@ -472,7 +465,7 @@ export function InstanceAdminSection() {
 
   const handleCreateInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    await runAdmin("Could not create invite", async () => {
+    await runGuarded("Could not create invite", async () => {
       const res = await adminApi.createInvitation({
         email: inviteEmail.trim() || undefined,
         role: inviteRole,
@@ -485,14 +478,14 @@ export function InstanceAdminSection() {
   };
 
   const handleResetUserPassword = (u: AdminUserItem) =>
-    runAdmin("Reset failed", async () => {
+    runGuarded("Reset failed", async () => {
       const { temporaryPassword } = await adminApi.resetPassword(u.id);
       setTempPasswordInfo({ username: u.username, password: temporaryPassword });
       await loadAdminData();
     });
 
   const handleToggleUserStatus = (u: AdminUserItem) =>
-    runAdmin("Status update failed", async () => {
+    runGuarded("Status update failed", async () => {
       if (u.status === "disabled") await adminApi.enableUser(u.id);
       else await adminApi.disableUser(u.id);
       await loadAdminData();
@@ -501,7 +494,7 @@ export function InstanceAdminSection() {
   const handleCreateBackup = async () => {
     setCreatingBackup(true);
     try {
-      await runAdmin("Backup failed", async () => {
+      await runGuarded("Backup failed", async () => {
         const { backup } = await adminApi.createBackup();
         await loadAdminData();
         addToast({

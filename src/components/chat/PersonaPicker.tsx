@@ -1,9 +1,9 @@
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { ChevronDown } from 'lucide-react'
-import { buildPersonasForKit, type PersonaId } from './personas'
-import { useActiveKit } from '../../stores/useKitStore'
+import type { PersonaDef, PersonaId } from './personas'
 
 interface PersonaPickerProps {
+  personas: Record<PersonaId, PersonaDef>
   activeId: PersonaId
   onSelect: (id: PersonaId) => void
 }
@@ -11,15 +11,9 @@ interface PersonaPickerProps {
 /**
  * PersonaPicker Dropdown — switches between the 4 tutoring styles.
  */
-export default function PersonaPicker({ activeId, onSelect }: PersonaPickerProps) {
+export default function PersonaPicker({ personas, activeId, onSelect }: PersonaPickerProps) {
   const [open, setOpen] = useState(false)
   const dropRef = useRef<HTMLDivElement>(null)
-  const { kit, skeleton, tutor } = useActiveKit()
-  const isCustomKit = Boolean(kit && skeleton.identity.slug !== 'system-design')
-  const personas = useMemo(
-    () => buildPersonasForKit(tutor, isCustomKit),
-    [tutor, isCustomKit],
-  )
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
