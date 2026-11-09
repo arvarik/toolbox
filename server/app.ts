@@ -26,6 +26,7 @@ import {
 import { authRouter } from "./platform/routes/authRoutes.ts";
 import { adminRouter } from "./platform/routes/adminRoutes.ts";
 import { mountKitRoutes } from "./kits/kitRoutesMount.ts";
+import { mountMcpRoutes } from "./mcp/mcpRoutesMount.ts";
 
 import configRoutes from "./routes/config.ts";
 import endpointRoutes from "./routes/endpoints.ts";
@@ -74,6 +75,7 @@ export function createApp(): Express {
   app.use(refuseCrossSiteWrites);
 
   app.use("/api/auth", authRouter);
+  mountMcpRoutes(app);
   app.use("/api/admin", requireAdmin, requirePasswordCurrent, adminRouter);
 
   const authed = [requireAuth, requirePasswordCurrent];

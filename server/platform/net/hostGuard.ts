@@ -1,6 +1,7 @@
 import net from "node:net";
 import type { Request, Response, NextFunction } from "express";
 import { AppError } from "./errors.ts";
+import { isOwnOrigin } from "./originAndFetch.ts";
 
 interface HostConfig {
   key: string;
@@ -94,5 +95,41 @@ export function hostGuard(req: Request, _res: Response, next: NextFunction): voi
     new AppError("Request Host header is not allowed.", 403, {
       code: "HOST_NOT_ALLOWED",
     }),
+  );
+}
+
+/**
+ * MCP Streamable HTTP Origin guard (2025-2026 MCP security specification).
+ * Native CLI/desktop MCP clients send no `Origin` header and pass through.
+ * Browser-initiated requests carry `Origin` and are accepted ONLY when the
+ * origin is `http://` or `https://` and matches this server's own origin
+ * (`Host` / `PUBLIC_URL` / `PUBLIC_ORIGIN`) or explicit `CORS_ORIGIN`.
+ */
+export function mcpOriginGuard(
+  req: Request,
+  _res: Response,
+  next: NextFunction,
+): void {
+  const origin = req.headers.origin;
+  if (!origin) return next();
+
+  const trimmed = origin.trim();
+  const isHttpScheme =
+    trimmed.startsWith("http://") || trimmed.startsWith("https://");
+  const corsOrigin = process.env.CORS_ORIGIN?.trim();
+
+  if (
+    isHttpScheme &&
+    (isOwnOrigin(req, trimmed) || (Boolean(corsOrigin) && trimmed === corsOrigin))
+  ) {
+    return next();
+  }
+
+  next(
+    new AppError(
+      `The MCP server does not accept requests from origin "${trimmed}". Set CORS_ORIGIN to allow a trusted web client.`,
+      403,
+      { code: "ORIGIN_NOT_ALLOWED" },
+    ),
   );
 }
