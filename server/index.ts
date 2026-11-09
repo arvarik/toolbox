@@ -10,10 +10,11 @@ validatePublicUrl();
 
 const app = createApp();
 const PORT = Number(process.env.PORT || DEFAULT_PORT);
+const HOST = process.env.HOST || "0.0.0.0";
 const isProduction = process.env.NODE_ENV === "production";
 
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, HOST, () => {
   logger.info(
-    `Toolbox v2 server running at http://localhost:${PORT} (${isProduction ? "production" : "development"}, db=${DB_PATH})`,
+    `Toolbox v2 server running at http://${HOST}:${PORT} (${isProduction ? "production" : "development"}, db=${DB_PATH})`,
   );
 });

@@ -1,7 +1,6 @@
-import { useEffect, lazy, Suspense } from 'react'
+import { lazy, Suspense } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import Layout from './components/layout/Layout'
-import { processSyncQueue } from './utils/db'
 import AhaMoment from './components/shared/AhaMoment'
 import CommitModal from './components/chat/CommitModal'
 import TaskWorkingBar from './components/shared/TaskWorkingBar'
@@ -50,22 +49,6 @@ function PageFallback() {
 }
 
 export default function App() {
-  useEffect(() => {
-    const handleOnline = () => {
-      console.log('[sync] Back online. Processing sync queue...')
-      processSyncQueue()
-    }
-    
-    window.addEventListener('online', handleOnline)
-    
-    // Attempt to process queue on initial load if online
-    if (navigator.onLine) {
-      processSyncQueue()
-    }
-
-    return () => window.removeEventListener('online', handleOnline)
-  }, [])
-
   return (
     <>
       <Suspense fallback={<PageFallback />}>

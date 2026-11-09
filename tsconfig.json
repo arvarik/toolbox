@@ -23,6 +23,6 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true
   },
-  "include": ["src", "server", "shared", "scripts", "*.ts"],
-  "exclude": ["node_modules", "dist", "data", "uploads", "backups"]
+  "include": ["src", "server", "shared", "tests", "scripts", "*.ts"],
+  "exclude": ["node_modules", "dist", "data", "uploads", "backups", "test-results", "playwright-report"]
 }

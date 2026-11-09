@@ -1,5 +1,3 @@
-import { getCache, setCache, enqueueSync } from './db'
-
 const API_BASE = '/api'
 
 function activeKitHeader() {
@@ -34,34 +32,7 @@ async function request(path, options = {}) {
     config.body = JSON.stringify(config.body)
   }
 
-  const isGet = !config.method || config.method === 'GET'
-
-  // If offline, try cache (for GET) or queue sync (for mutations)
-  if (typeof navigator !== 'undefined' && !navigator.onLine) {
-    if (isGet) {
-      const cached = await getCache(url)
-      if (cached) return cached
-      throw new Error('Offline and no cache available')
-    } else if (!isFormData) {
-      await enqueueSync(url, config)
-      return { _offline: true, message: 'Queued for sync' } // Mock success for optimistic UI
-    }
-  }
-
-  let res
-  try {
-    res = await fetch(url, config)
-  } catch (err) {
-    // Network error (e.g. server down while browser still thinks it is online)
-    if (isGet) {
-      const cached = await getCache(url)
-      if (cached) return cached
-    } else if (!isFormData) {
-      await enqueueSync(url, config)
-      return { _offline: true, message: 'Queued for sync' }
-    }
-    throw err
-  }
+  const res = await fetch(url, config)
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: res.statusText }))
@@ -82,14 +53,7 @@ async function request(path, options = {}) {
   // Handle 204 No Content
   if (res.status === 204) return null
 
-  const data = await res.json()
-
-  // Cache successful GET requests for offline use
-  if (isGet) {
-    await setCache(url, data).catch(console.error)
-  }
-
-  return data
+  return res.json()
 }
 
 /* ---- Config ---- */

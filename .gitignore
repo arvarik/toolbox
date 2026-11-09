@@ -1,6 +1,8 @@
 # Build & test output
 dist
 coverage
+test-results
+playwright-report
 
 # Runtime data
 data
