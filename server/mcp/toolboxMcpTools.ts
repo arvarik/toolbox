@@ -40,16 +40,13 @@ import {
   expandTrack,
   nodeDepths,
   nodeMap,
-  nodesForCard,
   prerequisitesOf,
   topologicalSort,
 } from "../../shared/kits/kitSkeleton.ts";
 import { computeGraphHealth, type HealthCardRow } from "../graph/health.ts";
-import { applyImplicitPrerequisiteCredit } from "../graph/encompassing.ts";
-import {
-  planRemediation,
-  type RemediationCardRow,
-} from "../graph/remediation.ts";
+import { creditReviewedCard } from "../graph/encompassing.ts";
+import { queueLapseRemediation } from "../graph/remediation.ts";
+import { deckSessionCards, saveReview } from "../routes/decks.ts";
 import {
   hybridSearch,
   syncDomainSourcesToRag,
@@ -76,19 +73,6 @@ const READ_ONLY_NOTE =
   "\n- This token is read-only. Only read tools are listed; mutating tools are omitted.";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Prerequisite gate matching `server/routes/decks.ts`: never deadlocks if a
- * prerequisite card was deleted, and scopes strictly to `flashcards.ownerId`.
- */
-const PREREQ_UNLOCKED_SQL = `
-  (prerequisite_id IS NULL OR prerequisite_id = '' OR NOT EXISTS (
-    SELECT 1 FROM flashcards p
-    WHERE p.ownerId = flashcards.ownerId
-      AND p.id = flashcards.prerequisite_id
-      AND NOT (p.state = 2 AND p.ease_factor >= 2.5)
-  ))
-`;
 
 const idField = (desc: string) => z.string().trim().min(1).max(120).describe(desc);
 const optIdField = (desc: string) => idField(desc).optional();
@@ -177,71 +161,9 @@ function collectDueCards(
     decks.map((d) => [d.id, parseDeckSettings(d.settings)]),
   );
 
-  const getNewReviewedToday = db.prepare(
-    `SELECT COUNT(*) AS count FROM flashcards
-     WHERE ownerId = ? AND deck_id = ?
-       AND last_reviewed IS NOT NULL
-       AND date(last_reviewed, 'localtime') = date('now', 'localtime')
-       AND repetitions = 1`,
+  const sessionCards: McpCardRow[] = decks.flatMap((deck) =>
+    deckSessionCards(scope, deck.id, deckSettings.get(deck.id)!),
   );
-  const getReviewsToday = db.prepare(
-    `SELECT COUNT(*) AS count FROM flashcards
-     WHERE ownerId = ? AND deck_id = ?
-       AND last_reviewed IS NOT NULL
-       AND date(last_reviewed, 'localtime') = date('now', 'localtime')
-       AND repetitions > 1`,
-  );
-  const getLearningCards = db.prepare(
-    `SELECT * FROM flashcards
-     WHERE ownerId = ? AND deck_id = ?
-       AND state IN (1, 3)
-       AND (next_review IS NULL OR next_review <= datetime('now'))
-       AND ${PREREQ_UNLOCKED_SQL}
-     ORDER BY next_review ASC`,
-  );
-  const getReviewCards = db.prepare(
-    `SELECT * FROM flashcards
-     WHERE ownerId = ? AND deck_id = ?
-       AND state = 2
-       AND (next_review IS NULL OR next_review <= datetime('now'))
-       AND ${PREREQ_UNLOCKED_SQL}
-     ORDER BY next_review ASC
-     LIMIT ?`,
-  );
-  const getNewCards = db.prepare(
-    `SELECT * FROM flashcards
-     WHERE ownerId = ? AND deck_id = ?
-       AND state = 0
-       AND next_review IS NULL
-       AND ${PREREQ_UNLOCKED_SQL}
-     ORDER BY position ASC, id ASC
-     LIMIT ?`,
-  );
-
-  const sessionCards: McpCardRow[] = [];
-  for (const deck of decks) {
-    const settings = deckSettings.get(deck.id)!;
-    const newToday = (
-      getNewReviewedToday.get(scope.ownerId, deck.id) as { count: number }
-    ).count;
-    const revToday = (
-      getReviewsToday.get(scope.ownerId, deck.id) as { count: number }
-    ).count;
-
-    const learning = getLearningCards.all(scope.ownerId, deck.id) as McpCardRow[];
-    const remainingRev = Math.max(0, settings.review_limit - revToday);
-    const reviews =
-      remainingRev > 0
-        ? (getReviewCards.all(scope.ownerId, deck.id, remainingRev) as McpCardRow[])
-        : [];
-    const remainingNew = Math.max(0, settings.new_limit - newToday);
-    const news =
-      remainingNew > 0
-        ? (getNewCards.all(scope.ownerId, deck.id, remainingNew) as McpCardRow[])
-        : [];
-
-    sessionCards.push(...learning, ...reviews, ...news);
-  }
 
   const remediationRows = db
     .prepare(
@@ -348,13 +270,10 @@ function computeKitPathPayload(scope: Scope, kitDetail: OwnedKitDetail) {
     topic_id: string;
     section_id: string;
   }>;
-  const filledTopicSections = new Map<string, string[]>();
-  for (const row of filledGuideRows) {
-    const key = `${row.pillar_id}::${row.topic_id}`;
-    const list = filledTopicSections.get(key) ?? [];
-    list.push(row.section_id);
-    filledTopicSections.set(key, list);
-  }
+  const filledTopicSections = Map.groupBy(
+    filledGuideRows,
+    (row) => `${row.pillar_id}::${row.topic_id}`,
+  );
 
   const { byNode, cardNodeIndex } = computeGraphHealth(cards, {
     remediationCardIds,
@@ -437,7 +356,9 @@ function computeKitPathPayload(scope: Scope, kitDetail: OwnedKitDetail) {
       id: t.id,
       name: t.name,
       summary: t.summary ?? "",
-      filledSectionIds: filledTopicSections.get(`${pillar.id}::${t.id}`) ?? [],
+      filledSectionIds: (filledTopicSections.get(`${pillar.id}::${t.id}`) ?? []).map(
+        (row) => row.section_id,
+      ),
     })),
   }));
 
@@ -861,29 +782,19 @@ function registerToolboxTools(
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
 
-      const created: Array<{
-        id: string;
-        front: string;
-        back: string;
-        nodeId: string | null;
-        pillarId: string | null;
-        topicId: string | null;
-        sectionId: string | null;
-        prerequisiteCardId: string | null;
-      }> = [];
+      const created = args.cards.map((item) => ({
+        id: crypto.randomUUID(),
+        front: item.front,
+        back: item.back,
+        nodeId: item.nodeId ?? null,
+        pillarId: item.pillarId ?? null,
+        topicId: item.topicId ?? null,
+        sectionId: item.sectionId ?? null,
+        prerequisiteCardId: item.prerequisiteCardId ?? null,
+      }));
 
       db.transaction(() => {
-        for (const item of args.cards) {
-          const row = {
-            id: crypto.randomUUID(),
-            front: item.front,
-            back: item.back,
-            nodeId: item.nodeId ?? null,
-            pillarId: item.pillarId ?? null,
-            topicId: item.topicId ?? null,
-            sectionId: item.sectionId ?? null,
-            prerequisiteCardId: item.prerequisiteCardId ?? null,
-          };
+        for (const row of created) {
           insertCard.run(
             row.id,
             scope.ownerId,
@@ -897,7 +808,6 @@ function registerToolboxTools(
             row.topicId,
             row.sectionId,
           );
-          created.push(row);
         }
         db.prepare(
           "UPDATE decks SET updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
@@ -995,103 +905,13 @@ function registerToolboxTools(
       const settings = parseDeckSettings(card.deck_settings);
       const updated = calculateNextSrsState(card, quality, settings, args.confidence);
 
-      db.transaction(() => {
-        db.prepare(
-          `UPDATE flashcards SET
-             ease_factor = ?, interval = ?, repetitions = ?, next_review = ?,
-             last_reviewed = ?, state = ?, learning_step = ?, stability = ?,
-             difficulty = ?, lapses = ?, updated_at = datetime('now')
-           WHERE ownerId = ? AND id = ?`,
-        ).run(
-          updated.ease_factor,
-          updated.interval,
-          updated.repetitions,
-          updated.next_review,
-          updated.last_reviewed,
-          updated.state,
-          updated.learning_step,
-          updated.stability,
-          updated.difficulty,
-          updated.lapses,
-          scope.ownerId,
-          card.id,
-        );
-
-        db.prepare(
-          `INSERT INTO study_sessions (ownerId, date, count)
-           VALUES (?, date('now', 'localtime'), 1)
-           ON CONFLICT(ownerId, date) DO UPDATE SET count = count + 1`,
-        ).run(scope.ownerId);
-
-        db.prepare(
-          `UPDATE remediation_queue SET resolved_at = datetime('now')
-           WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL`,
-        ).run(scope.ownerId, card.id);
-      })();
-
-      let implicitCreditCount = 0;
-      if (quality >= 4 && (card.state === 2 || updated.state === 2)) {
-        const creditedIds = new Set<string>();
-        for (const nodeId of nodesForCard(card, kitDetail.skeleton.graph.nodes)) {
-          const credit = applyImplicitPrerequisiteCredit(db, scope, kitDetail, {
-            nodeId,
-            excludeCardId: card.id,
-          });
-          for (const id of credit.updatedCardIds) creditedIds.add(id);
-        }
-        implicitCreditCount = creditedIds.size;
-      }
-
-      const remediation: Array<{
-        cardId: string;
-        front: string;
-        nodeName: string | null;
-        reason: string;
-      }> = [];
-
-      if (quality < 3) {
-        const allKitCards = db
-          .prepare(
-            `SELECT f.id, f.node_id, f.front, f.back, f.state, f.ease_factor, f.interval,
-                    f.next_review, f.prerequisite_id, f.source_topic_id
-             FROM flashcards f
-             JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
-             WHERE f.ownerId = ? AND d.kit_id = ?`,
-          )
-          .all(scope.ownerId, kitDetail.id) as RemediationCardRow[];
-
-        const plan = planRemediation(card, allKitCards, {
-          nodes: kitDetail.skeleton.graph.nodes,
-          edges: kitDetail.skeleton.graph.edges,
-        });
-
-        const hasOpenRow = db.prepare(
-          "SELECT 1 FROM remediation_queue WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL",
-        );
-        const insertRem = db.prepare(
-          `INSERT INTO remediation_queue (ownerId, kit_id, card_id, source_card_id, node_id, node_name, reason)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-
-        for (const item of plan) {
-          if (hasOpenRow.get(scope.ownerId, item.cardId)) continue;
-          insertRem.run(
-            scope.ownerId,
-            kitDetail.id,
-            item.cardId,
-            card.id,
-            item.nodeId,
-            item.nodeName,
-            item.reason,
-          );
-          remediation.push({
-            cardId: item.cardId,
-            front: allKitCards.find((c) => c.id === item.cardId)?.front ?? "",
-            nodeName: item.nodeName,
-            reason: item.reason,
-          });
-        }
-      }
+      db.transaction(() => saveReview(scope, card.id, updated))();
+      const implicitCreditCount =
+        quality >= 4 && (card.state === 2 || updated.state === 2)
+          ? creditReviewedCard(db, scope, kitDetail, card)
+          : 0;
+      const remediation =
+        quality < 3 ? queueLapseRemediation(db, scope, kitDetail, card) : [];
 
       const refreshed = db
         .prepare("SELECT * FROM flashcards WHERE ownerId = ? AND id = ?")

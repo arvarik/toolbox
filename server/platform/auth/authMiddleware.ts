@@ -47,10 +47,6 @@ export function isAuthRequired(): boolean {
   return forcedAuth || process.env.AUTH_REQUIRED === "true";
 }
 
-export function __resetAuthWarnings(): void {
-  forcedAuth = false;
-}
-
 function readCookie(req: Request, name: string): string | null {
   const header = req.headers.cookie;
   if (!header) return null;

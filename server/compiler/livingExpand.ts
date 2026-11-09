@@ -15,8 +15,12 @@ import { ValidationError } from "../platform/net/errors.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import {
   GraphNodeLlmSchema,
+  normalizeNode,
+  normalizeSections,
+  normalizeTopics,
   PillarLlmSchema,
   repairAndVerifyDag,
+  resolveRawId,
   TopicLlmSchema,
   toSlugId,
   TrackLlmSchema,
@@ -176,9 +180,7 @@ export async function expandLivingKit(
   const mergedPillarById = new Map(mergedPillars.map((p) => [p.id, p]));
 
   for (const addition of rawExpand.topicAdditionsToExistingPillars) {
-    const targetPillar =
-      mergedPillarById.get(addition.existingPillarId.trim().toLowerCase()) ??
-      mergedPillarById.get(toSlugId(addition.existingPillarId, ""));
+    const targetPillar = resolveRawId(mergedPillarById, addition.existingPillarId);
     if (!targetPillar) continue;
 
     const usedTopicsInPillar = new Set(targetPillar.topics.map((t) => t.id));
@@ -232,23 +234,7 @@ export async function expandLivingKit(
     if (rp.id) pillarRawToId.set(rp.id.trim().toLowerCase(), pillarId);
     pillarRawToId.set(pillarId, pillarId);
 
-    const usedSecIds = new Set<string>();
-    const sections = rp.sections.slice(0, 5).map((s, sIdx) => ({
-      id: uniqueSlug(s.id || s.name, `lens-${sIdx + 1}`, usedSecIds),
-      name: s.name.trim().slice(0, 80) || `Lens ${sIdx + 1}`,
-      icon: s.icon.trim().slice(0, 40) || "book-open",
-      promptHint: s.promptHint.trim().slice(0, 300),
-      ownershipRule: s.ownershipRule.trim().slice(0, 300),
-    }));
-    while (sections.length < 2) {
-      const tmpl = defaultSectionsTemplate[sections.length] ?? defaultSectionsTemplate[0];
-      sections.push({
-        ...tmpl,
-        id: uniqueSlug(tmpl.id, `lens-${sections.length + 1}`, usedSecIds),
-      });
-    }
-
-    const usedTopicIds = new Set<string>();
+    const sections = normalizeSections(rp.sections, defaultSectionsTemplate);
     const sourceTopics =
       rp.topics.length > 0
         ? rp.topics.slice(0, 6)
@@ -260,21 +246,8 @@ export async function expandLivingKit(
             },
           ];
 
-    const topics = sourceTopics.map((t, tIdx) => {
-      const topicId = uniqueSlug(
-        t.id || t.name,
-        `${pillarId}-topic-${tIdx + 1}`,
-        usedTopicIds,
-      );
-      if (t.id) topicRawToLocation.set(t.id.trim().toLowerCase(), { pillarId, topicId });
-      topicRawToLocation.set(topicId, { pillarId, topicId });
-      addedTopicIds.push(topicId);
-      return {
-        id: topicId,
-        name: t.name.trim().slice(0, 120) || `Topic ${tIdx + 1}`,
-        ...(t.summary.trim() ? { summary: t.summary.trim().slice(0, 400) } : {}),
-      };
-    });
+    const topics = normalizeTopics(sourceTopics, pillarId, topicRawToLocation);
+    addedTopicIds.push(...topics.map((t) => t.id));
 
     const newPillar: Pillar = {
       id: pillarId,
@@ -321,47 +294,19 @@ export async function expandLivingKit(
   const addedNodeIds: string[] = [];
   const stagedNewEdges: Array<{ nodeId: string; rawPrereqs: string[] }> = [];
 
+  const place = {
+    pillarRawToId,
+    topicRawToLocation,
+    pillarsById: mergedPillarById,
+    fallbackPillarId: fallbackNewPillar.id,
+  };
   sourceNewNodes.forEach((rn, idx) => {
     const nodeId = uniqueSlug(rn.id || rn.name, `exp-concept-${idx + 1}`, usedNodeIds);
     if (rn.id) nodeRawToId.set(rn.id.trim().toLowerCase(), nodeId);
     nodeRawToId.set(nodeId, nodeId);
 
-    const rawTopicKey = rn.topicId?.trim().toLowerCase() ?? "";
-    const topicLoc = rawTopicKey ? topicRawToLocation.get(rawTopicKey) : undefined;
-    let resolvedPillarId =
-      pillarRawToId.get(rn.pillarId.trim().toLowerCase()) ??
-      pillarRawToId.get(toSlugId(rn.pillarId, "")) ??
-      topicLoc?.pillarId ??
-      fallbackNewPillar.id;
-    if (!mergedPillarById.has(resolvedPillarId)) resolvedPillarId = fallbackNewPillar.id;
-
-    const pillarObj = mergedPillarById.get(resolvedPillarId)!;
-    const pillarTopicSet = new Set(pillarObj.topics.map((t) => t.id));
-    let resolvedTopicId: string | null = null;
-    if (topicLoc && topicLoc.pillarId === resolvedPillarId) {
-      resolvedTopicId = topicLoc.topicId;
-    } else if (rn.topicId && pillarTopicSet.has(toSlugId(rn.topicId, ""))) {
-      resolvedTopicId = toSlugId(rn.topicId, "");
-    } else if (pillarObj.topics.length > 0) {
-      resolvedTopicId = pillarObj.topics[idx % pillarObj.topics.length].id;
-    }
-
-    const keywords = Array.from(
-      new Set(rn.keywords.map((k) => k.trim().toLowerCase().slice(0, 60)).filter(Boolean)),
-    ).slice(0, 12);
-    if (keywords.length === 0) keywords.push(rn.name.trim().toLowerCase().slice(0, 60) || nodeId);
-
-    addedNodes.push({
-      id: nodeId,
-      name: rn.name.trim().slice(0, 100) || `Expanded Concept ${idx + 1}`,
-      pillarId: resolvedPillarId,
-      topicId: resolvedTopicId,
-      summary: rn.summary.trim().slice(0, 500) || `Expanded concept in ${pillarObj.name}.`,
-      keywords,
-      components: Array.from(
-        new Set(rn.components.map((c) => c.trim().slice(0, 60)).filter(Boolean)),
-      ).slice(0, 8),
-    });
+    const labels = { name: "Expanded Concept", summary: "Expanded concept in" };
+    addedNodes.push(normalizeNode(rn, idx, nodeId, place, labels));
     addedNodeIds.push(nodeId);
     stagedNewEdges.push({ nodeId, rawPrereqs: rn.prereqIds });
   });
@@ -370,8 +315,7 @@ export async function expandLivingKit(
   const addedEdges: GraphEdge[] = [];
   for (const item of stagedNewEdges) {
     for (const rawPre of item.rawPrereqs) {
-      const preId =
-        nodeRawToId.get(rawPre.trim().toLowerCase()) ?? nodeRawToId.get(toSlugId(rawPre, ""));
+      const preId = resolveRawId(nodeRawToId, rawPre);
       if (preId && preId !== item.nodeId) addedEdges.push({ from: preId, to: item.nodeId });
     }
   }
@@ -395,7 +339,7 @@ export async function expandLivingKit(
     const targets = Array.from(
       new Set(
         rt.targets
-          .map((t) => nodeRawToId.get(t.trim().toLowerCase()) ?? nodeRawToId.get(toSlugId(t, "")))
+          .map((t) => resolveRawId(nodeRawToId, t))
           .filter((id): id is string => Boolean(id && validNodeSet.has(id))),
       ),
     );

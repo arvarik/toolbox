@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { Request, Response, NextFunction } from "express";
 import { AppError } from "../net/errors.ts";
-import { primaryAdminId } from "../db/connection.ts";
 import type { Principal } from "../auth/authMiddleware.ts";
 
 declare const ownerIdBrand: unique symbol;
@@ -28,16 +27,6 @@ export function scopeOf(req: Request): Scope {
   throw new AppError("Authentication required", 401, { code: "UNAUTHORIZED" });
 }
 
-/** FTS5 owner token: 'o' + ownerId without dashes. */
-export function ownerToken(scope: Scope): string {
-  return "o" + scope.ownerId.replace(/-/g, "");
-}
-
-/** FTS5 owner+kit partition token: 'o<owner>_k<kit>'. */
-export function ownerKitToken(scope: Scope, kitId: string): string {
-  return `${ownerToken(scope)}_k${kitId.replace(/-/g, "")}`;
-}
-
 export interface RequestContext {
   requestId: string;
   principal: Principal | null;
@@ -54,10 +43,6 @@ export function getContext(): RequestContext | null {
   return als.getStore() ?? null;
 }
 
-export function currentScopeOrNull(): Scope | null {
-  return getContext()?.scope ?? null;
-}
-
 export function attachRequestContext(
   req: Request,
   _res: Response,
@@ -68,8 +53,4 @@ export function attachRequestContext(
   runWithContext({ requestId: req.requestId ?? "-", principal: p, scope }, () =>
     next(),
   );
-}
-
-export function currentOwnerId(): string {
-  return currentScopeOrNull()?.ownerId ?? primaryAdminId();
 }

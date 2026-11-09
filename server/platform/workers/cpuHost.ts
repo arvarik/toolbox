@@ -26,17 +26,6 @@ export {
 
 const JOB_TIMEOUT_MS = 120_000;
 
-type CustomLocalEmbedder = (
-  texts: string[],
-  dim: number,
-) => Float32Array[] | Promise<Float32Array[]>;
-
-let testEmbedderOverride: CustomLocalEmbedder | null = null;
-
-export function setTestLocalEmbedder(fn: CustomLocalEmbedder | null): void {
-  testEmbedderOverride = fn;
-}
-
 /**
  * Deterministic L2-normalized feature-hashing embedder used in test/offline-mock
  * environments so Vitest runs fast and offline without downloading ONNX weights.
@@ -319,9 +308,6 @@ export async function embedTextsLocal(
   opts.signal?.throwIfAborted();
   const dim = opts.dim ?? LOCAL_EMBEDDING_DIM;
 
-  if (testEmbedderOverride) {
-    return await testEmbedderOverride(texts, dim);
-  }
   if (shouldUseMockEmbedder()) {
     return deterministicHashEmbed(texts, dim);
   }
@@ -344,17 +330,4 @@ export async function embedTextsLocal(
     // ponytail: fallback to deterministic 384-dim hash projection when offline without prefetched ONNX weights; run `node scripts/fetch-models.ts` to pre-stage real MiniLM weights.
     return deterministicHashEmbed(texts, dim);
   }
-}
-
-export function getLocalWorkerStatus(): {
-  mode: "worker" | "mock" | "fallback";
-  unavailableReason: string | null;
-} {
-  if (testEmbedderOverride || shouldUseMockEmbedder()) {
-    return { mode: "mock", unavailableReason: null };
-  }
-  if (unavailableReason) {
-    return { mode: "fallback", unavailableReason };
-  }
-  return { mode: "worker", unavailableReason: null };
 }

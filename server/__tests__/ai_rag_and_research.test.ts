@@ -22,7 +22,7 @@ const {
   __getStructuredModeFor,
   __resetStructuredModeCache,
 } = await import("../ai/engine.ts");
-const { setEmbeddingsConfig, resolveModelDescriptor } = await import(
+const { updateAdminAiSettings, resolveModelDescriptor } = await import(
   "../platform/ai/aiSettingsService.ts"
 );
 const {
@@ -194,11 +194,13 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
 
     expect(getVecDdl()).toContain("FLOAT[384]");
 
-    setEmbeddingsConfig({
-      provider: "local",
-      modelId: "Xenova/all-MiniLM-L6-v2",
-      dimension: 768,
-      endpointId: null,
+    updateAdminAiSettings({
+      embeddings: {
+        provider: "local",
+        modelId: "Xenova/all-MiniLM-L6-v2",
+        dimension: 768,
+        endpointId: null,
+      },
     });
     expect(ensureEmbeddingStore(db, 768)).toMatchObject({ recreated: true, dimension: 768 });
     expect(getVecDdl()).toContain("FLOAT[768]");
@@ -225,11 +227,13 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
     });
     expect(fusedHits[0].channels).toEqual(expect.arrayContaining(["fts", "vec"]));
 
-    setEmbeddingsConfig({
-      provider: "local",
-      modelId: "Xenova/all-MiniLM-L6-v2",
-      dimension: 384,
-      endpointId: null,
+    updateAdminAiSettings({
+      embeddings: {
+        provider: "local",
+        modelId: "Xenova/all-MiniLM-L6-v2",
+        dimension: 384,
+        endpointId: null,
+      },
     });
     ensureEmbeddingStore(db, 384);
     await reindexMissingEmbeddings(db);

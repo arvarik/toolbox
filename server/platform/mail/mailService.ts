@@ -43,33 +43,7 @@ export interface SendMailOptions {
   html?: string;
 }
 
-export interface RecordedMessage {
-  from?: string;
-  to?: string | string[];
-  subject?: string;
-  text?: string;
-  html?: string;
-  [key: string]: unknown;
-}
-
 const SETTING_KEY = "mail.smtp";
-
-let isJsonTransportActive = false;
-const recordedMessages: RecordedMessage[] = [];
-
-export function __useJsonTransport(enabled = true): {
-  getMessages: () => RecordedMessage[];
-  clear: () => void;
-} {
-  isJsonTransportActive = enabled;
-  if (!enabled) recordedMessages.length = 0;
-  return {
-    getMessages: () => [...recordedMessages],
-    clear: () => {
-      recordedMessages.length = 0;
-    },
-  };
-}
 
 let cachedTransport: Transporter | null = null;
 let cachedTransportKey: string | null = null;
@@ -149,7 +123,6 @@ function resolveConfig(): MailConfig {
 }
 
 function isConfigured(): boolean {
-  if (isJsonTransportActive) return true;
   const config = resolveConfig();
   return (
     config.source !== "none" && Boolean(config.host) && Boolean(config.from)
@@ -179,13 +152,6 @@ function getTransport(config: InternalMailConfig): Transporter {
 }
 
 async function sendOrThrow(opts: SendMailOptions): Promise<void> {
-  if (isJsonTransportActive) {
-    recordedMessages.push({
-      from: resolveConfig().from || `${APP_NAME} <noreply@localhost>`,
-      ...opts,
-    });
-    return;
-  }
   const config = resolveInternalConfig();
   if (config.source === "none" || !config.host || !config.from) {
     throw new AppError("Outgoing mail is not configured", 409, {
@@ -213,6 +179,16 @@ async function send(opts: SendMailOptions): Promise<boolean> {
   }
 }
 
+function assertNotEnvConfigured(): void {
+  if (resolveConfig().source === "env") {
+    throw new AppError(
+      "Mail is configured by the environment (SMTP_URL).",
+      409,
+      { code: "MAIL_CONFIGURED_BY_ENV" },
+    );
+  }
+}
+
 function updateMailSettings(input: {
   host: string;
   port: number;
@@ -222,13 +198,7 @@ function updateMailSettings(input: {
   from: string;
   replyTo?: string;
 }): MailConfig {
-  if (resolveConfig().source === "env") {
-    throw new AppError(
-      "Mail is configured by the environment (SMTP_URL).",
-      409,
-      { code: "MAIL_CONFIGURED_BY_ENV" },
-    );
-  }
+  assertNotEnvConfigured();
   const stored = getSetting<StoredSmtpSettings>(SETTING_KEY);
   let passwordSealed = stored?.passwordSealed;
   if (input.password !== undefined && input.password !== "") {
@@ -249,13 +219,7 @@ function updateMailSettings(input: {
 }
 
 function deleteMailSettings(): MailConfig {
-  if (resolveConfig().source === "env") {
-    throw new AppError(
-      "Mail is configured by the environment (SMTP_URL).",
-      409,
-      { code: "MAIL_CONFIGURED_BY_ENV" },
-    );
-  }
+  assertNotEnvConfigured();
   deleteSetting(SETTING_KEY);
   cachedTransport = null;
   cachedTransportKey = null;

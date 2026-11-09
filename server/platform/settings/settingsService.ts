@@ -40,10 +40,6 @@ export function deleteSetting(key: string): void {
   cache.delete(key);
 }
 
-export function clearSettingsCache(): void {
-  cache.clear();
-}
-
 export function getUserSetting<T>(userId: string, key: string): T | null {
   const row = sqlite
     .prepare("SELECT value FROM user_settings WHERE userId = ? AND key = ?")
@@ -67,12 +63,6 @@ export function setUserSetting(userId: string, key: string, value: unknown): voi
          updatedAt = CURRENT_TIMESTAMP`,
     )
     .run(userId, key, serialized);
-}
-
-export function deleteUserSetting(userId: string, key: string): void {
-  sqlite
-    .prepare("DELETE FROM user_settings WHERE userId = ? AND key = ?")
-    .run(userId, key);
 }
 
 export const SETTING_KEYS = {

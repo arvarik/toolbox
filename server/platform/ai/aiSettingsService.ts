@@ -24,7 +24,7 @@ import {
   type WebSearchEngine,
 } from "../../../shared/platform/aiSettings.ts";
 import { sqlite } from "../db/connection.ts";
-import { open, seal } from "../crypto/secretBox.ts";
+import { openCredential, sealCredential } from "../crypto/secretBox.ts";
 import { getSetting, setSetting } from "../settings/settingsService.ts";
 import { getContext, type Scope } from "../tenancy/scope.ts";
 import {
@@ -96,16 +96,9 @@ export type ResolvedModelDescriptor =
       allowPrivate: boolean;
     };
 
-function sealSecret(plain: string | null | undefined): string {
-  if (!plain) return "";
-  return plain.startsWith("v1:") ? plain : seal(plain);
-}
-
 function openSecret(stored: string | null | undefined): string {
-  if (!stored) return "";
-  if (!stored.startsWith("v1:")) return stored;
   try {
-    return open(stored);
+    return openCredential(stored);
   } catch {
     return "";
   }
@@ -280,26 +273,6 @@ export function getEmbeddingsConfig(): EmbeddingsConfig {
   return parsed.success ? parsed.data : { ...DEFAULT_EMBEDDINGS_CONFIG };
 }
 
-export function setEmbeddingsConfig(
-  patch: Partial<EmbeddingsConfig>,
-): EmbeddingsConfig {
-  const current = getEmbeddingsConfig();
-  const merged = EmbeddingsConfigSchema.parse({
-    ...current,
-    ...patch,
-    ...(patch.provider === "local" && !patch.modelId
-      ? {
-          modelId: DEFAULT_EMBEDDINGS_CONFIG.modelId,
-          dimension: patch.dimension ?? DEFAULT_EMBEDDINGS_CONFIG.dimension,
-          endpointId: null,
-        }
-      : {}),
-  });
-  const blob = readStoredBlob();
-  writeStoredBlob({ ...blob, embeddings: merged });
-  return merged;
-}
-
 export function getEmbeddingGen(): string {
   const blob = readStoredBlob();
   return blob.embeddingGen || "gen_1";
@@ -353,7 +326,7 @@ function setInstanceApiKey(providerId: string, plainKey: string): void {
        VALUES (?, ?, datetime('now'))
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
     )
-    .run(def.configKey, trimmed ? sealSecret(trimmed) : "");
+    .run(def.configKey, trimmed ? sealCredential(trimmed) : "");
   if (!trimmed) {
     try {
       sqlite
@@ -504,13 +477,13 @@ function writeUserByok(scope: Scope, state: ParsedUserByok): void {
   const sealedKeys: Record<string, string> = {};
   for (const [providerId, plain] of Object.entries(state.providerKeys)) {
     if (plain && plain.trim()) {
-      sealedKeys[providerId] = sealSecret(plain.trim());
+      sealedKeys[providerId] = sealCredential(plain.trim());
     }
   }
   const sealedEndpoints: StoredUserCustomEndpoint[] = state.endpoints.map(
     (ep) => ({
       ...ep,
-      apiKeySealed: ep.apiKeySealed ? sealSecret(openSecret(ep.apiKeySealed)) : "",
+      apiKeySealed: ep.apiKeySealed ? sealCredential(openSecret(ep.apiKeySealed)) : "",
     }),
   );
 
@@ -535,24 +508,13 @@ function writeUserByok(scope: Scope, state: ParsedUserByok): void {
     );
 }
 
-function inferProviderId(modelId: string): "gemini" | "claude" | "openai" | null {
-  for (const def of PROVIDER_DEFS) {
-    if (def.models.some((m) => m.id === modelId)) {
-      return def.id as "gemini" | "claude" | "openai";
-    }
-  }
-  for (const def of PROVIDER_DEFS) {
-    const cached = loadCatalogModels(def.id);
-    if (cached.some((m) => m.id === modelId)) {
-      return def.id as "gemini" | "claude" | "openai";
-    }
-  }
-  for (const def of PROVIDER_DEFS) {
-    if (def.ownsModelId(modelId)) {
-      return def.id as "gemini" | "claude" | "openai";
-    }
-  }
-  return null;
+/** Built-in model list first, then each provider's discovered catalog, then the provider's id pattern. */
+export function inferProviderId(modelId: string): "gemini" | "claude" | "openai" | null {
+  const def =
+    PROVIDER_DEFS.find((d) => d.models.some((m) => m.id === modelId)) ??
+    PROVIDER_DEFS.find((d) => loadCatalogModels(d.id).some((m) => m.id === modelId)) ??
+    PROVIDER_DEFS.find((d) => d.ownsModelId(modelId));
+  return (def?.id as "gemini" | "claude" | "openai" | undefined) ?? null;
 }
 
 const AUTO_CANDIDATES: Record<GenerationCapability, Record<string, string[]>> = {
@@ -773,72 +735,38 @@ export function getEffectiveWebSearchConfig(scope?: Scope): WebSearchConfig {
 export function listAvailableModelsForScope(scope?: Scope): ModelOptionSummary[] {
   const seen = new Set<string>();
   const out: ModelOptionSummary[] = [];
+  const add = (
+    models: ReadonlyArray<{ id: string; name: string }>,
+    providerId: string,
+    providerName: string,
+    source: ModelOptionSummary["source"],
+  ) => {
+    for (const m of models) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      out.push({ id: m.id, name: m.name, providerId, providerName, source });
+    }
+  };
+  const providerModels = (def: (typeof PROVIDER_DEFS)[number]) => {
+    const cached = loadCatalogModels(def.id);
+    return cached.length > 0 ? cached : def.models;
+  };
 
   if (scope) {
     const byok = readUserByok(scope);
     for (const def of PROVIDER_DEFS) {
-      if (!byok.providerKeys[def.id]) continue;
-      const cached = loadCatalogModels(def.id);
-      const list = cached.length > 0 ? cached : def.models;
-      for (const m of list) {
-        if (seen.has(m.id)) continue;
-        seen.add(m.id);
-        out.push({
-          id: m.id,
-          name: m.name,
-          providerId: def.id,
-          providerName: `${def.name} (Personal)`,
-          source: "byok",
-        });
-      }
+      if (byok.providerKeys[def.id]) add(providerModels(def), def.id, `${def.name} (Personal)`, "byok");
     }
     for (const ep of byok.endpoints) {
-      for (const m of ep.models) {
-        if (seen.has(m.id)) continue;
-        seen.add(m.id);
-        out.push({
-          id: m.id,
-          name: m.name,
-          providerId: `custom:${ep.id}`,
-          providerName: `${ep.name} (Personal)`,
-          source: "byok",
-        });
-      }
+      add(ep.models, `custom:${ep.id}`, `${ep.name} (Personal)`, "byok");
     }
   }
-
   for (const def of PROVIDER_DEFS) {
-    if (!getInstanceApiKey(def.id)) continue;
-    const cached = loadCatalogModels(def.id);
-    const list = cached.length > 0 ? cached : def.models;
-    for (const m of list) {
-      if (seen.has(m.id)) continue;
-      seen.add(m.id);
-      out.push({
-        id: m.id,
-        name: m.name,
-        providerId: def.id,
-        providerName: def.name,
-        source: "instance",
-      });
-    }
+    if (getInstanceApiKey(def.id)) add(providerModels(def), def.id, def.name, "instance");
   }
-
   for (const ep of listInstanceEndpointsRaw()) {
-    const models = loadCatalogModels(`custom:${ep.id}`);
-    for (const m of models) {
-      if (seen.has(m.id)) continue;
-      seen.add(m.id);
-      out.push({
-        id: m.id,
-        name: m.name,
-        providerId: `custom:${ep.id}`,
-        providerName: ep.name,
-        source: "instance",
-      });
-    }
+    add(loadCatalogModels(`custom:${ep.id}`), `custom:${ep.id}`, ep.name, "instance");
   }
-
   return out;
 }
 
@@ -1063,7 +991,7 @@ export async function upsertUserCustomEndpoint(
     id,
     name,
     baseUrl,
-    apiKeySealed: plainKey ? sealSecret(plainKey) : "",
+    apiKeySealed: plainKey ? sealCredential(plainKey) : "",
     models: discoveredModels,
     createdAt: prev?.createdAt ?? new Date().toISOString(),
   };

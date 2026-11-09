@@ -30,10 +30,6 @@ export function validateSecretKey(
 
 let cachedKey: Buffer | null = null;
 
-export function __resetSecretKeyCache(): void {
-  cachedKey = null;
-}
-
 export function getOrInitSecretKey(dataDir: string = DATA_DIR): Buffer {
   const envVal = process.env[SECRET_KEY_ENV];
   if (envVal) {
@@ -127,4 +123,16 @@ export function open(sealed: string, explicitKey?: Buffer): string {
       err,
     );
   }
+}
+
+/** Seals a credential for storage. A value that is already sealed stays as it is. */
+export function sealCredential(plain: string | null | undefined): string {
+  if (!plain) return "";
+  return plain.startsWith("v1:") ? plain : seal(plain);
+}
+
+/** Opens a stored credential. A legacy plaintext value is returned as it is. */
+export function openCredential(stored: string | null | undefined): string {
+  if (!stored) return "";
+  return !stored.startsWith("v1:") ? stored : open(stored);
 }

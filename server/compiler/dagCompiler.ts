@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  prerequisitesOf,
   validateGraph,
   verifyKitSkeleton,
   type GraphEdge,
@@ -205,6 +206,99 @@ export function uniqueSlug(raw: string, fallback: string, used: Set<string>): st
   return emergency;
 }
 
+type TopicLocation = { pillarId: string; topicId: string };
+
+/** Looks a model-supplied id up by its trimmed lowercase form, then by its slug. */
+export function resolveRawId<T>(map: ReadonlyMap<string, T>, raw: string): T | undefined {
+  return map.get(raw.trim().toLowerCase()) ?? map.get(toSlugId(raw, ""));
+}
+
+/** Keeps up to 5 model sections, then pads to 2 from `template`. */
+export function normalizeSections(
+  raw: z.infer<typeof PillarLlmSchema>["sections"],
+  template: Pillar["sections"],
+): Pillar["sections"] {
+  const used = new Set<string>();
+  const sections: Pillar["sections"] = raw.slice(0, 5).map((s, sIdx) => ({
+    id: uniqueSlug(s.id || s.name, `lens-${sIdx + 1}`, used),
+    name: s.name.trim().slice(0, 80) || `Lens ${sIdx + 1}`,
+    icon: s.icon.trim().slice(0, 40) || "book-open",
+    promptHint: s.promptHint.trim().slice(0, 300),
+    ownershipRule: s.ownershipRule.trim().slice(0, 300),
+  }));
+  while (sections.length < 2) {
+    const fb = template[sections.length] ?? template[0];
+    sections.push({ ...fb, id: uniqueSlug(fb.id, `lens-${sections.length + 1}`, used) });
+  }
+  return sections;
+}
+
+/** Gives each model topic a unique id in its pillar, and records its raw and final ids. */
+export function normalizeTopics(
+  raw: z.infer<typeof TopicLlmSchema>[],
+  pillarId: string,
+  topicRawToLocation: Map<string, TopicLocation>,
+): Pillar["topics"] {
+  const used = new Set<string>();
+  return raw.map((t, tIdx) => {
+    const topicId = uniqueSlug(t.id || t.name, `${pillarId}-topic-${tIdx + 1}`, used);
+    if (t.id) topicRawToLocation.set(t.id.trim().toLowerCase(), { pillarId, topicId });
+    topicRawToLocation.set(topicId, { pillarId, topicId });
+    return {
+      id: topicId,
+      name: t.name.trim().slice(0, 120) || `Topic ${tIdx + 1}`,
+      ...(t.summary.trim() ? { summary: t.summary.trim().slice(0, 400) } : {}),
+    };
+  });
+}
+
+/** Places a model node in a known pillar and topic, and trims its text fields. */
+export function normalizeNode(
+  rn: z.infer<typeof GraphNodeLlmSchema>,
+  idx: number,
+  nodeId: string,
+  place: {
+    pillarRawToId: ReadonlyMap<string, string>;
+    topicRawToLocation: ReadonlyMap<string, TopicLocation>;
+    pillarsById: ReadonlyMap<string, Pillar>;
+    fallbackPillarId: string;
+  },
+  labels: { name: string; summary: string },
+): GraphNode {
+  const rawTopicKey = rn.topicId?.trim().toLowerCase() ?? "";
+  const topicLoc = rawTopicKey ? place.topicRawToLocation.get(rawTopicKey) : undefined;
+  let pillarId =
+    resolveRawId(place.pillarRawToId, rn.pillarId) ?? topicLoc?.pillarId ?? place.fallbackPillarId;
+  if (!place.pillarsById.has(pillarId)) pillarId = place.fallbackPillarId;
+  const pillar = place.pillarsById.get(pillarId)!;
+
+  let topicId: string | null = null;
+  if (topicLoc && topicLoc.pillarId === pillarId) {
+    topicId = topicLoc.topicId;
+  } else if (rn.topicId && pillar.topics.some((t) => t.id === toSlugId(rn.topicId!, ""))) {
+    topicId = toSlugId(rn.topicId, "");
+  } else if (pillar.topics.length > 0) {
+    topicId = pillar.topics[idx % pillar.topics.length].id;
+  }
+
+  const keywords = Array.from(
+    new Set(rn.keywords.map((k) => k.trim().toLowerCase().slice(0, 60)).filter(Boolean)),
+  ).slice(0, 12);
+  if (keywords.length === 0) keywords.push(rn.name.trim().toLowerCase().slice(0, 60) || nodeId);
+
+  return {
+    id: nodeId,
+    name: rn.name.trim().slice(0, 100) || `${labels.name} ${idx + 1}`,
+    pillarId,
+    topicId,
+    summary: rn.summary.trim().slice(0, 500) || `${labels.summary} ${pillar.name}.`,
+    keywords,
+    components: Array.from(
+      new Set(rn.components.map((c) => c.trim().slice(0, 60)).filter(Boolean)),
+    ).slice(0, 8),
+  };
+}
+
 function normalizePillars(rawPillars: z.infer<typeof MacroBlueprintLlmSchema>["pillars"]): {
   pillars: Pillar[];
   pillarRawToId: Map<string, string>;
@@ -212,7 +306,7 @@ function normalizePillars(rawPillars: z.infer<typeof MacroBlueprintLlmSchema>["p
 } {
   const usedPillarIds = new Set<string>();
   const pillarRawToId = new Map<string, string>();
-  const topicRawToLocation = new Map<string, { pillarId: string; topicId: string }>();
+  const topicRawToLocation = new Map<string, TopicLocation>();
 
   const sourceList =
     rawPillars.length > 0
@@ -243,23 +337,7 @@ function normalizePillars(rawPillars: z.infer<typeof MacroBlueprintLlmSchema>["p
     if (rp.id) pillarRawToId.set(rp.id.trim().toLowerCase(), pillarId);
     pillarRawToId.set(pillarId, pillarId);
 
-    const usedSectionIds = new Set<string>();
-    const sections = rp.sections.slice(0, 5).map((s, sIdx) => ({
-      id: uniqueSlug(s.id || s.name, `lens-${sIdx + 1}`, usedSectionIds),
-      name: s.name.trim().slice(0, 80) || `Lens ${sIdx + 1}`,
-      icon: s.icon.trim().slice(0, 40) || "book-open",
-      promptHint: s.promptHint.trim().slice(0, 300),
-      ownershipRule: s.ownershipRule.trim().slice(0, 300),
-    }));
-    while (sections.length < 2) {
-      const fb = DEFAULT_SECTION_LENSES[sections.length] ?? DEFAULT_SECTION_LENSES[0];
-      sections.push({
-        ...fb,
-        id: uniqueSlug(fb.id, `lens-${sections.length + 1}`, usedSectionIds),
-      });
-    }
-
-    const usedTopicIds = new Set<string>();
+    const sections = normalizeSections(rp.sections, DEFAULT_SECTION_LENSES);
     const rawTopics =
       rp.topics.length > 0
         ? rp.topics.slice(0, 8)
@@ -271,20 +349,7 @@ function normalizePillars(rawPillars: z.infer<typeof MacroBlueprintLlmSchema>["p
             },
           ];
 
-    const topics = rawTopics.map((t, tIdx) => {
-      const topicId = uniqueSlug(
-        t.id || t.name,
-        `${pillarId}-topic-${tIdx + 1}`,
-        usedTopicIds,
-      );
-      if (t.id) topicRawToLocation.set(t.id.trim().toLowerCase(), { pillarId, topicId });
-      topicRawToLocation.set(topicId, { pillarId, topicId });
-      return {
-        id: topicId,
-        name: t.name.trim().slice(0, 120) || `Topic ${tIdx + 1}`,
-        ...(t.summary.trim() ? { summary: t.summary.trim().slice(0, 400) } : {}),
-      };
-    });
+    const topics = normalizeTopics(rawTopics, pillarId, topicRawToLocation);
 
     const name = rp.name.trim().slice(0, 100) || `Pillar ${idx + 1}`;
     return {
@@ -572,7 +637,7 @@ function normalizeNodesAndTracks({
 }: {
   pillars: readonly Pillar[];
   pillarRawToId: ReadonlyMap<string, string>;
-  topicRawToLocation: ReadonlyMap<string, { pillarId: string; topicId: string }>;
+  topicRawToLocation: ReadonlyMap<string, TopicLocation>;
   rawNodes: z.infer<typeof ConceptGraphPassLlmSchema>["nodes"];
   rawTracks: z.infer<typeof ConceptGraphPassLlmSchema>["tracks"];
 }): {
@@ -582,6 +647,7 @@ function normalizeNodesAndTracks({
 } {
   const pillarsById = new Map(pillars.map((p) => [p.id, p]));
   const fallbackPillar = pillars[0];
+  const place = { pillarRawToId, topicRawToLocation, pillarsById, fallbackPillarId: fallbackPillar.id };
   const usedNodeIds = new Set<string>();
   const nodeRawToId = new Map<string, string>();
 
@@ -606,46 +672,7 @@ function normalizeNodesAndTracks({
     if (rn.id) nodeRawToId.set(rn.id.trim().toLowerCase(), canonicalId);
     nodeRawToId.set(canonicalId, canonicalId);
 
-    const rawTopicKey = rn.topicId?.trim().toLowerCase() ?? "";
-    const topicLoc = rawTopicKey ? topicRawToLocation.get(rawTopicKey) : undefined;
-
-    let resolvedPillarId =
-      pillarRawToId.get(rn.pillarId.trim().toLowerCase()) ??
-      pillarRawToId.get(toSlugId(rn.pillarId, "")) ??
-      topicLoc?.pillarId ??
-      fallbackPillar.id;
-    if (!pillarsById.has(resolvedPillarId)) resolvedPillarId = fallbackPillar.id;
-
-    const pillarObj = pillarsById.get(resolvedPillarId)!;
-    const pillarTopicSet = new Set(pillarObj.topics.map((t) => t.id));
-
-    let resolvedTopicId: string | null = null;
-    if (topicLoc && topicLoc.pillarId === resolvedPillarId) {
-      resolvedTopicId = topicLoc.topicId;
-    } else if (rn.topicId && pillarTopicSet.has(toSlugId(rn.topicId, ""))) {
-      resolvedTopicId = toSlugId(rn.topicId, "");
-    } else if (pillarObj.topics.length > 0) {
-      resolvedTopicId = pillarObj.topics[idx % pillarObj.topics.length].id;
-    }
-
-    const keywords = Array.from(
-      new Set(rn.keywords.map((k) => k.trim().toLowerCase().slice(0, 60)).filter(Boolean)),
-    ).slice(0, 12);
-    if (keywords.length === 0) {
-      keywords.push(rn.name.trim().toLowerCase().slice(0, 60) || canonicalId);
-    }
-
-    const node: GraphNode = {
-      id: canonicalId,
-      name: rn.name.trim().slice(0, 100) || `Concept ${idx + 1}`,
-      pillarId: resolvedPillarId,
-      topicId: resolvedTopicId,
-      summary: rn.summary.trim().slice(0, 500) || `Core concept in ${pillarObj.name}.`,
-      keywords,
-      components: Array.from(
-        new Set(rn.components.map((c) => c.trim().slice(0, 60)).filter(Boolean)),
-      ).slice(0, 8),
-    };
+    const node = normalizeNode(rn, idx, canonicalId, place, { name: "Concept", summary: "Core concept in" });
     return { node, rawPrereqs: rn.prereqIds };
   });
 
@@ -653,8 +680,7 @@ function normalizeNodesAndTracks({
   const rawEdges: GraphEdge[] = [];
   for (const item of stagedNodes) {
     for (const rawPre of item.rawPrereqs) {
-      const preId =
-        nodeRawToId.get(rawPre.trim().toLowerCase()) ?? nodeRawToId.get(toSlugId(rawPre, ""));
+      const preId = resolveRawId(nodeRawToId, rawPre);
       if (preId && preId !== item.node.id) rawEdges.push({ from: preId, to: item.node.id });
     }
   }
@@ -668,7 +694,7 @@ function normalizeNodesAndTracks({
     const targets = Array.from(
       new Set(
         rt.targets
-          .map((t) => nodeRawToId.get(t.trim().toLowerCase()) ?? nodeRawToId.get(toSlugId(t, "")))
+          .map((t) => resolveRawId(nodeRawToId, t))
           .filter((id): id is string => Boolean(id && validNodeSet.has(id))),
       ),
     );
@@ -1061,12 +1087,7 @@ export async function refineBlueprint({
   }
 
   const normalizedDraft = normalizeEditedDraftSkeleton(draftSkeleton);
-  const prereqsByNode = new Map<string, string[]>();
-  for (const e of normalizedDraft.graph.edges) {
-    const list = prereqsByNode.get(e.to) ?? [];
-    list.push(e.from);
-    prereqsByNode.set(e.to, list);
-  }
+  const prereqsByNode = prerequisitesOf(normalizedDraft.graph.edges);
 
   const compactDraft = {
     identity: {

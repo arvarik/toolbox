@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
 import { LOCAL_OWNER_EMAIL } from "../appConfig.ts";
-import { seal, open } from "../platform/crypto/secretBox.ts";
+import { sealCredential } from "../platform/crypto/secretBox.ts";
 import { ensureLocalOwner as ensureLocalOwnerOnDb } from "../platform/db/platformSchema.ts";
 import { registerOwnerDataHooks } from "../platform/db/connection.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
@@ -40,16 +40,6 @@ const RAG_TABLES_DDL = `
     tokenize='porter unicode61'
   );
 `;
-
-export function sealCredential(plain: string | null | undefined): string {
-  if (!plain) return "";
-  return plain.startsWith("v1:") ? plain : seal(plain);
-}
-
-export function openCredential(stored: string | null | undefined): string {
-  if (!stored) return "";
-  return !stored.startsWith("v1:") ? stored : open(stored);
-}
 
 function hasTable(db: Database.Database, name: string): boolean {
   return Boolean(

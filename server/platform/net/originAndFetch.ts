@@ -428,14 +428,8 @@ export interface ReadCappedOptions {
 
 export async function readBytesCapped(
   res: Response,
-  options: ReadCappedOptions | number = {},
-  legacySignal?: AbortSignal | null,
-  legacyTimeoutMs?: number,
+  opts: ReadCappedOptions = {},
 ): Promise<Uint8Array> {
-  const opts: ReadCappedOptions =
-    typeof options === "number"
-      ? { maxBytes: options, signal: legacySignal, timeoutMs: legacyTimeoutMs }
-      : options;
   const maxBytes = opts.maxBytes ?? 25 * 1024 * 1024;
   const timeoutMs = opts.timeoutMs ?? 20_000;
 

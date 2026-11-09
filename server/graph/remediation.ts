@@ -132,6 +132,70 @@ export function planRemediation(
   return plan.slice(0, MAX_REMEDIATION_CARDS);
 }
 
+function kitRemediationCards(
+  db: Database.Database,
+  scope: Scope,
+  kitId: string,
+): RemediationCardRow[] {
+  return db
+    .prepare(
+      `SELECT f.id, f.node_id, f.front, f.back, f.state, f.ease_factor, f.interval,
+              f.next_review, f.prerequisite_id, f.source_topic_id
+       FROM flashcards f
+       JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+       WHERE f.ownerId = ? AND d.kit_id = ?`,
+    )
+    .all(scope.ownerId, kitId) as RemediationCardRow[];
+}
+
+/** Inserts each planned card that has no open remediation row, and returns the inserted items. */
+function enqueueRemediation(
+  db: Database.Database,
+  scope: Scope,
+  kitId: string,
+  sourceRefId: string,
+  plan: readonly RemediationPlanItem[],
+  cards: readonly RemediationCardRow[],
+): QueuedRemediationItem[] {
+  const hasOpenRow = db.prepare(
+    "SELECT 1 FROM remediation_queue WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL",
+  );
+  const insert = db.prepare(
+    `INSERT INTO remediation_queue (ownerId, kit_id, card_id, source_card_id, node_id, node_name, reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const queued: QueuedRemediationItem[] = [];
+  for (const item of plan) {
+    if (hasOpenRow.get(scope.ownerId, item.cardId)) continue;
+    insert.run(scope.ownerId, kitId, item.cardId, sourceRefId, item.nodeId, item.nodeName, item.reason);
+    queued.push({
+      cardId: item.cardId,
+      front: cards.find((c) => c.id === item.cardId)?.front || "",
+      nodeId: item.nodeId,
+      nodeName: item.nodeName,
+      reason: item.reason,
+    });
+  }
+  return queued;
+}
+
+/**
+ * Downward remediation for a failed flashcard review (`quality < 3`): queues the
+ * shaky linked and prerequisite-node cards that `planRemediation` picks.
+ */
+export function queueLapseRemediation(
+  db: Database.Database,
+  scope: Scope,
+  kit: Pick<ActiveKitContext, "id" | "skeleton">,
+  card: RemediationCardRow,
+): Array<Omit<QueuedRemediationItem, "nodeId">> {
+  const cards = kitRemediationCards(db, scope, kit.id);
+  const plan = planRemediation(card, cards, kit.skeleton.graph);
+  return enqueueRemediation(db, scope, kit.id, card.id, plan, cards).map(
+    ({ nodeId: _nodeId, ...item }) => item,
+  );
+}
+
 /**
  * Downward remediation triggered when failing a node's `GuidedDrill` (`score < 0.6`).
  * Queues up to `MAX_CARDS_PER_LAPSE` shaky prerequisite (or same-node fallback) cards
@@ -152,16 +216,7 @@ export function planNodeFailureRemediation(
   const byId = nodeMap(nodes);
   if (!byId.has(opts.failedNodeId)) return [];
 
-  const allCards = db
-    .prepare(
-      `SELECT f.id, f.node_id, f.front, f.back, f.state, f.ease_factor, f.interval,
-              f.next_review, f.prerequisite_id, f.source_topic_id
-       FROM flashcards f
-       JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
-       WHERE f.ownerId = ? AND d.kit_id = ?`,
-    )
-    .all(scope.ownerId, kit.id) as RemediationCardRow[];
-
+  const allCards = kitRemediationCards(db, scope, kit.id);
   if (allCards.length === 0) return [];
 
   let plan = planRemediation(
@@ -196,38 +251,8 @@ export function planNodeFailureRemediation(
 
   if (plan.length === 0) return [];
 
-  const hasOpenRow = db.prepare(
-    "SELECT 1 FROM remediation_queue WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL",
-  );
-  const insert = db.prepare(
-    `INSERT INTO remediation_queue (ownerId, kit_id, card_id, source_card_id, node_id, node_name, reason)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-  );
-
-  const queued: QueuedRemediationItem[] = [];
-  const enqueueTx = db.transaction(() => {
-    for (const item of plan.slice(0, MAX_CARDS_PER_LAPSE)) {
-      if (hasOpenRow.get(scope.ownerId, item.cardId)) continue;
-      insert.run(
-        scope.ownerId,
-        kit.id,
-        item.cardId,
-        opts.sourceRefId,
-        item.nodeId,
-        item.nodeName,
-        item.reason,
-      );
-      const cardRow = allCards.find((c) => c.id === item.cardId);
-      queued.push({
-        cardId: item.cardId,
-        front: cardRow?.front || "",
-        nodeId: item.nodeId,
-        nodeName: item.nodeName,
-        reason: item.reason,
-      });
-    }
-  });
-
-  enqueueTx();
-  return queued;
+  const queue = plan.slice(0, MAX_CARDS_PER_LAPSE);
+  return db.transaction(() =>
+    enqueueRemediation(db, scope, kit.id, opts.sourceRefId, queue, allCards),
+  )();
 }

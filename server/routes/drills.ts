@@ -412,12 +412,7 @@ router.get("/", (req, res) => {
     )
     .all(scope.ownerId, kit.id) as DrillAttemptRow[];
 
-  const attemptsByDrill = new Map<string, DrillAttemptRow[]>();
-  for (const att of attemptRows) {
-    const list = attemptsByDrill.get(att.drill_id) ?? [];
-    if (list.length === 0) attemptsByDrill.set(att.drill_id, list);
-    list.push(att);
-  }
+  const attemptsByDrill = Map.groupBy(attemptRows, (att) => att.drill_id);
 
   const nodesById = nodeMap(kit.skeleton.graph.nodes);
   res.json(

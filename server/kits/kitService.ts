@@ -536,14 +536,9 @@ export function listOwnedKits(db: Database.Database, scope: Scope): OwnedKitSumm
 
   const preloaded: PreloadedKitAggregates = {
     deckStats: new Map(deckStatRows.map((r) => [r.kit_id, r])),
-    guideRows: new Map(),
+    guideRows: Map.groupBy(guideAllRows, (g) => g.kit_id),
     drillCounts: new Map(drillCountRows.map((r) => [r.kit_id, r.c])),
   };
-  for (const g of guideAllRows) {
-    const arr = preloaded.guideRows.get(g.kit_id);
-    if (arr) arr.push(g);
-    else preloaded.guideRows.set(g.kit_id, [g]);
-  }
 
   return rows.map((row) => {
     const { skeleton: _skeleton, ...summary } = hydrateKitSummary(db, scope, row, preloaded);

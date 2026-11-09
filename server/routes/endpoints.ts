@@ -6,7 +6,7 @@ import {
 } from "express";
 import { randomUUID } from "node:crypto";
 import db from "../db.ts";
-import { sealCredential } from "../kits/kitsSchema.ts";
+import { sealCredential } from "../platform/crypto/secretBox.ts";
 import { validateEndpointBaseUrl } from "../platform/ai/aiSettingsService.ts";
 import { ForbiddenError } from "../platform/net/errors.ts";
 import { fetchEndpointModels } from "../providers/defs.ts";

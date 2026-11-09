@@ -1,5 +1,5 @@
 import db from "../db.ts";
-import { openCredential } from "../kits/kitsSchema.ts";
+import { openCredential } from "../platform/crypto/secretBox.ts";
 import {
   applyCatalogGuardrails,
   keepLatestPerFamily,

@@ -1,8 +1,6 @@
 import { log } from "../platform/net/errors.ts";
 
 export const logger = {
-  debug: (msg: string, meta?: Record<string, unknown>) =>
-    log.debug("server", msg, meta),
   info: (msg: string, meta?: Record<string, unknown>) =>
     log.info("server", msg, meta),
   warn: (msg: string, meta?: Record<string, unknown>) =>

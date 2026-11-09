@@ -25,7 +25,6 @@ export const EvaluationResultLlmSchema = z.object({
   pass: z.boolean(),
 });
 
-export type RubricCheckLlm = z.infer<typeof RubricCheckLlmSchema>;
 export type EvaluationResultLlm = z.infer<typeof EvaluationResultLlmSchema>;
 
 export interface AntiSycophancyOptions {

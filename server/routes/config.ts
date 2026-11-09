@@ -5,7 +5,7 @@ import {
   type Response,
 } from "express";
 import db from "../db.ts";
-import { openCredential, sealCredential } from "../kits/kitsSchema.ts";
+import { openCredential, sealCredential } from "../platform/crypto/secretBox.ts";
 import { ForbiddenError } from "../platform/net/errors.ts";
 import {
   getAvailableModels,
