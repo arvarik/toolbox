@@ -1,7 +1,7 @@
+import { randomUUID } from "node:crypto";
 import { Router } from "express";
-import { v4 as uuid } from "uuid";
 import db from "../db.ts";
-import { scopeOf } from "../platform/tenancy/scope.ts";
+import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import { asyncHandler, NotFoundError } from "../platform/net/errors.ts";
 import { resolveActiveKit, resolveKitById } from "../kits/kitContext.ts";
 import { runStructured } from "../ai/engine.ts";
@@ -25,6 +25,19 @@ interface BoardRow {
   updated_at: string;
 }
 
+function getOwnedBoard(scope: Scope, id: string): BoardRow | undefined {
+  return db
+    .prepare("SELECT * FROM boards WHERE ownerId = ? AND id = ?")
+    .get(scope.ownerId, id) as BoardRow | undefined;
+}
+
+function serializeBoard(board: BoardRow) {
+  return {
+    ...board,
+    data: JSON.parse(board.data || "{}"),
+  };
+}
+
 router.get("/", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
@@ -37,32 +50,25 @@ router.get("/", (req, res) => {
 });
 
 router.get("/:id", (req, res) => {
-  const scope = scopeOf(req);
-  const board = db
-    .prepare("SELECT * FROM boards WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, req.params.id) as BoardRow | undefined;
+  const board = getOwnedBoard(scopeOf(req), req.params.id);
   if (!board) {
     res.status(404).json({ message: "Board not found" });
     return;
   }
-  res.json({
-    ...board,
-    data: JSON.parse(board.data || "{}"),
-  });
+  res.json(serializeBoard(board));
 });
 
 router.post("/", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { name, data } = req.body as { name?: string; data?: unknown };
-  const id = uuid();
+  const id = randomUUID();
 
   const maxPos = db
     .prepare(
       "SELECT COALESCE(MAX(position), -1) as maxPos FROM boards WHERE ownerId = ? AND kit_id = ?",
     )
     .get(scope.ownerId, kit.id) as { maxPos: number } | undefined;
-  const position = (maxPos?.maxPos ?? -1) + 1;
 
   db.prepare(
     "INSERT INTO boards (id, ownerId, kit_id, name, data, position) VALUES (?, ?, ?, ?, ?, ?)",
@@ -72,25 +78,16 @@ router.post("/", (req, res) => {
     kit.id,
     name || "Untitled Board",
     JSON.stringify(data || {}),
-    position,
+    (maxPos?.maxPos ?? -1) + 1,
   );
 
-  const board = db
-    .prepare("SELECT * FROM boards WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, id) as BoardRow;
-  res.status(201).json({
-    ...board,
-    data: JSON.parse(board.data || "{}"),
-  });
+  res.status(201).json(serializeBoard(getOwnedBoard(scope, id)!));
 });
 
 router.put("/:id", (req, res) => {
   const scope = scopeOf(req);
   const { name, data } = req.body as { name?: string; data?: unknown };
-  const existing = db
-    .prepare("SELECT id FROM boards WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, req.params.id);
-  if (!existing) {
+  if (!getOwnedBoard(scope, req.params.id)) {
     res.status(404).json({ message: "Board not found" });
     return;
   }
@@ -108,13 +105,7 @@ router.put("/:id", (req, res) => {
     req.params.id,
   );
 
-  const board = db
-    .prepare("SELECT * FROM boards WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, req.params.id) as BoardRow;
-  res.json({
-    ...board,
-    data: JSON.parse(board.data || "{}"),
-  });
+  res.json(serializeBoard(getOwnedBoard(scope, req.params.id)!));
 });
 
 router.patch("/reorder", (req, res) => {
@@ -129,13 +120,11 @@ router.patch("/reorder", (req, res) => {
   const updateStmt = db.prepare(
     "UPDATE boards SET position = ? WHERE ownerId = ? AND kit_id = ? AND id = ?",
   );
-  const updateAll = db.transaction((orderedIds: string[]) => {
+  db.transaction((orderedIds: string[]) => {
     orderedIds.forEach((id, index) => {
       updateStmt.run(index, scope.ownerId, kit.id, id);
     });
-  });
-
-  updateAll(ids.map(String));
+  })(ids.map(String));
 
   const boards = db
     .prepare(
@@ -152,10 +141,7 @@ router.patch("/:id/rename", (req, res) => {
     res.status(400).json({ message: "Name is required" });
     return;
   }
-  const existing = db
-    .prepare("SELECT id FROM boards WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, req.params.id);
-  if (!existing) {
+  if (!getOwnedBoard(scope, req.params.id)) {
     res.status(404).json({ message: "Board not found" });
     return;
   }
@@ -176,6 +162,10 @@ function sanitizeUntrustedFence(text: string): string {
   return text.replace(/<\/untrusted_/gi, "<\\/untrusted_");
 }
 
+function asObj(val: unknown): Record<string, unknown> {
+  return val && typeof val === "object" ? (val as Record<string, unknown>) : {};
+}
+
 const DEFAULT_CONCEPT_RUBRIC = [
   "Propositional accuracy: Every directed edge and linking phrase between concepts forms a factually valid domain proposition.",
   "Structural hierarchy & connectivity: Core concepts connect coherently without isolated orphans or overloaded single-hub star topology.",
@@ -194,9 +184,7 @@ router.post(
   "/:id/critique",
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
-    const board = db
-      .prepare("SELECT * FROM boards WHERE ownerId = ? AND id = ?")
-      .get(scope.ownerId, req.params.id) as BoardRow | undefined;
+    const board = getOwnedBoard(scope, String(req.params.id));
     if (!board) {
       throw new NotFoundError("Board", String(req.params.id));
     }
@@ -215,15 +203,10 @@ router.post(
       data?: unknown;
     };
 
-    let parsedData: Record<string, unknown> = {};
-    if (overrideData && typeof overrideData === "object") {
-      parsedData = overrideData as Record<string, unknown>;
-    } else {
+    let parsedData = asObj(overrideData);
+    if (!overrideData || typeof overrideData !== "object") {
       try {
-        const raw = JSON.parse(board.data || "{}");
-        if (raw && typeof raw === "object") {
-          parsedData = raw as Record<string, unknown>;
-        }
+        parsedData = asObj(JSON.parse(board.data || "{}"));
       } catch {
         parsedData = {};
       }
@@ -233,13 +216,8 @@ router.post(
     const rawEdges = Array.isArray(parsedData.edges) ? parsedData.edges : [];
 
     const normalizedNodes = rawNodes.slice(0, 120).map((n) => {
-      const item = (n && typeof n === "object" ? n : {}) as Record<
-        string,
-        unknown
-      >;
-      const dataObj = (
-        item.data && typeof item.data === "object" ? item.data : {}
-      ) as Record<string, unknown>;
+      const item = asObj(n);
+      const dataObj = asObj(item.data);
       return {
         id: String(item.id ?? ""),
         name: String(item.name ?? dataObj.name ?? "Unnamed"),
@@ -249,13 +227,8 @@ router.post(
     });
 
     const normalizedEdges = rawEdges.slice(0, 200).map((e) => {
-      const item = (e && typeof e === "object" ? e : {}) as Record<
-        string,
-        unknown
-      >;
-      const dataObj = (
-        item.data && typeof item.data === "object" ? item.data : {}
-      ) as Record<string, unknown>;
+      const item = asObj(e);
+      const dataObj = asObj(item.data);
       return {
         id: String(item.id ?? ""),
         from: String(item.from ?? item.source ?? ""),
@@ -280,7 +253,6 @@ router.post(
         : mode === "concept"
           ? DEFAULT_CONCEPT_RUBRIC
           : DEFAULT_ARCHITECTURE_RUBRIC;
-    const rubricLines = baseRubric.map((r, idx) => `${idx + 1}. ${r}`);
 
     const kitConceptSummary = kit.skeleton.graph.nodes
       .slice(0, 24)
@@ -321,7 +293,7 @@ router.post(
         kitConceptSummary
           ? `Reference Kit Curriculum Concepts:\n${kitConceptSummary}`
           : "",
-        `Canvas Critique Rubric:\n${rubricLines.join("\n")}`,
+        `Canvas Critique Rubric:\n${baseRubric.map((r, idx) => `${idx + 1}. ${r}`).join("\n")}`,
         `<untrusted_submission>\n<untrusted_board>\n${fencedPayload}\n</untrusted_board>\n</untrusted_submission>`,
       ]
         .filter(Boolean)

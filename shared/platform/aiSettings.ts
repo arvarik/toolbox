@@ -3,10 +3,10 @@ import { z } from "zod";
 export const GENERATION_CAPABILITIES = ["quick", "deep", "research"] as const;
 export type GenerationCapability = (typeof GENERATION_CAPABILITIES)[number];
 
-export const CapabilityModeSchema = z.enum(["auto", "pinned"]);
-export type CapabilityMode = z.infer<typeof CapabilityModeSchema>;
+const CapabilityModeSchema = z.enum(["auto", "pinned"]);
+type CapabilityMode = z.infer<typeof CapabilityModeSchema>;
 
-export const CapabilityAssignmentSchema = z.object({
+const CapabilityAssignmentSchema = z.object({
   mode: CapabilityModeSchema.default("auto"),
   modelId: z.string().nullable().default(null),
 });
@@ -29,18 +29,15 @@ export type CapabilitiesConfig = z.infer<typeof CapabilitiesConfigSchema>;
  * `embeddings` is strictly instance-wide (managed by Admin) so `rag_chunks_vec`
  * shares one coherent vector space across the SQLite database.
  */
-export const UserCapabilitiesOverrideSchema = z
+const UserCapabilitiesOverrideSchema = z
   .object({
     quick: CapabilityAssignmentSchema.nullable().optional(),
     deep: CapabilityAssignmentSchema.nullable().optional(),
     research: CapabilityAssignmentSchema.nullable().optional(),
   })
   .strict();
-export type UserCapabilitiesOverride = z.infer<
-  typeof UserCapabilitiesOverrideSchema
->;
 
-export const EmbeddingsProviderSchema = z.enum([
+const EmbeddingsProviderSchema = z.enum([
   "local",
   "gemini",
   "openai",
@@ -63,7 +60,7 @@ export const DEFAULT_EMBEDDINGS_CONFIG: EmbeddingsConfig = {
   endpointId: null,
 };
 
-export const WebSearchEngineSchema = z.enum([
+const WebSearchEngineSchema = z.enum([
   "provider",
   "searxng",
   "combined",

@@ -11,6 +11,10 @@ import {
   securityHeaders,
 } from "./platform/net/errors.ts";
 import { gzipCompression } from "./platform/net/compression.ts";
+import {
+  createCostRateLimiters,
+  createRateLimiter,
+} from "./platform/net/rateLimit.ts";
 import { trustProxyHops } from "./platform/net/originAndFetch.ts";
 import { hostGuard } from "./platform/net/hostGuard.ts";
 import { attachRequestContext, scopeOf } from "./platform/tenancy/scope.ts";
@@ -53,6 +57,26 @@ const __dirname = path.dirname(__filename);
 
 let startupOrphansRecovered = false;
 
+const apiRateLimit = createRateLimiter({
+  windowMs: 60_000,
+  max: 1_200,
+  name: "API",
+});
+
+const aiCostLimiters = createCostRateLimiters([
+  /^\/api\/chat(?:\/generate-(?:cards|mermaid))?$/,
+  /^\/api\/feynman$/,
+  /^\/api\/compiler\/(?:extract|propose-outline|compile)$/,
+  /^\/api\/drills\/[^/]+\/grade$/,
+  /^\/api\/boards\/[^/]+\/critique$/,
+  /^\/api\/kits\/[^/]+\/expand$/,
+]);
+
+export function __resetAppRateLimits(): void {
+  apiRateLimit.reset();
+  aiCostLimiters.reset();
+}
+
 export function createApp(): Express {
   if (countPasswordAccounts() > 0) {
     setForcedAuth(true);
@@ -76,8 +100,11 @@ export function createApp(): Express {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  app.use("/api", apiRateLimit);
+  app.use(aiCostLimiters.perIp);
   app.use(attachPrincipal);
   app.use(attachRequestContext);
+  app.use(aiCostLimiters.perUser);
   app.use(guardReadOnlyToken);
   app.use(refuseCrossSiteWrites);
 

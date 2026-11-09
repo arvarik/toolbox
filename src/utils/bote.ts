@@ -5,12 +5,12 @@
  * Calculator page shows comes from `computeEstimates()`.
  */
 
-export const SECONDS_PER_DAY = 86_400
-export const DAYS_PER_YEAR = 365
+const SECONDS_PER_DAY = 86_400
+const DAYS_PER_YEAR = 365
 
 /** RAM assumptions for the cache-node estimate (documented in the UI). */
 export const CACHE_NODE_RAM_GB = 64
-export const CACHE_NODE_USABLE_FRACTION = 0.75
+const CACHE_NODE_USABLE_FRACTION = 0.75
 
 export type BoteInputKey =
   | 'dau'
@@ -75,14 +75,14 @@ export interface LatencyBudgetItem {
   count: number
 }
 
-export interface LatencyNumberEntry {
+interface LatencyNumberEntry {
   id: string
   label: string
   ns: number
   tier: 'cpu' | 'memory' | 'network' | 'disk'
 }
 
-export interface BoteScenario {
+interface BoteScenario {
   id: string
   name: string
   emoji: string

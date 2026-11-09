@@ -1,7 +1,6 @@
 import { z } from "zod";
 
-export const userRoleSchema = z.enum(["admin", "member"]);
-export type UserRole = z.infer<typeof userRoleSchema>;
+const userRoleSchema = z.enum(["admin", "member"]);
 
 export type SessionMethod = "password" | "passkey" | "oidc" | "email-link";
 

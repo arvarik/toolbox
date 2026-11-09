@@ -48,7 +48,7 @@ async function pedagogyRequest<T>(
   return (await res.json()) as T;
 }
 
-export interface RubricCheckItem {
+interface RubricCheckItem {
   point: string;
   met: boolean;
   evidenceOrGap: string;
@@ -101,18 +101,6 @@ export interface DrillItem {
   lastAttemptAt: string | null;
 }
 
-export interface DrillAttemptItem {
-  id: string;
-  submission: string;
-  score: number | null;
-  feedback: Partial<EvaluationFeedback>;
-  createdAt: string;
-}
-
-export interface DrillDetailItem extends DrillItem {
-  attempts: DrillAttemptItem[];
-}
-
 export interface DrillSubmitResult extends EvaluationFeedback {
   attemptId: string;
   drillId: string;
@@ -142,7 +130,7 @@ export interface ChallengeSubmitResult extends EvaluationFeedback {
   implicit_credit_count: number;
 }
 
-export interface FeynmanEvaluateResult extends EvaluationFeedback {
+interface FeynmanEvaluateResult extends EvaluationFeedback {
   conceptName: string;
   nodeId: string | null;
   pillarId: string | null;
@@ -162,8 +150,6 @@ export const drillsApi = {
       : "";
     return pedagogyRequest<DrillItem[]>(`/drills${qs}`);
   },
-  get: (id: string) =>
-    pedagogyRequest<DrillDetailItem>(`/drills/${encodeURIComponent(id)}`),
   generate: (payload: {
     nodeId: string;
     difficulty: 1 | 2 | 3;

@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const slugId = z.string().regex(/^[a-z0-9-]+$/);
 
-export const SectionLensSchema = z.object({
+const SectionLensSchema = z.object({
   id: slugId,
   name: z.string().min(1).max(80),
   icon: z.string().default("book-open"),
@@ -10,13 +10,13 @@ export const SectionLensSchema = z.object({
   ownershipRule: z.string().max(300).default(""),
 });
 
-export const PillarTopicSchema = z.object({
+const PillarTopicSchema = z.object({
   id: slugId,
   name: z.string().min(1).max(120),
   summary: z.string().max(400).optional(),
 });
 
-export const PillarSchema = z.object({
+const PillarSchema = z.object({
   id: slugId,
   number: z.number().int().positive(),
   name: z.string().min(1).max(100),
@@ -26,7 +26,7 @@ export const PillarSchema = z.object({
   topics: z.array(PillarTopicSchema).min(1),
 });
 
-export const GraphNodeSchema = z.object({
+const GraphNodeSchema = z.object({
   id: slugId,
   name: z.string().min(1).max(100),
   pillarId: slugId,
@@ -36,12 +36,12 @@ export const GraphNodeSchema = z.object({
   components: z.array(z.string()).default([]),
 });
 
-export const GraphEdgeSchema = z.object({
+const GraphEdgeSchema = z.object({
   from: slugId,
   to: slugId,
 });
 
-export const LearningTrackSchema = z.object({
+const LearningTrackSchema = z.object({
   id: slugId,
   name: z.string().min(1).max(100),
   emoji: z.string().default("🧭"),
@@ -49,7 +49,7 @@ export const LearningTrackSchema = z.object({
   targets: z.array(slugId).min(1),
 });
 
-export const StarterCardSeedSchema = z.object({
+const StarterCardSeedSchema = z.object({
   key: z.string().min(1),
   front: z.string().min(1),
   back: z.string().min(1),
@@ -60,7 +60,7 @@ export const StarterCardSeedSchema = z.object({
   prerequisiteKey: z.string().optional(),
 });
 
-export const GuidedDrillSeedSchema = z.object({
+const GuidedDrillSeedSchema = z.object({
   key: z.string().min(1),
   nodeId: slugId,
   difficulty: z.union([z.literal(1), z.literal(2), z.literal(3)]),
@@ -70,12 +70,12 @@ export const GuidedDrillSeedSchema = z.object({
   rubricPoints: z.array(z.string()).min(1),
 });
 
-export const TutorPersonaSchema = z.object({
+const TutorPersonaSchema = z.object({
   label: z.string().min(1).max(60),
   prompt: z.string().min(1),
 });
 
-export const CanvasTemplateV1Schema = z.object({
+const CanvasTemplateV1Schema = z.object({
   id: slugId,
   name: z.string().min(1).max(100),
   description: z.string().max(400).default(""),
@@ -83,7 +83,7 @@ export const CanvasTemplateV1Schema = z.object({
   edgesJson: z.string().default("[]"),
 });
 
-export const KitMigrationsSchema = z.object({
+const KitMigrationsSchema = z.object({
   nodeAliases: z.record(slugId, slugId).default({}),
   topicAliases: z.record(slugId, slugId).default({}),
 });

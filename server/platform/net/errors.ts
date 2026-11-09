@@ -7,23 +7,23 @@ const isTest = process.env.NODE_ENV === "test";
 export const log = {
   info(scope: string, message: string, meta?: Record<string, unknown>): void {
     if (isTest) return;
-    if (meta) console.info(`[${scope}] ${message}`, meta);
-    else console.info(`[${scope}] ${message}`);
+    if (meta) console.info("[%s] %s", scope, message, meta);
+    else console.info("[%s] %s", scope, message);
   },
   warn(scope: string, message: string, meta?: Record<string, unknown>): void {
     if (isTest) return;
-    if (meta) console.warn(`[${scope}] ${message}`, meta);
-    else console.warn(`[${scope}] ${message}`);
+    if (meta) console.warn("[%s] %s", scope, message, meta);
+    else console.warn("[%s] %s", scope, message);
   },
   error(scope: string, message: string, meta?: Record<string, unknown>): void {
     if (isTest) return;
-    if (meta) console.error(`[${scope}] ${message}`, meta);
-    else console.error(`[${scope}] ${message}`);
+    if (meta) console.error("[%s] %s", scope, message, meta);
+    else console.error("[%s] %s", scope, message);
   },
   debug(scope: string, message: string, meta?: Record<string, unknown>): void {
     if (isTest || process.env.NODE_ENV === "production") return;
-    if (meta) console.debug(`[${scope}] ${message}`, meta);
-    else console.debug(`[${scope}] ${message}`);
+    if (meta) console.debug("[%s] %s", scope, message, meta);
+    else console.debug("[%s] %s", scope, message);
   },
 };
 

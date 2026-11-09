@@ -1,0 +1,9 @@
+name: "Toolbox CodeQL Configuration"
+
+# All /api, /mcp, /api/auth, and billable AI endpoints are protected in
+# server/app.ts via our zero-dependency bounded fixed-window rate limiter
+# (server/platform/net/rateLimit.ts). CodeQL's built-in js/missing-rate-limiting
+# query only recognizes third-party npm packages such as express-rate-limit.
+query-filters:
+  - exclude:
+      id: js/missing-rate-limiting

@@ -15,7 +15,7 @@ export interface StagedSourceSummary {
   safeBasename: string | null;
 }
 
-export interface ScopeDimension {
+interface ScopeDimension {
   id: string;
   label: string;
   question: string;
@@ -31,7 +31,7 @@ export interface ScopeCalibrationResult {
   dimensions: [ScopeDimension, ScopeDimension, ScopeDimension];
 }
 
-export interface VerifiedSourceEntry {
+interface VerifiedSourceEntry {
   id: string;
   kind: "pdf" | "markdown" | "text" | "url" | "web";
   title: string;
@@ -45,13 +45,13 @@ export interface VerifiedSourcePool {
   gapCheckQueries: string[];
 }
 
-export interface DagRepairReport {
+interface DagRepairReport {
   initialCyclicSccCount: number;
   llmRepairAttempted: boolean;
   tieBreakerDroppedCount: number;
 }
 
-export interface CompileKitResponse {
+interface CompileKitResponse {
   skeleton: KitSkeletonV1;
   pool: VerifiedSourcePool;
   citedSourceIds: string[];
@@ -59,34 +59,10 @@ export interface CompileKitResponse {
   stagedSources: StagedSourceSummary[];
 }
 
-export interface CommitKitResponse {
+interface CommitKitResponse {
   kit: KitDetailItem;
   jobId: string;
   committedSourceIds: string[];
-}
-
-export interface KitSeedStatusResponse {
-  kitId: string;
-  slug: string;
-  status: string;
-  statusDetail: string | null;
-  cardCount: number;
-  drillCount: number;
-  guideFilledCount: number;
-  job: {
-    id: string;
-    status: string;
-    attempts: number;
-    lastError: string | null;
-    progress: {
-      totalPillars: number;
-      completedPillarIds: string[];
-      currentPillarId: string | null;
-      addedCards: number;
-      addedDrills: number;
-      addedGuideNotes: number;
-    };
-  } | null;
 }
 
 export interface ExpandKitResponse {
@@ -227,12 +203,6 @@ export const compilerApi = {
     });
   },
 
-  getSeedStatus(slugOrId: string): Promise<KitSeedStatusResponse> {
-    return requestCompilerJson(
-      `/kits/${encodeURIComponent(slugOrId)}/seed-status`,
-    );
-  },
-
   expandKit(
     slugOrId: string,
     payload: {
@@ -250,5 +220,3 @@ export const compilerApi = {
     });
   },
 };
-
-export default compilerApi;

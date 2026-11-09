@@ -1,5 +1,5 @@
+import { randomUUID } from "node:crypto";
 import { Router } from "express";
-import { v4 as uuid } from "uuid";
 import { z } from "zod";
 import db from "../db.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
@@ -113,10 +113,10 @@ function ensureSeedDrillsHydrated(scope: Scope, kit: ActiveKitContext): void {
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
 
-  const hydrateTx = db.transaction(() => {
+  db.transaction(() => {
     for (const seed of seeds) {
       insertSeed.run(
-        uuid(),
+        randomUUID(),
         scope.ownerId,
         kit.id,
         seed.nodeId,
@@ -128,8 +128,7 @@ function ensureSeedDrillsHydrated(scope: Scope, kit: ActiveKitContext): void {
         seed.key,
       );
     }
-  });
-  hydrateTx();
+  })();
 }
 
 function computeAttemptSummary(attempts: readonly DrillAttemptRow[]): {
@@ -307,7 +306,7 @@ async function generateAndPersistDrill(
   }
   const workedSolution = generated.workedSolution.trim();
 
-  const id = uuid();
+  const id = randomUUID();
   db.prepare(
     `INSERT INTO drills (
        id, ownerId, kit_id, node_id, difficulty, prompt, hints_json, worked_solution, rubric_json, seed_key
@@ -324,17 +323,63 @@ async function generateAndPersistDrill(
     JSON.stringify(rubricPoints),
   );
 
-  return db
-    .prepare("SELECT * FROM drills WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, id) as DrillRow;
+  return getOwnedDrill(scope, id);
 }
 
-function recordStudySessionTick(scope: Scope): void {
+function requireNonEmpty(val: unknown, field: string): string {
+  if (typeof val !== "string" || !val.trim()) {
+    throw new ValidationError(`${field} is required`);
+  }
+  return val.trim();
+}
+
+function optModel(model: unknown): string | undefined {
+  return typeof model === "string" && model.trim() ? model.trim() : undefined;
+}
+
+function requireKitNode(
+  kit: ActiveKitContext,
+  rawNodeId: string,
+): { nodesById: Map<string, GraphNode>; node: GraphNode } {
+  const id = rawNodeId.trim();
+  const nodesById = nodeMap(kit.skeleton.graph.nodes);
+  const node = nodesById.get(id);
+  if (!node) throw new NotFoundError("Node", id);
+  return { nodesById, node };
+}
+
+function getOwnedDrill(scope: Scope, id: string): DrillRow {
+  const row = db
+    .prepare("SELECT * FROM drills WHERE ownerId = ? AND id = ?")
+    .get(scope.ownerId, id) as DrillRow | undefined;
+  if (!row) throw new NotFoundError("Drill", id);
+  return row;
+}
+
+function recordDrillAttempt(
+  scope: Scope,
+  drillId: string,
+  submission: string,
+  evaluation: { score: number },
+): string {
+  const attemptId = randomUUID();
+  db.prepare(
+    `INSERT INTO drill_attempts (id, ownerId, drill_id, submission, score, feedback_json)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(
+    attemptId,
+    scope.ownerId,
+    drillId,
+    submission,
+    evaluation.score,
+    JSON.stringify(evaluation),
+  );
   db.prepare(
     `INSERT INTO study_sessions (ownerId, date, count)
      VALUES (?, date('now', 'localtime'), 1)
      ON CONFLICT(ownerId, date) DO UPDATE SET count = count + 1`,
   ).run(scope.ownerId);
+  return attemptId;
 }
 
 router.get("/", (req, res) => {
@@ -345,23 +390,17 @@ router.get("/", (req, res) => {
   const nodeFilter =
     typeof req.query.nodeId === "string" ? req.query.nodeId.trim() : "";
 
-  const drillRows = (
-    nodeFilter
-      ? db
-          .prepare(
-            `SELECT * FROM drills
-             WHERE ownerId = ? AND kit_id = ? AND node_id = ?
-             ORDER BY difficulty ASC, created_at ASC`,
-          )
-          .all(scope.ownerId, kit.id, nodeFilter)
-      : db
-          .prepare(
-            `SELECT * FROM drills
-             WHERE ownerId = ? AND kit_id = ?
-             ORDER BY difficulty ASC, created_at ASC`,
-          )
-          .all(scope.ownerId, kit.id)
-  ) as DrillRow[];
+  const drillRows = db
+    .prepare(
+      `SELECT * FROM drills
+       WHERE ownerId = ? AND kit_id = ? ${nodeFilter ? "AND node_id = ?" : ""}
+       ORDER BY difficulty ASC, created_at ASC`,
+    )
+    .all(
+      ...(nodeFilter
+        ? [scope.ownerId, kit.id, nodeFilter]
+        : [scope.ownerId, kit.id]),
+    ) as DrillRow[];
 
   const attemptRows = db
     .prepare(
@@ -375,20 +414,17 @@ router.get("/", (req, res) => {
 
   const attemptsByDrill = new Map<string, DrillAttemptRow[]>();
   for (const att of attemptRows) {
-    let list = attemptsByDrill.get(att.drill_id);
-    if (!list) {
-      list = [];
-      attemptsByDrill.set(att.drill_id, list);
-    }
+    const list = attemptsByDrill.get(att.drill_id) ?? [];
+    if (list.length === 0) attemptsByDrill.set(att.drill_id, list);
     list.push(att);
   }
 
   const nodesById = nodeMap(kit.skeleton.graph.nodes);
-  const drills = drillRows.map((row) =>
-    formatDrill(row, nodesById, attemptsByDrill.get(row.id) ?? []),
+  res.json(
+    drillRows.map((row) =>
+      formatDrill(row, nodesById, attemptsByDrill.get(row.id) ?? []),
+    ),
   );
-
-  res.json(drills);
 });
 
 router.post(
@@ -402,16 +438,10 @@ router.post(
       model?: string;
     };
 
-    if (!nodeId || typeof nodeId !== "string" || !nodeId.trim()) {
-      throw new ValidationError("nodeId is required");
-    }
-
-    const nodesById = nodeMap(kit.skeleton.graph.nodes);
-    const node = nodesById.get(nodeId.trim());
-    if (!node) {
-      throw new NotFoundError("Node", nodeId.trim());
-    }
-
+    const { nodesById, node } = requireKitNode(
+      kit,
+      requireNonEmpty(nodeId, "nodeId"),
+    );
     const parsedDiff =
       rawDiff === 1 || rawDiff === 2 || rawDiff === 3 ? rawDiff : 2;
 
@@ -420,7 +450,7 @@ router.post(
       kit,
       node,
       parsedDiff,
-      typeof model === "string" && model.trim() ? model.trim() : undefined,
+      optModel(model),
     );
 
     res.status(201).json(formatDrill(row, nodesById, []));
@@ -434,36 +464,24 @@ router.get(
     const kit = resolveActiveKit(req, db, scope);
     ensureSeedDrillsHydrated(scope, kit);
 
-    const nodeId = String(req.params.nodeId).trim();
-    const nodesById = nodeMap(kit.skeleton.graph.nodes);
-    const node = nodesById.get(nodeId);
-    if (!node) {
-      throw new NotFoundError("Node", nodeId);
-    }
+    const { nodesById, node } = requireKitNode(kit, String(req.params.nodeId));
 
-    let drillRow = db
-      .prepare(
-        `SELECT * FROM drills
-         WHERE ownerId = ? AND kit_id = ? AND node_id = ? AND difficulty = 3
-         ORDER BY created_at DESC
-         LIMIT 1`,
-      )
-      .get(scope.ownerId, kit.id, node.id) as DrillRow | undefined;
-
-    const modelParam =
-      typeof req.query.model === "string" && req.query.model.trim()
-        ? req.query.model.trim()
-        : undefined;
-
-    if (!drillRow) {
-      drillRow = await generateAndPersistDrill(
+    const drillRow =
+      (db
+        .prepare(
+          `SELECT * FROM drills
+           WHERE ownerId = ? AND kit_id = ? AND node_id = ? AND difficulty = 3
+           ORDER BY created_at DESC
+           LIMIT 1`,
+        )
+        .get(scope.ownerId, kit.id, node.id) as DrillRow | undefined) ??
+      (await generateAndPersistDrill(
         scope,
         kit,
         node,
         3,
-        modelParam,
-      );
-    }
+        optModel(req.query.model),
+      ));
 
     const attempts = db
       .prepare(
@@ -471,14 +489,12 @@ router.get(
       )
       .all(scope.ownerId, drillRow.id) as DrillAttemptRow[];
 
-    const feynmanPrompt = `Synthesize ${node.name} in your own words without hand-waving jargon: explain the core mechanism, when to use it, and what breaks when its assumptions fail.`;
-
     res.json({
       nodeId: node.id,
       nodeName: node.name,
       nodeSummary: node.summary,
       drill: formatDrill(drillRow, nodesById, attempts),
-      feynmanPrompt,
+      feynmanPrompt: `Synthesize ${node.name} in your own words without hand-waving jargon: explain the core mechanism, when to use it, and what breaks when its assumptions fail.`,
       passThreshold: 0.85,
     });
   }),
@@ -489,13 +505,7 @@ router.post(
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
     const kit = resolveActiveKit(req, db, scope);
-
-    const nodeId = String(req.params.nodeId).trim();
-    const nodesById = nodeMap(kit.skeleton.graph.nodes);
-    const node = nodesById.get(nodeId);
-    if (!node) {
-      throw new NotFoundError("Node", nodeId);
-    }
+    const { node } = requireKitNode(kit, String(req.params.nodeId));
 
     const { drillId, drillSubmission, feynmanExplanation, model } = (req.body ??
       {}) as {
@@ -505,32 +515,21 @@ router.post(
       model?: string;
     };
 
-    if (!drillId || typeof drillId !== "string" || !drillId.trim()) {
-      throw new ValidationError("drillId is required");
-    }
-    if (
-      !drillSubmission ||
-      typeof drillSubmission !== "string" ||
-      !drillSubmission.trim()
-    ) {
-      throw new ValidationError("drillSubmission is required");
-    }
-    if (
-      !feynmanExplanation ||
-      typeof feynmanExplanation !== "string" ||
-      !feynmanExplanation.trim()
-    ) {
-      throw new ValidationError("feynmanExplanation is required");
-    }
+    const cleanDrillId = requireNonEmpty(drillId, "drillId");
+    const cleanSubmission = requireNonEmpty(drillSubmission, "drillSubmission");
+    const cleanFeynman = requireNonEmpty(
+      feynmanExplanation,
+      "feynmanExplanation",
+    );
 
     const drillRow = db
       .prepare(
         "SELECT * FROM drills WHERE ownerId = ? AND kit_id = ? AND id = ?",
       )
-      .get(scope.ownerId, kit.id, drillId.trim()) as DrillRow | undefined;
+      .get(scope.ownerId, kit.id, cleanDrillId) as DrillRow | undefined;
 
     if (!drillRow || drillRow.node_id !== node.id) {
-      throw new NotFoundError("Drill", drillId.trim());
+      throw new NotFoundError("Drill", cleanDrillId);
     }
 
     const rubricPoints = parseStringArray(drillRow.rubric_json);
@@ -538,7 +537,7 @@ router.post(
     const rawEval = await runStructured<EvaluationResultLlm>({
       scope,
       capability: "quick",
-      model: typeof model === "string" && model.trim() ? model.trim() : undefined,
+      model: optModel(model),
       schema: EvaluationResultLlmSchema,
       feature: "challenge-node",
       system: ANTI_SYCOPHANCY_SYSTEM_PROMPT,
@@ -548,7 +547,7 @@ router.post(
         `Hard Drill Prompt:\n${drillRow.prompt}`,
         `Reference Worked Solution:\n${drillRow.worked_solution}`,
         `Required Rubric Points (plus clear, jargon-free Feynman synthesis):\n${rubricPoints.map((p, i) => `${i + 1}. ${p}`).join("\n")}\n${rubricPoints.length + 1}. Clear, accurate first-principles Feynman synthesis of ${node.name}`,
-        `<untrusted_submission>\n[Drill Solution]\n${drillSubmission.trim()}\n\n[Feynman Explanation]\n${feynmanExplanation.trim()}\n</untrusted_submission>`,
+        `<untrusted_submission>\n[Drill Solution]\n${cleanSubmission}\n\n[Feynman Explanation]\n${cleanFeynman}\n</untrusted_submission>`,
       ].join("\n\n"),
     });
 
@@ -558,19 +557,12 @@ router.post(
       viewedWorkedSolution: false,
     });
 
-    const attemptId = uuid();
-    db.prepare(
-      `INSERT INTO drill_attempts (id, ownerId, drill_id, submission, score, feedback_json)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(
-      attemptId,
-      scope.ownerId,
+    const attemptId = recordDrillAttempt(
+      scope,
       drillRow.id,
-      drillSubmission.trim(),
-      evaluation.score,
-      JSON.stringify(evaluation),
+      cleanSubmission,
+      evaluation,
     );
-    recordStudySessionTick(scope);
 
     let committedSectionId: string | null = null;
     const graduatedCardIds: string[] = [];
@@ -630,7 +622,7 @@ router.post(
                 node.pillarId,
                 node.topicId,
                 emptySlot.id,
-                feynmanExplanation.trim(),
+                cleanFeynman,
               );
               committedSectionId = emptySlot.id;
             }
@@ -702,7 +694,7 @@ router.post(
           sourceRefId: `${node.pillarId}:${node.topicId}:${committedSectionId}`,
           nodeId: node.id,
           title: `${node.topicId} — ${committedSectionId}`,
-          content: feynmanExplanation.trim(),
+          content: cleanFeynman,
         });
       }
 
@@ -729,12 +721,7 @@ router.post(
 
 router.get("/:id", (req, res) => {
   const scope = scopeOf(req);
-  const row = db
-    .prepare("SELECT * FROM drills WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, req.params.id) as DrillRow | undefined;
-  if (!row) {
-    throw new NotFoundError("Drill", req.params.id);
-  }
+  const row = getOwnedDrill(scope, req.params.id);
   const kit =
     resolveKitById(db, scope, row.kit_id) ?? resolveActiveKit(req, db, scope);
   const attempts = db
@@ -771,14 +758,7 @@ router.post(
   "/:id/submit",
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
-    const drillId = String(req.params.id).trim();
-
-    const drillRow = db
-      .prepare("SELECT * FROM drills WHERE ownerId = ? AND id = ?")
-      .get(scope.ownerId, drillId) as DrillRow | undefined;
-    if (!drillRow) {
-      throw new NotFoundError("Drill", drillId);
-    }
+    const drillRow = getOwnedDrill(scope, String(req.params.id).trim());
 
     const { submission, hintsUsed, viewedWorkedSolution, model } = (req.body ??
       {}) as {
@@ -788,13 +768,7 @@ router.post(
       model?: string;
     };
 
-    if (
-      !submission ||
-      typeof submission !== "string" ||
-      !submission.trim()
-    ) {
-      throw new ValidationError("submission is required");
-    }
+    const cleanSubmission = requireNonEmpty(submission, "submission");
 
     const kit =
       resolveKitById(db, scope, drillRow.kit_id) ??
@@ -805,7 +779,7 @@ router.post(
     const rawEval = await runStructured<EvaluationResultLlm>({
       scope,
       capability: "quick",
-      model: typeof model === "string" && model.trim() ? model.trim() : undefined,
+      model: optModel(model),
       schema: EvaluationResultLlmSchema,
       feature: "drill-grade",
       system: ANTI_SYCOPHANCY_SYSTEM_PROMPT,
@@ -819,7 +793,7 @@ router.post(
         rubricPoints.length > 0
           ? `Rubric Criteria:\n${rubricPoints.map((p, i) => `${i + 1}. ${p}`).join("\n")}`
           : "",
-        `<untrusted_submission>\n${submission.trim()}\n</untrusted_submission>`,
+        `<untrusted_submission>\n${cleanSubmission}\n</untrusted_submission>`,
       ]
         .filter(Boolean)
         .join("\n\n"),
@@ -831,20 +805,12 @@ router.post(
       viewedWorkedSolution: Boolean(viewedWorkedSolution),
     });
 
-    const attemptId = uuid();
-    db.prepare(
-      `INSERT INTO drill_attempts (id, ownerId, drill_id, submission, score, feedback_json)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-    ).run(
-      attemptId,
-      scope.ownerId,
+    const attemptId = recordDrillAttempt(
+      scope,
       drillRow.id,
-      submission.trim(),
-      evaluation.score,
-      JSON.stringify(evaluation),
+      cleanSubmission,
+      evaluation,
     );
-
-    recordStudySessionTick(scope);
 
     let implicitCredit = {
       updatedCardIds: [] as string[],
