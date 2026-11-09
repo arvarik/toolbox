@@ -58,18 +58,6 @@ const zeroCounts = { total: 2, new: 0, learning: 0, lapsed: 0, due: 0, maturing:
 
 describe('Ordered Mastery Path, Attempt-Gated Drills, Grounded Feynman & Cross-Kit Review', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
-    window.innerWidth = 1200
-    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    }))
     useAppStore.setState({
       model: 'gemini-2.5-flash',
       toasts: [],

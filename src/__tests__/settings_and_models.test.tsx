@@ -89,7 +89,6 @@ async function renderSettled(ui: ReactNode) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
   useAppStore.setState({
     model: 'gemini-3.5-flash',
     toasts: [],

@@ -132,7 +132,6 @@ function buildRustKit() {
 
 describe('Multi-Kit Workspace, Archived Notes & New Kit Studio (/new)', () => {
   beforeEach(() => {
-    vi.clearAllMocks()
     resetKitStore()
   })
 

@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import BoardList from '../components/builder/BoardList'
 import { readStoreNodes } from '../components/builder/boardModel'
 import FlashcardView from '../components/study/FlashcardView'
@@ -107,7 +107,6 @@ describe('Builder Canvas, Concept Map Critique & Flashcard Decks', () => {
 
   beforeEach(() => {
     activeMockDecks = structuredClone(MOCK_DECKS)
-    window.innerWidth = 1024
     useAppStore.setState({
       model: 'gemini-2.5-flash',
       sidebarCollapsed: false,
@@ -149,20 +148,6 @@ describe('Builder Canvas, Concept Map Critique & Flashcard Decks', () => {
       onChunk?.('AI response content')
       return 'AI response content'
     })
-    window.matchMedia = vi.fn().mockImplementation((query: string) => ({
-      matches: false,
-      media: query,
-      onchange: null,
-      addListener: vi.fn(),
-      removeListener: vi.fn(),
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      dispatchEvent: vi.fn(),
-    }))
-  })
-
-  afterEach(() => {
-    vi.clearAllMocks()
   })
 
   it('syncs dropped Builder nodes with finite coordinates, purges nodes on /k/:slug/builder Kit switch, and renders 15-tab BoardList', async () => {
