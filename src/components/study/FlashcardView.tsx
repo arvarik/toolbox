@@ -74,7 +74,6 @@ export interface FlashcardViewProps {
   deckName?: string
   deckId?: string
   reviewMode?: boolean
-  onCardReviewed?: (cardId: string, quality: number) => void
 }
 
 function getCurrentTime(): number {
@@ -87,7 +86,6 @@ export default function FlashcardView({
   deckName,
   deckId,
   reviewMode = false,
-  onCardReviewed,
 }: FlashcardViewProps) {
   const navigate = useNavigate()
   const { skeleton, capabilities, sectionsByPillar } = useActiveKit()
@@ -243,7 +241,6 @@ export default function FlashcardView({
 
       ratingsRef.current[quality] = (ratingsRef.current[quality] || 0) + 1
       if (quality >= 3) correctCountRef.current += 1
-      if (onCardReviewed) onCardReviewed(currentCard.id, quality)
 
       // Show "Review in Guide" link when rated Again and card has source metadata
       if (quality === 1 && currentCard.source_pillar_id && currentCard.source_topic_id) {

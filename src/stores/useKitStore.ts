@@ -52,7 +52,6 @@ interface KitStoreState {
   activeKit: KitDetailItem | null;
   kitCache: Record<string, KitDetailItem>;
   isLoadingList: boolean;
-  isLoadingActive: boolean;
 
   fetchKits: () => Promise<KitSummaryItem[]>;
   selectKitBySlug: (slug: string | null) => Promise<KitDetailItem | null>;
@@ -87,7 +86,6 @@ export const useKitStore = create<KitStoreState>((set, get) => ({
   activeKit: null,
   kitCache: {},
   isLoadingList: false,
-  isLoadingActive: false,
 
   fetchKits: async () => {
     const kitsApi = getKitsApi();
@@ -108,23 +106,16 @@ export const useKitStore = create<KitStoreState>((set, get) => ({
   selectKitBySlug: async (slug: string | null) => {
     if (!slug) {
       if (get().activeKitSlug !== null || get().activeKit !== null) {
-        set({ activeKitSlug: null, activeKit: null, isLoadingActive: false });
+        set({ activeKitSlug: null, activeKit: null });
       }
       return null;
     }
 
     const cached = get().kitCache[slug];
-    if (cached) {
-      set({ activeKitSlug: slug, activeKit: cached });
-    } else {
-      set({ activeKitSlug: slug, isLoadingActive: true });
-    }
+    set(cached ? { activeKitSlug: slug, activeKit: cached } : { activeKitSlug: slug });
 
     const kitsApi = getKitsApi();
-    if (!kitsApi?.get) {
-      set({ isLoadingActive: false });
-      return cached ?? null;
-    }
+    if (!kitsApi?.get) return cached ?? null;
 
     try {
       const res = (await kitsApi.get(slug)) as { kit?: KitDetailItem } | null;
@@ -143,8 +134,6 @@ export const useKitStore = create<KitStoreState>((set, get) => ({
       return kit;
     } catch {
       return cached ?? null;
-    } finally {
-      set({ isLoadingActive: false });
     }
   },
 

@@ -437,12 +437,6 @@ export function formatBitrate(value: number): string {
   return scale(value, BITRATE_LADDER, 'bps')
 }
 
-/** QPS → "1.16K QPS". */
-export function formatQps(value: number): string {
-  if (!Number.isFinite(value)) return '—'
-  return `${formatCount(value)} QPS`
-}
-
 /** Nanoseconds → human latency string ("0.5 ns", "10 µs", "150 ms", "1.2 s"). */
 export function formatLatency(ns: number): string {
   if (!Number.isFinite(ns)) return '—'

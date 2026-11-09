@@ -6,13 +6,11 @@ import useIsMobile from '../../hooks/useIsMobile'
 export interface PullToRefreshProps {
   onRefresh: () => Promise<unknown> | unknown
   children: ReactNode
-  isEnabled?: boolean
 }
 
 export default function PullToRefresh({
   onRefresh,
   children,
-  isEnabled = true,
 }: PullToRefreshProps) {
   const isMobile = useIsMobile()
   const [pullDistance, setPullDistance] = useState(0)
@@ -21,7 +19,7 @@ export default function PullToRefresh({
   const currentY = useRef(0)
   const contentRef = useRef<HTMLDivElement | null>(null)
 
-  const active = isEnabled && isMobile
+  const active = isMobile
 
   const MAX_PULL = 120
   const THRESHOLD = 70

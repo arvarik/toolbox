@@ -65,11 +65,9 @@ export interface AppStoreState {
 
   chatOpen: Record<string, boolean>
   toggleChat: (page: string) => void
-  setChatOpen: (page: string, open: boolean) => void
 
   apiKeyConfigured: boolean
   setApiKeyConfigured: (status: boolean) => void
-  apiKeysConfigured: Record<string, boolean>
   setApiKeysConfigured: (status: Record<string, boolean>) => void
 
   availableModels: ModelGroup[]
@@ -93,14 +91,11 @@ export interface AppStoreState {
   bumpSrsVersion: () => void
 
   nodes: CanvasNode[]
-  setNodes: (nodes: CanvasNode[]) => void
   edges: CanvasEdge[]
-  setEdges: (edges: CanvasEdge[]) => void
 
   ahaMomentActive: boolean
   triggerAhaMoment: () => void
 
-  pendingActions: Record<string, ReturnType<typeof setTimeout>>
   scheduleAction: (id: string, executeFn: () => void, delay?: number) => void
   cancelAction: (id: string) => boolean
 
@@ -134,6 +129,8 @@ const initialTheme = getInitialTheme()
 applyTheme(initialTheme)
 
 let toastCounter = 0
+// Undo-able delete timers, keyed by action id. Nothing renders them, so they stay out of store state.
+const pendingActions = new Map<string, ReturnType<typeof setTimeout>>()
 
 const useAppStore = create<AppStoreState>((set, get) => ({
   theme: initialTheme,
@@ -163,19 +160,11 @@ const useAppStore = create<AppStoreState>((set, get) => ({
     set((s) => ({
       chatOpen: { ...s.chatOpen, [page]: !s.chatOpen[page] },
     })),
-  setChatOpen: (page, open) =>
-    set((s) => ({
-      chatOpen: { ...s.chatOpen, [page]: open },
-    })),
 
   apiKeyConfigured: false,
   setApiKeyConfigured: (status) => set({ apiKeyConfigured: status }),
-  apiKeysConfigured: {},
   setApiKeysConfigured: (status) =>
-    set({
-      apiKeysConfigured: status,
-      apiKeyConfigured: Object.values(status).some(Boolean),
-    }),
+    set({ apiKeyConfigured: Object.values(status).some(Boolean) }),
 
   availableModels: [],
   fetchAvailableModels: async () => {
@@ -226,9 +215,7 @@ const useAppStore = create<AppStoreState>((set, get) => ({
   bumpSrsVersion: () => set((s) => ({ srsVersion: s.srsVersion + 1 })),
 
   nodes: [],
-  setNodes: (nodes) => set({ nodes }),
   edges: [],
-  setEdges: (edges) => set({ edges }),
 
   ahaMomentActive: false,
   triggerAhaMoment: () => {
@@ -243,54 +230,31 @@ const useAppStore = create<AppStoreState>((set, get) => ({
     setTimeout(() => set({ ahaMomentActive: false }), 2000)
   },
 
-  pendingActions: {},
   scheduleAction: (id, executeFn, delay = 5000) => {
-    const existing = get().pendingActions[id]
-    if (existing) clearTimeout(existing)
-    const timer = setTimeout(() => {
+    clearTimeout(pendingActions.get(id))
+    pendingActions.set(id, setTimeout(() => {
       executeFn()
-      set((s) => {
-        const next = { ...s.pendingActions }
-        delete next[id]
-        return { pendingActions: next }
-      })
-    }, delay)
-    set((s) => ({
-      pendingActions: { ...s.pendingActions, [id]: timer },
-    }))
+      pendingActions.delete(id)
+    }, delay))
   },
   cancelAction: (id) => {
-    let cancelled = false
-    set((s) => {
-      if (s.pendingActions[id]) {
-        clearTimeout(s.pendingActions[id])
-        const next = { ...s.pendingActions }
-        delete next[id]
-        cancelled = true
-        return { pendingActions: next }
-      }
-      return s
-    })
-    return cancelled
+    clearTimeout(pendingActions.get(id))
+    return pendingActions.delete(id)
   },
 
-  resetWorkspaceState: () =>
-    set((s) => {
-      for (const timer of Object.values(s.pendingActions)) {
-        clearTimeout(timer)
-      }
-      return {
-        nodes: [],
-        edges: [],
-        toasts: [],
-        calcModalOpen: false,
-        searchOpen: false,
-        availableModels: [],
-        apiKeyConfigured: false,
-        apiKeysConfigured: {},
-        pendingActions: {},
-      }
-    }),
+  resetWorkspaceState: () => {
+    for (const timer of pendingActions.values()) clearTimeout(timer)
+    pendingActions.clear()
+    set({
+      nodes: [],
+      edges: [],
+      toasts: [],
+      calcModalOpen: false,
+      searchOpen: false,
+      availableModels: [],
+      apiKeyConfigured: false,
+    })
+  },
 }))
 
 // Clear cross-Kit canvas/modal state whenever the active Kit changes.

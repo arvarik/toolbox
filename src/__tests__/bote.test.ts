@@ -11,7 +11,6 @@ import {
   formatBytesPerSec,
   formatCount,
   formatLatency,
-  formatQps,
   sanitizeInput,
   sanitizeInputs,
   sumLatencyBudget,
@@ -118,7 +117,6 @@ describe('sanitization, formatters, latency budget, and export', () => {
     ])
     expect(formatBytesPerSec(2.5e6)).toBe('2.5 MB/s')
     expect(formatBitrate(1.313e9)).toBe('1.31 Gbps')
-    expect(formatQps(1160)).toBe('1.16K QPS')
     expect([formatLatency(0.5), formatLatency(10_000), formatLatency(150e6), formatLatency(2.5e9)]).toEqual([
       '0.5 ns', '10 µs', '150 ms', '2.5 s',
     ])
