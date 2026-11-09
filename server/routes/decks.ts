@@ -301,12 +301,7 @@ export function collectDueReviewQueue(
         : [scope.ownerId]),
     ) as FlashcardRow[];
 
-  const cardsByDeck = new Map<string, FlashcardRow[]>();
-  for (const card of candidateCards) {
-    const bucket = cardsByDeck.get(card.deck_id);
-    if (bucket) bucket.push(card);
-    else cardsByDeck.set(card.deck_id, [card]);
-  }
+  const cardsByDeck = Map.groupBy(candidateCards, (card) => card.deck_id);
 
   const deckMeta = new Map<string, JoinedDeckRow>(
     allDecks.map((d) => [d.id, d]),

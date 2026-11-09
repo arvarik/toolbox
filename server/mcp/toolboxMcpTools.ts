@@ -348,13 +348,10 @@ function computeKitPathPayload(scope: Scope, kitDetail: OwnedKitDetail) {
     topic_id: string;
     section_id: string;
   }>;
-  const filledTopicSections = new Map<string, string[]>();
-  for (const row of filledGuideRows) {
-    const key = `${row.pillar_id}::${row.topic_id}`;
-    const list = filledTopicSections.get(key) ?? [];
-    list.push(row.section_id);
-    filledTopicSections.set(key, list);
-  }
+  const filledTopicSections = Map.groupBy(
+    filledGuideRows,
+    (row) => `${row.pillar_id}::${row.topic_id}`,
+  );
 
   const { byNode, cardNodeIndex } = computeGraphHealth(cards, {
     remediationCardIds,
@@ -437,7 +434,9 @@ function computeKitPathPayload(scope: Scope, kitDetail: OwnedKitDetail) {
       id: t.id,
       name: t.name,
       summary: t.summary ?? "",
-      filledSectionIds: filledTopicSections.get(`${pillar.id}::${t.id}`) ?? [],
+      filledSectionIds: (filledTopicSections.get(`${pillar.id}::${t.id}`) ?? []).map(
+        (row) => row.section_id,
+      ),
     })),
   }));
 
@@ -861,29 +860,19 @@ function registerToolboxTools(
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
 
-      const created: Array<{
-        id: string;
-        front: string;
-        back: string;
-        nodeId: string | null;
-        pillarId: string | null;
-        topicId: string | null;
-        sectionId: string | null;
-        prerequisiteCardId: string | null;
-      }> = [];
+      const created = args.cards.map((item) => ({
+        id: crypto.randomUUID(),
+        front: item.front,
+        back: item.back,
+        nodeId: item.nodeId ?? null,
+        pillarId: item.pillarId ?? null,
+        topicId: item.topicId ?? null,
+        sectionId: item.sectionId ?? null,
+        prerequisiteCardId: item.prerequisiteCardId ?? null,
+      }));
 
       db.transaction(() => {
-        for (const item of args.cards) {
-          const row = {
-            id: crypto.randomUUID(),
-            front: item.front,
-            back: item.back,
-            nodeId: item.nodeId ?? null,
-            pillarId: item.pillarId ?? null,
-            topicId: item.topicId ?? null,
-            sectionId: item.sectionId ?? null,
-            prerequisiteCardId: item.prerequisiteCardId ?? null,
-          };
+        for (const row of created) {
           insertCard.run(
             row.id,
             scope.ownerId,
@@ -897,7 +886,6 @@ function registerToolboxTools(
             row.topicId,
             row.sectionId,
           );
-          created.push(row);
         }
         db.prepare(
           "UPDATE decks SET updated_at = datetime('now') WHERE ownerId = ? AND id = ?",

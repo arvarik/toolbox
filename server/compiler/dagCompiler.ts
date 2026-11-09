@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  prerequisitesOf,
   validateGraph,
   verifyKitSkeleton,
   type GraphEdge,
@@ -1061,12 +1062,7 @@ export async function refineBlueprint({
   }
 
   const normalizedDraft = normalizeEditedDraftSkeleton(draftSkeleton);
-  const prereqsByNode = new Map<string, string[]>();
-  for (const e of normalizedDraft.graph.edges) {
-    const list = prereqsByNode.get(e.to) ?? [];
-    list.push(e.from);
-    prereqsByNode.set(e.to, list);
-  }
+  const prereqsByNode = prerequisitesOf(normalizedDraft.graph.edges);
 
   const compactDraft = {
     identity: {

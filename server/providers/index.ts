@@ -1,5 +1,5 @@
 import db from "../db.ts";
-import { openCredential, sealCredential } from "../kits/kitsSchema.ts";
+import { openCredential, sealCredential } from "../platform/crypto/secretBox.ts";
 import {
   PROVIDER_DEFS,
   fetchEndpointModels,
@@ -21,13 +21,6 @@ const PROVIDERS: Record<string, ProviderDef> = Object.fromEntries(
   PROVIDER_DEFS.map((p) => [p.id, p]),
 );
 
-const MODEL_TO_PROVIDER: Record<string, string> = {};
-for (const def of PROVIDER_DEFS) {
-  for (const model of def.models) {
-    MODEL_TO_PROVIDER[model.id] = def.id;
-  }
-}
-
 export function getApiKeyForProvider(providerId: string): string | null {
   const def = PROVIDERS[providerId];
   if (!def) return null;
@@ -36,24 +29,6 @@ export function getApiKeyForProvider(providerId: string): string | null {
     .get(def.configKey) as { value: string } | undefined;
   const opened = openCredential(row?.value);
   return opened || null;
-}
-
-export function getProviderIdForModel(modelId: string): string | null {
-  if (MODEL_TO_PROVIDER[modelId]) {
-    return MODEL_TO_PROVIDER[modelId];
-  }
-  for (const def of PROVIDER_DEFS) {
-    const cached = loadCatalog(def.id);
-    if (cached?.models?.some((m) => m.id === modelId)) {
-      return def.id;
-    }
-  }
-  for (const def of PROVIDER_DEFS) {
-    if (def.ownsModelId(modelId)) {
-      return def.id;
-    }
-  }
-  return null;
 }
 
 export async function testProviderKey(
@@ -153,14 +128,13 @@ export function handleEndpointRemoved(endpointId: string): void {
   clearCatalog(`custom:${endpointId}`);
 }
 
-export function getAvailableModels(): Array<{
+interface ProviderModels {
   provider: { id: string; name: string; color: string; isCustom?: boolean };
   models: Array<Record<string, unknown>>;
-}> {
-  const result: Array<{
-    provider: { id: string; name: string; color: string; isCustom?: boolean };
-    models: Array<Record<string, unknown>>;
-  }> = [];
+}
+
+export function getAvailableModels(): ProviderModels[] {
+  const result: ProviderModels[] = [];
 
   for (const def of PROVIDER_DEFS) {
     const apiKey = getApiKeyForProvider(def.id);

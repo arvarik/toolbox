@@ -4,27 +4,17 @@ import { ZodError, type ZodType } from "zod";
 
 const isTest = process.env.NODE_ENV === "test";
 
+const logAt =
+  (level: "info" | "warn" | "error" | "debug", skip = () => isTest) =>
+  (scope: string, message: string, meta?: Record<string, unknown>): void => {
+    if (!skip()) console[level]("[%s] %s", scope, message, ...(meta ? [meta] : []));
+  };
+
 export const log = {
-  info(scope: string, message: string, meta?: Record<string, unknown>): void {
-    if (isTest) return;
-    if (meta) console.info("[%s] %s", scope, message, meta);
-    else console.info("[%s] %s", scope, message);
-  },
-  warn(scope: string, message: string, meta?: Record<string, unknown>): void {
-    if (isTest) return;
-    if (meta) console.warn("[%s] %s", scope, message, meta);
-    else console.warn("[%s] %s", scope, message);
-  },
-  error(scope: string, message: string, meta?: Record<string, unknown>): void {
-    if (isTest) return;
-    if (meta) console.error("[%s] %s", scope, message, meta);
-    else console.error("[%s] %s", scope, message);
-  },
-  debug(scope: string, message: string, meta?: Record<string, unknown>): void {
-    if (isTest || process.env.NODE_ENV === "production") return;
-    if (meta) console.debug("[%s] %s", scope, message, meta);
-    else console.debug("[%s] %s", scope, message);
-  },
+  info: logAt("info"),
+  warn: logAt("warn"),
+  error: logAt("error"),
+  debug: logAt("debug", () => isTest || process.env.NODE_ENV === "production"),
 };
 
 export function getErrorMessage(err: unknown): string {
@@ -75,31 +65,21 @@ export class AppError extends Error {
   }
 }
 
+const CODE_FOR_STATUS: Partial<Record<number, string>> = {
+  400: "BAD_REQUEST",
+  401: "UNAUTHORIZED",
+  403: "FORBIDDEN",
+  404: "NOT_FOUND",
+  409: "CONFLICT",
+  410: "GONE",
+  422: "UNPROCESSABLE",
+  429: "RATE_LIMITED",
+  503: "SERVICE_UNAVAILABLE",
+  504: "TIMEOUT",
+};
+
 function defaultCodeForStatus(status: number): string {
-  switch (status) {
-    case 400:
-      return "BAD_REQUEST";
-    case 401:
-      return "UNAUTHORIZED";
-    case 403:
-      return "FORBIDDEN";
-    case 404:
-      return "NOT_FOUND";
-    case 409:
-      return "CONFLICT";
-    case 410:
-      return "GONE";
-    case 422:
-      return "UNPROCESSABLE";
-    case 429:
-      return "RATE_LIMITED";
-    case 503:
-      return "SERVICE_UNAVAILABLE";
-    case 504:
-      return "TIMEOUT";
-    default:
-      return status >= 500 ? "INTERNAL" : "ERROR";
-  }
+  return CODE_FOR_STATUS[status] ?? (status >= 500 ? "INTERNAL" : "ERROR");
 }
 
 export class NotFoundError extends AppError {

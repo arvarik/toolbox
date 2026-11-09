@@ -7,7 +7,7 @@ import {
   DEFAULT_MODEL_ID,
   parseCustomModelId,
 } from "../providers/defs.ts";
-import { getProviderIdForModel } from "../providers/index.ts";
+import { inferProviderId } from "../platform/ai/aiSettingsService.ts";
 import {
   applyCatalogGuardrails,
   baseAliasOf,
@@ -254,7 +254,7 @@ describe("Model Catalog Guardrails, Provider Resolution & Secret Masking", () =>
       ["llama3:8b", null],
       ["totally-unknown", null],
     ] as const) {
-      expect(getProviderIdForModel(id), id).toBe(prov);
+      expect(inferProviderId(id), id).toBe(prov);
     }
 
     expect(() => resolveModel("clade-typo-1")).toThrow(/Unknown model "clade-typo-1"/);

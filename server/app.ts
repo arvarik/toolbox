@@ -17,7 +17,7 @@ import {
 } from "./platform/net/rateLimit.ts";
 import { trustProxyHops } from "./platform/net/originAndFetch.ts";
 import { hostGuard } from "./platform/net/hostGuard.ts";
-import { attachRequestContext, scopeOf } from "./platform/tenancy/scope.ts";
+import { attachRequestContext } from "./platform/tenancy/scope.ts";
 import { countPasswordAccounts } from "./platform/auth/authService.ts";
 import {
   attachPrincipal,
@@ -36,7 +36,7 @@ import { mountMcpRoutes } from "./mcp/mcpRoutesMount.ts";
 
 import configRoutes from "./routes/config.ts";
 import endpointRoutes from "./routes/endpoints.ts";
-import deckRoutes, { collectDueReviewQueue } from "./routes/decks.ts";
+import deckRoutes from "./routes/decks.ts";
 import boardRoutes from "./routes/boards.ts";
 import chatRoutes from "./routes/chat.ts";
 import studySessionRoutes from "./routes/study_sessions.ts";
@@ -131,15 +131,6 @@ export function createApp(): Express {
   app.use("/api/graph", ...authed, graphRoutes);
   app.use("/api/calculator", ...authed, calculatorRoutes);
   mountPedagogyRoutes(app, authed);
-  app.get("/api/srs/due", ...authed, (req, res) => {
-    const kitSelector =
-      typeof req.query.kitId === "string"
-        ? req.query.kitId
-        : typeof req.query.kit === "string"
-          ? req.query.kit
-          : null;
-    res.json(collectDueReviewQueue(scopeOf(req), { kitSelector }));
-  });
 
   if (
     !startupOrphansRecovered &&

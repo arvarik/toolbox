@@ -3,7 +3,8 @@ import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { LOCAL_OWNER_EMAIL } from "../appConfig.ts";
 import { initPlatformSchema } from "../platform/db/platformSchema.ts";
-import { initKitsSchema, openCredential } from "../kits/kitsSchema.ts";
+import { initKitsSchema } from "../kits/kitsSchema.ts";
+import { openCredential } from "../platform/crypto/secretBox.ts";
 
 describe("Legacy v1 single-user SQLite -> Multi-tenant v2 automatic upgrade", () => {
   it("preserves 100% of v1 rows, cleans orphan prerequisite_ids, and seals API keys", () => {

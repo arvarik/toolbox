@@ -179,6 +179,16 @@ async function send(opts: SendMailOptions): Promise<boolean> {
   }
 }
 
+function assertNotEnvConfigured(): void {
+  if (resolveConfig().source === "env") {
+    throw new AppError(
+      "Mail is configured by the environment (SMTP_URL).",
+      409,
+      { code: "MAIL_CONFIGURED_BY_ENV" },
+    );
+  }
+}
+
 function updateMailSettings(input: {
   host: string;
   port: number;
@@ -188,13 +198,7 @@ function updateMailSettings(input: {
   from: string;
   replyTo?: string;
 }): MailConfig {
-  if (resolveConfig().source === "env") {
-    throw new AppError(
-      "Mail is configured by the environment (SMTP_URL).",
-      409,
-      { code: "MAIL_CONFIGURED_BY_ENV" },
-    );
-  }
+  assertNotEnvConfigured();
   const stored = getSetting<StoredSmtpSettings>(SETTING_KEY);
   let passwordSealed = stored?.passwordSealed;
   if (input.password !== undefined && input.password !== "") {
@@ -215,13 +219,7 @@ function updateMailSettings(input: {
 }
 
 function deleteMailSettings(): MailConfig {
-  if (resolveConfig().source === "env") {
-    throw new AppError(
-      "Mail is configured by the environment (SMTP_URL).",
-      409,
-      { code: "MAIL_CONFIGURED_BY_ENV" },
-    );
-  }
+  assertNotEnvConfigured();
   deleteSetting(SETTING_KEY);
   cachedTransport = null;
   cachedTransportKey = null;
