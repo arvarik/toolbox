@@ -8,7 +8,7 @@ import type { Scope } from "../platform/tenancy/scope.ts";
 import { setupTwoTenants } from "./testHelpers.ts";
 
 const { default: db } = await import("../db.ts");
-const { createApp } = await import("../app.ts");
+const { createApp, __resetAppRateLimits } = await import("../app.ts");
 const { __resetAuthRateLimits } = await import("../platform/routes/authRoutes.ts");
 const { __resetHostGuard, isHostAllowed } = await import("../platform/net/hostGuard.ts");
 const { isPrivateAddress, readBodyCapped, readBytesCapped } = await import(
@@ -784,5 +784,40 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
       expect(isBackgroundJobsDisabled()).toBe(true);
       expect(shouldUseMockEmbedder()).toBe(true);
     });
+  });
+
+  it("8. meters every billable AI route through one per-user cost budget without starving other users", async () => {
+    __resetAppRateLimits();
+    for (let i = 0; i < 30; i++) await bobAgent.post("/api/chat").send({}).expect(400);
+    const billable: Array<["get" | "post", string]> = [
+      ["post", "/api/chat"],
+      ["post", "/api/chat/stream"],
+      ["get", "/api/chat/starters?pillarId=p&topicId=t"],
+      ["post", "/api/chat/generate-flashcards"],
+      ["post", "/api/chat/generate-reverse-cards"],
+      ["post", "/api/chat/summarize"],
+      ["post", "/api/chat/evaluate-interceptor"],
+      ["post", "/api/chat/concept-map"],
+      ["post", "/api/chat/commit"],
+      ["post", "/api/feynman/evaluate"],
+      ["post", "/api/compiler/calibrate"],
+      ["post", "/api/compiler/compile"],
+      ["post", "/api/compiler/refine"],
+      ["post", "/api/compiler/commit"],
+      ["post", `/api/compiler/kits/${bobKitId}/expand`],
+      ["post", "/api/drills/generate"],
+      ["post", "/api/drills/challenge/node-1"],
+      ["post", "/api/drills/drill-1/submit"],
+      ["post", "/api/boards/board-1/critique"],
+      ["post", "/api/calculator/audit"],
+    ];
+    for (const [method, route] of billable) {
+      const res = await bobAgent[method](route).send({});
+      expect(res.status, `${method.toUpperCase()} ${route}`).toBe(429);
+      expect(res.body.error?.code).toBe("RATE_LIMITED");
+    }
+    await bobAgent.post("/api/chat/commit/save").send({}).expect((res) => expect(res.status).not.toBe(429));
+    await aliceAgent.post("/api/chat").send({}).expect(400);
+    __resetAppRateLimits();
   });
 });

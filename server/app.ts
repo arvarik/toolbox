@@ -64,12 +64,13 @@ const apiRateLimit = createRateLimiter({
 });
 
 const aiCostLimiters = createCostRateLimiters([
-  /^\/api\/chat(?:\/generate-(?:cards|mermaid))?$/,
-  /^\/api\/feynman$/,
-  /^\/api\/compiler\/(?:extract|propose-outline|compile)$/,
-  /^\/api\/drills\/[^/]+\/grade$/,
+  /^\/api\/chat(?:\/(?:stream|starters|generate-flashcards|generate-reverse-cards|summarize|evaluate-interceptor|concept-map|commit))?$/,
+  /^\/api\/feynman\/evaluate$/,
+  /^\/api\/compiler\/(?:calibrate|compile|refine|commit)$/,
+  /^\/api\/compiler\/kits\/[^/]+\/expand$/,
+  /^\/api\/drills\/(?:generate|challenge\/[^/]+|[^/]+\/submit)$/,
   /^\/api\/boards\/[^/]+\/critique$/,
-  /^\/api\/kits\/[^/]+\/expand$/,
+  /^\/api\/calculator\/audit$/,
 ]);
 
 export function __resetAppRateLimits(): void {
