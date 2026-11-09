@@ -1,6 +1,13 @@
 <div align="center">
 
-# 🧰 Toolbox
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/brand/kit-mark-dark.svg">
+  <img src="docs/brand/kit-mark.svg" width="144" alt="Kit, the Toolbox box turtle">
+</picture>
+
+# Toolbox
+
+### Tools for Thought
 
 **A self-hosted, multi-tenant AI study platform built around portable learning Kits**
 
@@ -14,6 +21,8 @@
 ![Toolbox Chat Interface](docs/screenshots/screenshot-chat.png)
 
 Toolbox v2 is a self-hosted web app for mastering complex domains through AI-synthesized **Kits** (shipping with an official **System Design Starter Kit** out of the box). Compile custom Kits from any topic, PDF, Markdown file, or URL; practice with FSRS-6 spaced repetition, prerequisite-graph credit propagation, anti-sycophancy drills, and dual-mode visual canvases — backed by a single SQLite file.
+
+Kit, a box turtle whose shell is a toolbox, is the mascot. Kit learns slowly and keeps what it learns, which is how Toolbox teaches. The [brand guide](docs/brand/README.md) has the logo, the tagline, and the rules for using them.
 
 ---
 
@@ -100,6 +109,7 @@ To run from source without Docker, use `npm ci && npm run build && npm start`. S
 | [Deployment Guide](docs/deployment.md) | Docker (`node:26-trixie-slim`), reverse proxies, OIDC/Passkeys, SearXNG, airgapped ONNX |
 | [Architecture](docs/architecture.md) | TypeScript stack, `platform/` boundary, tenant-scoped SQLite + `sqlite-vec`, worker isolation |
 | [Design Reference](docs/design.md) | Tailwind v4 semantic `@theme` tokens (WCAG AA), legacy CSS classes, SVG sanitizer rules |
+| [Brand Guide](docs/brand/README.md) | Kit the box turtle, the "Tools for Thought" tagline, logo versions, app icon, colors |
 | [Agent Instructions](docs/AGENTS.md) | Invariants, `Scope` / `tenant-lint` rules, and codebase gotchas for coding agents |
 | [Contributing](CONTRIBUTING.md) | Dev setup, `oxlint` / `tsc` / `tenant-lint` gates, Vitest & Playwright suites |
 

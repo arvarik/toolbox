@@ -47,6 +47,7 @@
     "test:e2e": "playwright test",
     "test:load": "node scripts/load-test.ts",
     "audit:contrast": "node scripts/contrast-audit.mjs",
+    "brand": "node scripts/brand/build.ts",
     "preview": "vite preview"
   },
   "dependencies": {

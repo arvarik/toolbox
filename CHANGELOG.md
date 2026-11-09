@@ -39,6 +39,9 @@ on the first start.
   security policy, and issue and pull request templates.
 - Automatic SQLite backups every `BACKUP_INTERVAL_HOURS` (default 24), and
   Docker Compose now passes every variable in `.env` to the container.
+- Kit, a box turtle whose shell is a toolbox, is the new logo and mascot, and
+  the tagline is "Tools for Thought". `npm run brand` draws the brand kit in
+  `docs/brand/` from one source drawing.
 
 ### Changed
 
