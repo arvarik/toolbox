@@ -4,12 +4,23 @@ import { Link, useNavigate } from 'react-router-dom'
 import { flashcardsApi, chatApi } from '../../utils/api'
 import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 import StudySessionSummary from './StudySessionSummary'
+import MarkdownRenderer from '../shared/MarkdownRenderer'
 import useAppStore from '../../stores/appStore'
 
 function getCurrentTime() {
   return Date.now()
 }
 
+/**
+ * @param {{
+ *   cards?: Array<Record<string, unknown>>,
+ *   onBack?: () => void,
+ *   deckName?: string,
+ *   deckId?: string,
+ *   reviewMode?: boolean,
+ *   onCardReviewed?: (cardId: string, quality: number) => void,
+ * }} props
+ */
 export default function FlashcardView({ cards = [], onBack, deckName, deckId, reviewMode = false, onCardReviewed }) {
   const navigate = useNavigate()
   const [sessionQueue, setSessionQueue] = useState([])
@@ -420,7 +431,11 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
                 </span>
               )}
             </div>
-            <p className="flashcard-text">{currentCard?.front}</p>
+            <MarkdownRenderer
+              content={currentCard?.front}
+              className="flashcard-markdown"
+              paragraphClassName="flashcard-text"
+            />
             <span
               style={{
                 fontSize: 'var(--text-xs)',
@@ -440,7 +455,11 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
                 </span>
               )}
             </div>
-            <p className="flashcard-text">{currentCard?.back}</p>
+            <MarkdownRenderer
+              content={currentCard?.back}
+              className="flashcard-markdown"
+              paragraphClassName="flashcard-text"
+            />
             {currentCard?.interval > 0 && (
               <span style={{
                 fontSize: 'var(--text-xs)',

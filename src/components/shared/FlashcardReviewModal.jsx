@@ -3,6 +3,7 @@ import { X, Edit3, Trash2, Save, Layers, Loader2, AlertTriangle, ArrowRightLeft 
 import { decksApi, flashcardsApi, chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
 import useIsMobile from '../../hooks/useIsMobile'
+import MarkdownRenderer from './MarkdownRenderer'
 
 export default function FlashcardReviewModal({ open, onClose, cards: initialCards, topicName, pillarId, topicId, onSaveSuccess }) {
   const addToast = useAppStore((s) => s.addToast)
@@ -450,9 +451,13 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
                     color: 'var(--color-text-secondary)'
                   }}>
                     <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--color-text-tertiary)', letterSpacing: '0.05em', marginBottom: 4 }}>EXISTING FRONT</div>
-                    <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 'var(--space-2)' }}>{isDupe.duplicateOf?.front}</div>
+                    <div style={{ fontWeight: 600, color: 'var(--color-text-primary)', marginBottom: 'var(--space-2)' }}>
+                      <MarkdownRenderer content={isDupe.duplicateOf?.front} className="flashcard-compact-md" />
+                    </div>
                     <div style={{ fontSize: '10px', fontWeight: 700, color: 'var(--color-text-tertiary)', letterSpacing: '0.05em', marginBottom: 4 }}>EXISTING BACK</div>
-                    <div>{isDupe.duplicateOf?.back}</div>
+                    <div>
+                      <MarkdownRenderer content={isDupe.duplicateOf?.back} className="flashcard-compact-md" />
+                    </div>
                   </div>
                 )}
               </div>
@@ -472,7 +477,7 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
                   lineHeight: 'var(--leading-relaxed)',
                   textDecoration: isExcluded ? 'line-through' : 'none'
                 }}>
-                  {card.front}
+                  <MarkdownRenderer content={card.front} className="flashcard-compact-md" />
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 'var(--space-1)', flexShrink: 0 }}>
@@ -503,7 +508,7 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
                 lineHeight: 'var(--leading-relaxed)',
                 textDecoration: isExcluded ? 'line-through' : 'none'
               }}>
-                {card.back}
+                <MarkdownRenderer content={card.back} className="flashcard-compact-md" />
               </div>
             </div>
           </>
@@ -750,7 +755,7 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
                                   </div>
                                 </div>
                                 <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', color: 'var(--color-text-primary)', lineHeight: 'var(--leading-relaxed)' }}>
-                                  {rc.front}
+                                  <MarkdownRenderer content={rc.front} className="flashcard-compact-md" />
                                 </div>
                               </div>
                               <div style={{ display: 'flex', gap: 'var(--space-1)', flexShrink: 0 }}>
@@ -772,7 +777,7 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
                                 borderRadius: 'var(--radius-md)', border: '1px solid var(--color-border)',
                                 lineHeight: 'var(--leading-relaxed)',
                               }}>
-                                {rc.back}
+                                <MarkdownRenderer content={rc.back} className="flashcard-compact-md" />
                               </div>
                             </div>
                           </>

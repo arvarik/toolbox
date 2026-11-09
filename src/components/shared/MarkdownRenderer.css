@@ -133,3 +133,46 @@
 .markdown-renderer em {
   font-style: italic;
 }
+
+/* Flashcard face rich markdown container */
+.markdown-renderer.flashcard-markdown {
+  width: 100%;
+  max-height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.markdown-renderer.flashcard-markdown > p {
+  margin-bottom: 0.5em;
+}
+
+.markdown-renderer.flashcard-markdown > p:only-child {
+  margin-bottom: 0;
+}
+
+.markdown-renderer.flashcard-markdown ul,
+.markdown-renderer.flashcard-markdown ol,
+.markdown-renderer.flashcard-markdown blockquote,
+.markdown-renderer.flashcard-markdown table,
+.markdown-renderer.flashcard-markdown pre,
+.markdown-renderer.flashcard-markdown [data-testid="markdown-code"] {
+  text-align: left;
+}
+
+.markdown-renderer.flashcard-markdown .katex-display {
+  margin: 0.5em 0;
+}
+
+/* Compact flashcard markdown for CardBrowser & FlashcardReviewModal */
+.markdown-renderer.flashcard-compact-md p {
+  margin-bottom: 0.35em;
+  line-height: 1.5;
+}
+
+.markdown-renderer.flashcard-compact-md p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown-renderer.flashcard-compact-md .katex-display {
+  margin: 0.4em 0;
+}
