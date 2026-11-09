@@ -9,7 +9,11 @@ import {
   type LookupAddress,
 } from "node:dns";
 import type { Request } from "express";
-import { AppError, ValidationError } from "./errors.ts";
+import {
+  AppError,
+  UpstreamTimeoutError,
+  ValidationError,
+} from "./errors.ts";
 
 const MAX_HOPS = 10;
 
@@ -58,8 +62,9 @@ export function validatePublicUrl(raw?: string | null): string | null {
 }
 
 export function publicOrigin(req: Request): string {
-  if (process.env.PUBLIC_URL) {
-    const validated = validatePublicUrl(process.env.PUBLIC_URL);
+  const configured = process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN;
+  if (configured) {
+    const validated = validatePublicUrl(configured);
     if (validated) return validated;
   }
   const host = req.host;
@@ -77,9 +82,10 @@ export function isOwnOrigin(req: Request, origin: string): boolean {
   } catch {
     return false;
   }
+  const configured = process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN;
   return (
     host === (req.host ?? "").toLowerCase() ||
-    origin === validatePublicUrl(process.env.PUBLIC_URL)
+    origin === validatePublicUrl(configured)
   );
 }
 
@@ -144,7 +150,9 @@ export function isPrivateAddress(address: string): boolean {
       (a === 100 && b >= 64 && b <= 127) ||
       (a === 169 && b === 254) ||
       (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168)
+      (a === 192 && b === 168) ||
+      (a === 198 && (b === 18 || b === 19)) ||
+      a >= 224
     );
   }
   const lower = address.toLowerCase();
@@ -355,4 +363,97 @@ export async function safeFetch(
   } finally {
     clearTimeout(timer);
   }
+}
+
+export interface ReadCappedOptions {
+  maxBytes?: number;
+  timeoutMs?: number;
+  signal?: AbortSignal | null;
+}
+
+export async function readBytesCapped(
+  res: Response,
+  options: ReadCappedOptions | number = {},
+  legacySignal?: AbortSignal | null,
+  legacyTimeoutMs?: number,
+): Promise<Uint8Array> {
+  const opts: ReadCappedOptions =
+    typeof options === "number"
+      ? { maxBytes: options, signal: legacySignal, timeoutMs: legacyTimeoutMs }
+      : options;
+  const maxBytes = opts.maxBytes ?? 25 * 1024 * 1024;
+  const timeoutMs = opts.timeoutMs ?? 20_000;
+
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    void res.body?.cancel().catch(() => undefined);
+    throw new AppError(
+      `Upstream response exceeds ${maxBytes} bytes.`,
+      413,
+      { code: "RESPONSE_TOO_LARGE" },
+    );
+  }
+  if (!res.body) return new Uint8Array(0);
+
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const combined = opts.signal
+    ? AbortSignal.any([timeoutSignal, opts.signal])
+    : timeoutSignal;
+  combined.throwIfAborted();
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+
+  let onAbort: (() => void) | undefined;
+  const abortPromise = new Promise<never>((_, reject) => {
+    onAbort = () => {
+      void reader.cancel().catch(() => undefined);
+      if (timeoutSignal.aborted && !opts.signal?.aborted) {
+        reject(new UpstreamTimeoutError("Upstream body stream timed out."));
+      } else {
+        reject(combined.reason ?? new DOMException("Aborted", "AbortError"));
+      }
+    };
+    combined.addEventListener("abort", onAbort, { once: true });
+  });
+
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), abortPromise]);
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        throw new AppError(
+          `Upstream response exceeds ${maxBytes} bytes.`,
+          413,
+          { code: "RESPONSE_TOO_LARGE" },
+        );
+      }
+      chunks.push(value);
+    }
+  } finally {
+    if (onAbort) combined.removeEventListener("abort", onAbort);
+  }
+
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+export async function readBodyCapped(
+  res: Response,
+  options: ReadCappedOptions = {},
+): Promise<string> {
+  const bytes = await readBytesCapped(res, {
+    maxBytes: options.maxBytes ?? 2 * 1024 * 1024,
+    timeoutMs: options.timeoutMs ?? 8_000,
+    signal: options.signal,
+  });
+  return new TextDecoder("utf-8", { fatal: false }).decode(bytes);
 }

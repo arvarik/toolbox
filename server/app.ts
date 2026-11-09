@@ -10,6 +10,7 @@ import {
   securityHeaders,
 } from "./platform/net/errors.ts";
 import { trustProxyHops } from "./platform/net/originAndFetch.ts";
+import { hostGuard } from "./platform/net/hostGuard.ts";
 import { attachRequestContext } from "./platform/tenancy/scope.ts";
 import { countPasswordAccounts } from "./platform/auth/authService.ts";
 import {
@@ -32,6 +33,7 @@ import deckRoutes from "./routes/decks.ts";
 import boardRoutes from "./routes/boards.ts";
 import chatRoutes from "./routes/chat.ts";
 import studySessionRoutes from "./routes/study_sessions.ts";
+import { mountAiRoutes } from "./platform/ai/aiRoutesMount.ts";
 import guideContentRoutes from "./routes/guide_content.ts";
 import profileRoutes from "./routes/profile.ts";
 import systemRoutes from "./routes/system.ts";
@@ -58,6 +60,7 @@ export function createApp(): Express {
   app.set("trust proxy", trustProxyHops());
   app.use(attachRequestId);
   app.use(securityHeaders);
+  app.use(hostGuard);
   app.use(express.json({ limit: "10mb" }));
 
   app.get("/api/health", (_req, res) => {
@@ -80,6 +83,7 @@ export function createApp(): Express {
   app.use("/api/boards", ...authed, boardRoutes);
   app.use("/api/chat", ...authed, chatRoutes);
   app.use("/api/study_sessions", ...authed, studySessionRoutes);
+  mountAiRoutes(app, authed, [requireAdmin, requirePasswordCurrent]);
   app.use("/api/guide-content", ...authed, guideContentRoutes);
   app.use("/api/profile", ...authed, profileRoutes);
   app.use("/api/system", ...authed, systemRoutes);

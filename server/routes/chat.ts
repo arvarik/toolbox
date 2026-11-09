@@ -1,15 +1,22 @@
 import { Router } from "express";
 import crypto from "node:crypto";
-import { tool, type ModelMessage } from "ai";
+import { tool, type ModelMessage, type ToolSet } from "ai";
 import { z } from "zod";
 import db from "../db.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
+import { runWebResearch } from "../platform/research/webResearch.ts";
 import {
   resolveActiveKit,
   type ActiveKitContext,
 } from "../kits/kitContext.ts";
 import logger from "../utils/logger.ts";
-import { generateEmbedding, cosineSimilarity } from "../utils/embeddings.ts";
+import { generateEmbedding } from "../utils/embeddings.ts";
+import {
+  hybridSearch,
+  syncDomainSourcesToRag,
+  upsertRagChunk,
+  upsertRagChunksBatch,
+} from "../search/hybridSearch.ts";
 import { runText, runStructured, chatStream } from "../ai/engine.ts";
 
 const router = Router();
@@ -32,30 +39,6 @@ function toModelMessages(history: StoredMessage[] | undefined): ModelMessage[] {
           : ("user" as const),
       content: msg.content,
     }));
-}
-
-function rankBySimilarity<T extends { embedding?: string | null }>(
-  queryEmbedding: number[],
-  rows: readonly T[],
-  topN: number,
-): Array<T & { sim: number }> {
-  return rows
-    .map((row) => {
-      let sim = 0;
-      try {
-        if (row.embedding) {
-          sim = cosineSimilarity(
-            queryEmbedding,
-            JSON.parse(row.embedding) as number[],
-          );
-        }
-      } catch {
-        // Unreadable embedding — treat as unrelated
-      }
-      return { ...row, sim };
-    })
-    .sort((a, b) => b.sim - a.sim)
-    .slice(0, topN);
 }
 
 function tutorSystemPrompt(rolePrompt: string, context?: string): string {
@@ -170,6 +153,8 @@ Generate 12 to 15 targeted, short, actionable starter questions the learner coul
     try {
       suggestions = await runStructured<string[]>({
         model,
+        scope,
+        capability: "quick",
         prompt,
         element: z
           .string()
@@ -234,6 +219,8 @@ router.post("/", async (req, res) => {
   try {
     const response = await runText({
       model,
+      scope,
+      capability: "deep",
       system: tutorSystemPrompt(kit.skeleton.tutor.rolePrompt, context),
       messages: [
         ...toModelMessages(history),
@@ -249,74 +236,125 @@ router.post("/", async (req, res) => {
   }
 });
 
-function buildChatTools(scope: Scope, kit: ActiveKitContext) {
-  return {
+export function buildStudyTools(
+  scope: Scope,
+  kit: ActiveKitContext,
+  opts: {
+    enableWebResearch?: boolean;
+    abortSignal?: AbortSignal;
+    onCitations?: (citations: Array<{ title: string; url: string; snippet?: string }>) => void;
+  } = {},
+): ToolSet {
+  const tools: ToolSet = {
     search_flashcards: tool({
       description:
-        "Search the learner's flashcards by meaning. Use this to see what they have learned, quiz them on their own cards, or check what they struggle with.",
+        "Search the learner's flashcards by hybrid keyword + semantic similarity. Use this to see what they have learned, quiz them on their own cards, or check what they struggle with.",
       inputSchema: z.object({
         query: z.string().describe("Search query for flashcards"),
       }),
       execute: async ({ query }) => {
-        const queryEmbedding = await generateEmbedding(query);
+        await syncDomainSourcesToRag(db, scope, kit.id);
+        const hits = await hybridSearch(db, scope, query, {
+          kitId: kit.id,
+          kinds: ["flashcard"],
+          limit: 5,
+        });
+        if (hits.length === 0) return "No flashcards found.";
+        const ids = hits.map((h) => h.sourceRefId);
+        const ph = ids.map(() => "?").join(", ");
         const rows = db
           .prepare(
-            "SELECT front, back, state, ease_factor, embedding FROM flashcards WHERE ownerId = ?",
+            `SELECT id, front, back, state, ease_factor
+             FROM flashcards
+             WHERE ownerId = ? AND id IN (${ph})`,
           )
-          .all(scope.ownerId) as Array<{
+          .all(scope.ownerId, ...ids) as Array<{
+          id: string;
           front: string;
           back: string;
           state: number;
           ease_factor: number;
-          embedding: string | null;
         }>;
-        if (queryEmbedding.length === 0) {
-          return rows
-            .slice(0, 5)
-            .map(({ front, back, state, ease_factor }) => ({
-              front,
-              back,
-              state,
-              ease_factor,
-            }));
-        }
-        const top = rankBySimilarity(queryEmbedding, rows, 5).map(
-          ({ front, back, state, ease_factor }) => ({
+        const byId = new Map(rows.map((r) => [r.id, r]));
+        const ordered = ids
+          .map((id) => byId.get(id))
+          .filter((r): r is NonNullable<typeof r> => Boolean(r))
+          .map(({ front, back, state, ease_factor }) => ({
             front,
             back,
             state,
             ease_factor,
-          }),
-        );
-        return top.length ? top : "No flashcards found.";
+          }));
+        return ordered.length ? ordered : "No flashcards found.";
       },
     }),
     search_guide: tool({
       description:
-        "Search the learner's committed study guide notes by meaning. Use this to ground answers in what they have already written.",
+        "Search the learner's committed study guide notes by hybrid keyword + semantic similarity. Use this to ground answers in what they have already written.",
       inputSchema: z.object({
-        query: z.string().describe("Topic to search for in the guide"),
+        query: z.string().describe("Topic to search for in the study guide"),
       }),
       execute: async ({ query }) => {
-        const queryEmbedding = await generateEmbedding(query);
-        const rows = db
-          .prepare(
-            "SELECT content, embedding FROM guide_content WHERE ownerId = ? AND kit_id = ? AND content != ''",
-          )
-          .all(scope.ownerId, kit.id) as Array<{
-          content: string;
-          embedding: string | null;
-        }>;
-        if (queryEmbedding.length === 0) {
-          return rows.slice(0, 3).map((r) => r.content);
-        }
-        const top = rankBySimilarity(queryEmbedding, rows, 3).map(
-          (r) => r.content,
-        );
-        return top.length ? top : "No guide content found.";
+        await syncDomainSourcesToRag(db, scope, kit.id);
+        const hits = await hybridSearch(db, scope, query, {
+          kitId: kit.id,
+          kinds: ["guide"],
+          limit: 4,
+        });
+        return hits.length
+          ? hits.map((h) => ({ title: h.title, content: h.content }))
+          : "No guide content found.";
+      },
+    }),
+    search_kit_sources: tool({
+      description:
+        "Search uploaded reference materials, PDFs, and source documents attached to this Kit.",
+      inputSchema: z.object({
+        query: z.string().describe("Search query for Kit reference sources"),
+      }),
+      execute: async ({ query }) => {
+        await syncDomainSourcesToRag(db, scope, kit.id);
+        const hits = await hybridSearch(db, scope, query, {
+          kitId: kit.id,
+          kinds: ["source_chunk"],
+          limit: 5,
+        });
+        return hits.length
+          ? hits.map((h) => ({
+              title: h.title,
+              excerpt: h.content,
+              score: h.score,
+            }))
+          : "No Kit source documents matched.";
       },
     }),
   };
+
+  if (opts.enableWebResearch) {
+    tools.web_research = tool({
+      description:
+        "Search the public web for up-to-date facts, benchmarks, specifications, or primary documentation when the learner's notes and Kit sources do not cover it.",
+      inputSchema: z.object({
+        query: z.string().describe("Concise web search query"),
+      }),
+      execute: async ({ query }) => {
+        const res = await runWebResearch({
+          scope,
+          query,
+          signal: opts.abortSignal,
+        });
+        if (res.citations.length > 0) {
+          opts.onCitations?.(res.citations);
+        }
+        return {
+          summary: res.summary || "No web results found.",
+          citations: res.citations,
+        };
+      },
+    });
+  }
+
+  return tools;
 }
 
 async function extractEpisodicMemories({
@@ -351,6 +389,8 @@ model: ${generatedText}`;
     events: Array<{ memory_text: string; importance_score: number }>;
   }>({
     model,
+    scope,
+    capability: "quick",
     prompt,
     schema: z.object({
       events: z.array(
@@ -372,13 +412,20 @@ model: ${generatedText}`;
   );
   for (const ev of events || []) {
     const embedding = await generateEmbedding(ev.memory_text);
-    ins.run(
+    const info = ins.run(
       scope.ownerId,
       kitId,
       ev.memory_text,
       ev.importance_score,
       JSON.stringify(embedding),
     );
+    await upsertRagChunk(db, scope, {
+      kitId,
+      kind: "episodic",
+      sourceRefId: String(info.lastInsertRowid),
+      title: "Episodic Memory",
+      content: ev.memory_text,
+    });
   }
   if (events?.length) {
     logger.info(
@@ -395,11 +442,13 @@ router.post("/stream", async (req, res) => {
     context,
     history = [],
     model,
+    webResearch,
   } = req.body as {
     message?: string;
     context?: string;
     history?: StoredMessage[];
     model?: string;
+    webResearch?: boolean;
   };
 
   if (!message) {
@@ -428,24 +477,21 @@ router.post("/stream", async (req, res) => {
       .get(scope.ownerId) as { profile_text: string } | undefined;
     const userProfile = profileRow?.profile_text || "";
 
-    const messageEmbedding = await generateEmbedding(message);
-    let topEpisodes: string[] = [];
-    if (messageEmbedding.length > 0) {
-      const episodes = db
-        .prepare(
-          "SELECT memory_text, embedding FROM episodic_memory WHERE ownerId = ? AND kit_id = ? ORDER BY created_at DESC",
-        )
-        .all(scope.ownerId, kit.id) as Array<{
-        memory_text: string;
-        embedding: string | null;
-      }>;
-      topEpisodes = rankBySimilarity(messageEmbedding, episodes, 5).map(
-        (e) => e.memory_text,
-      );
-    }
+    await syncDomainSourcesToRag(db, scope, kit.id);
+    const episodicHits = await hybridSearch(db, scope, message, {
+      kitId: kit.id,
+      kinds: ["episodic"],
+      limit: 5,
+    });
+    const topEpisodes = episodicHits.map((h) => h.content);
+
+    const enableWebResearch =
+      typeof webResearch === "boolean"
+        ? webResearch
+        : Boolean(kit.skeleton.capabilities?.webResearchDefault);
 
     let system = tutorSystemPrompt(kit.skeleton.tutor.rolePrompt, context);
-    system += `\n\nThe learner's flashcards and guide notes live in a database. Use the search_flashcards and search_guide tools whenever an answer should build on what they have already studied or written.`;
+    system += `\n\nThe learner's flashcards, study guide notes, and Kit reference sources live in a hybrid search index. Use search_flashcards, search_guide, and search_kit_sources whenever an answer should build on their material.${enableWebResearch ? " Use web_research when up-to-date external facts or primary sources are needed." : ""}`;
     if (userProfile) {
       system += `\n\n[User Profile]:\n${userProfile}`;
     }
@@ -462,9 +508,19 @@ router.post("/stream", async (req, res) => {
 
     const { result, modelId } = chatStream({
       model,
+      scope,
+      capability: "deep",
       system,
       messages,
-      tools: buildChatTools(scope, kit),
+      tools: buildStudyTools(scope, kit, {
+        enableWebResearch,
+        abortSignal: abortController.signal,
+        onCitations: (citations) => {
+          if (!res.writableEnded) {
+            res.write(`data: ${JSON.stringify({ citations })}\n\n`);
+          }
+        },
+      }),
       abortSignal: abortController.signal,
     });
 
@@ -608,6 +664,8 @@ ${sourceBlock}`;
 
     let cards = await runStructured<Array<Record<string, unknown>>>({
       model,
+      scope,
+      capability: "quick",
       prompt,
       element,
       feature: "chat/flashcards",
@@ -632,6 +690,7 @@ ${sourceBlock}`;
 });
 
 router.post("/generate-reverse-cards", async (req, res) => {
+  const scope = scopeOf(req);
   const { cards, model } = req.body as {
     cards?: Array<{ front: string; back: string }>;
     model?: string;
@@ -662,6 +721,8 @@ Generate one reverse card per input card.`;
 
     const reverseCards = await runStructured({
       model,
+      scope,
+      capability: "quick",
       prompt,
       element: z.object({
         front: z.string().describe("Reverse question"),
@@ -722,7 +783,13 @@ ${excerptText}
 
 Now write the guide section content:`;
 
-    const content = await runText({ model, prompt, feature: "chat/summarize" });
+    const content = await runText({
+      model,
+      scope,
+      capability: "deep",
+      prompt,
+      feature: "chat/summarize",
+    });
     res.json({ content });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -732,6 +799,7 @@ Now write the guide section content:`;
 });
 
 router.post("/evaluate-interceptor", async (req, res) => {
+  const scope = scopeOf(req);
   const { explanation, front, back, model } = req.body as {
     explanation?: string;
     front?: string;
@@ -747,43 +815,82 @@ router.post("/evaluate-interceptor", async (req, res) => {
   }
 
   try {
-    const prompt = `You are a strict learning evaluator. The learner was asked a flashcard question and must explain WHY the answer is true to prove they aren't just pattern-matching.
+    const prompt = `You are a rigorous, anti-sycophancy learning evaluator. The learner was asked a flashcard question and must explain WHY the answer is true to prove genuine understanding rather than pattern-matching.
 
 Question: ${front}
-Answer: ${back}
+Canonical Answer: ${back}
 
 Learner's Explanation: "${explanation}"
 
-Evaluate their explanation.`;
+Follow this strict falsification-first evaluation order:
+1. Extract every distinct factual or causal claim made by the learner in extractedClaims.
+2. Actively look for any factual inaccuracies, inverted causal logic, missing core mechanisms, or hand-waving in factualOrLogicalErrors (leave empty ONLY when the explanation is genuinely sound).
+3. Write 1-2 sentences of specific, constructive feedback.
+4. Set pass = true ONLY if factualOrLogicalErrors is empty AND the learner explained the core mechanism.`;
 
-    let evaluation: { pass: boolean; feedback: string };
+    let responsePayload: {
+      pass: boolean;
+      feedback: string;
+      extractedClaims: string[];
+      factualOrLogicalErrors: string[];
+    };
     try {
-      evaluation = await runStructured<{ pass: boolean; feedback: string }>({
+      const evaluation = await runStructured<{
+        extractedClaims: string[];
+        factualOrLogicalErrors: string[];
+        feedback: string;
+        pass: boolean;
+      }>({
         model,
+        scope,
+        capability: "quick",
         prompt,
         schema: z.object({
-          pass: z
-            .boolean()
+          extractedClaims: z
+            .array(z.string())
             .describe(
-              "True if the learner's explanation demonstrates understanding of the underlying principle.",
+              "Distinct factual or causal claims stated in the learner's explanation.",
+            ),
+          factualOrLogicalErrors: z
+            .array(z.string())
+            .describe(
+              "Any factual mistakes, logical contradictions, or missing essential mechanisms. Empty array only if completely sound.",
             ),
           feedback: z
             .string()
             .describe(
-              "1-2 sentences of feedback explaining why they passed or failed.",
+              "1-2 concise sentences explaining why the explanation passed or what was flawed.",
+            ),
+          pass: z
+            .boolean()
+            .describe(
+              "True only when factualOrLogicalErrors is empty and the core mechanism is explained.",
             ),
         }),
         feature: "chat/evaluate",
       });
+      const finalPass =
+        evaluation.pass && evaluation.factualOrLogicalErrors.length === 0;
+      responsePayload = {
+        pass: finalPass,
+        feedback: evaluation.feedback,
+        extractedClaims: evaluation.extractedClaims,
+        factualOrLogicalErrors: evaluation.factualOrLogicalErrors,
+      };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.error("[chat/evaluate-interceptor] Evaluation failed:", {
         error: msg,
       });
-      evaluation = { pass: false, feedback: "Error evaluating response format." };
+      responsePayload = {
+        pass: false,
+        feedback: "Error evaluating response format.",
+        extractedClaims: [],
+        factualOrLogicalErrors: [],
+      };
     }
 
-    res.json(evaluation);
+    res.json(responsePayload);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("[chat/evaluate-interceptor] Error:", { error: msg });
@@ -792,6 +899,7 @@ Evaluate their explanation.`;
 });
 
 router.post("/concept-map", async (req, res) => {
+  const scope = scopeOf(req);
   const { history = [], model } = req.body as {
     history?: StoredMessage[];
     model?: string;
@@ -816,6 +924,8 @@ ${historyText}`;
 
     let responseText = await runText({
       model,
+      scope,
+      capability: "quick",
       prompt,
       feature: "chat/concept-map",
     });
@@ -963,6 +1073,8 @@ Return the targeted sections with their complete updated content.`;
         }>;
       }>({
         model,
+        scope,
+        capability: "deep",
         prompt,
         schema: z.object({
           sections: z.array(
@@ -1077,6 +1189,24 @@ router.post("/commit/save", (req, res) => {
     );
 
     const savedCount = saveAll(updates);
+    const ragInputs = updates
+      .filter((u): u is { sectionId: string; content: string } =>
+        Boolean(u.sectionId && u.content?.trim()),
+      )
+      .map((u) => ({
+        kitId: kit.id,
+        kind: "guide" as const,
+        sourceRefId: `${pillarId}:${topicId}:${u.sectionId}`,
+        title: `${topicId} — ${u.sectionId}`,
+        content: u.content,
+      }));
+    if (ragInputs.length > 0) {
+      void upsertRagChunksBatch(db, scope, ragInputs).catch((err: unknown) => {
+        logger.warn("[chat/commit/save] Deferred RAG sync:", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
     res.json({ ok: true, savedCount });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
