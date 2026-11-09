@@ -212,6 +212,21 @@ interface SqliteLikeError {
   type?: string;
 }
 
+interface ProviderCallError {
+  name?: string;
+  statusCode?: number;
+  responseHeaders?: Record<string, string | undefined>;
+  lastError?: unknown;
+}
+
+/** An AI SDK provider call that still failed with HTTP 429 or 5xx after the SDK's own retries. */
+function failedProviderCall(err: unknown): ProviderCallError | null {
+  const e = err as ProviderCallError | null;
+  if (e?.name === "AI_RetryError") return failedProviderCall(e.lastError);
+  const status = e?.name === "AI_APICallError" ? (e.statusCode ?? 0) : 0;
+  return status === 429 || status >= 500 ? e : null;
+}
+
 function translate(err: unknown): {
   statusCode: number;
   code: string;
@@ -276,6 +291,33 @@ function translate(err: unknown): {
       isOperational: true,
     };
   }
+  const provider = failedProviderCall(err);
+  if (provider?.statusCode === 429) {
+    const retryAfterSeconds = Number(provider.responseHeaders?.["retry-after"]);
+    return {
+      statusCode: 503,
+      code: "AI_PROVIDER_RATE_LIMITED",
+      message: "The AI provider is rate limiting this instance. Try again shortly.",
+      details: retryAfterSeconds > 0 ? { retryAfterSeconds } : undefined,
+      isOperational: true,
+    };
+  }
+  if (provider) {
+    return {
+      statusCode: 502,
+      code: "AI_PROVIDER_ERROR",
+      message: `The AI provider failed with HTTP ${provider.statusCode}. Try again shortly.`,
+      isOperational: true,
+    };
+  }
+  if ((err as { name?: string } | null)?.name === "TimeoutError") {
+    return {
+      statusCode: 504,
+      code: "UPSTREAM_TIMEOUT",
+      message: "An upstream service did not answer in time. Try again shortly.",
+      isOperational: true,
+    };
+  }
   return {
     statusCode: 500,
     code: "INTERNAL",
@@ -312,7 +354,7 @@ export function errorHandler(
     return;
   }
 
-  if (t.statusCode === 429 && !res.getHeader("Retry-After")) {
+  if ((t.statusCode === 429 || t.statusCode === 503) && !res.getHeader("Retry-After")) {
     const seconds = (t.details as { retryAfterSeconds?: unknown } | undefined)
       ?.retryAfterSeconds;
     if (typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0) {

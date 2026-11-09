@@ -522,6 +522,9 @@ router.post("/stream", async (req, res) => {
         sendSse({ tool: `Running ${part.toolName}...` });
       } else if (part.type === "error") {
         sendSse({ error: errMsg(part.error) });
+      } else if (part.type === "abort" && !abortController.signal.aborted) {
+        // A timeout, not the client, ended the stream: report it instead of a truncated [DONE].
+        throw new Error("The AI provider stopped responding before the answer finished. Try again.");
       } else if (part.type === "finish") {
         const usage = part.totalUsage;
         logger.info(

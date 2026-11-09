@@ -2,6 +2,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -9,7 +10,13 @@ import type Database from "better-sqlite3";
 import express, { type Express } from "express";
 import request from "supertest";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
+import {
+  __getStructuredModeFor,
+  __setStreamIdleTimeoutMs,
+  runStructured,
+} from "../ai/engine.ts";
 import { BACKUPS_DIR } from "../appConfig.ts";
 import { createApp } from "../app.ts";
 import {
@@ -243,6 +250,7 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
   let agent: ReturnType<typeof request.agent>;
   let ownerId = "";
   let scope: Scope;
+  let sessionCookie = "";
 
   beforeAll(async () => {
     __resetAuthRateLimits();
@@ -261,6 +269,9 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       .expect(201);
     ownerId = setupRes.body.user.id as string;
     scope = scopeForOwnerId(ownerId);
+    sessionCookie = (setupRes.headers["set-cookie"] as unknown as string[])
+      .map((cookie) => cookie.split(";")[0])
+      .join("; ");
   });
 
   it("1. applies SQLite performance pragmas, sets 65s/66s reverse-proxy timeouts, and shuts down cleanly without double-signal hangs", async () => {
@@ -907,6 +918,123 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       restored.close();
       initKitsSchema(sqlite);
       fs.rmSync(restoreDir, { recursive: true, force: true });
+    }
+  });
+
+  it("8. answers provider 429/5xx with 503 + Retry-After/502, ends dropped and stalled chat streams with an error, aborts the upstream when the client leaves, and caps the structured-mode cache", async () => {
+    let mode: "429" | "500" | "drop" | "stall" | "json" = "429";
+    let upstreamClosed: Promise<void> = Promise.resolve();
+    const delta = (text: string) =>
+      `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "m", choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`;
+    const upstream = http.createServer((req, res) => {
+      req.resume();
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ object: "list", data: [{ id: "mock-model", object: "model" }] }));
+        return;
+      }
+      upstreamClosed = new Promise((resolve) => res.on("close", () => resolve()));
+      if (mode === "429" || mode === "500") {
+        res.writeHead(Number(mode), {
+          "Content-Type": "application/json",
+          "retry-after-ms": "1",
+          "retry-after": "7",
+        });
+        res.end(JSON.stringify({ error: { message: `upstream ${mode}` } }));
+      } else if (mode === "json") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "c2",
+            object: "chat.completion",
+            created: 1,
+            model: "m",
+            choices: [{ index: 0, message: { role: "assistant", content: '{"ok":true}' }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+        );
+      } else {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(delta("Quorums "));
+        res.write(delta("intersect"));
+        if (mode === "drop") setTimeout(() => res.socket?.destroy(), 20);
+      }
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const appServer = http.createServer(app);
+    await new Promise<void>((resolve) => appServer.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const { port: upstreamPort } = upstream.address() as AddressInfo;
+      const epId = (
+        await agent
+          .post("/api/endpoints")
+          .send({ name: "Flaky AI", baseUrl: `http://127.0.0.1:${upstreamPort}/v1` })
+          .expect(201)
+      ).body.id as string;
+      const model = `custom:${epId}:mock-model`;
+      const evaluate = () =>
+        agent
+          .post("/api/feynman/evaluate")
+          .set("X-Toolbox-Kit", "system-design")
+          .send({ conceptName: "Quorum", explanation: "Any two majorities overlap.", model });
+
+      mode = "429";
+      const limited = await evaluate().expect(503);
+      expect(limited.body.error.code).toBe("AI_PROVIDER_RATE_LIMITED");
+      expect(limited.headers["retry-after"]).toBe("7");
+      mode = "500";
+      expect((await evaluate().expect(502)).body.error.code).toBe("AI_PROVIDER_ERROR");
+
+      mode = "drop";
+      const dropped = await agent.post("/api/chat/stream").send({ message: "Explain quorums", model }).expect(200);
+      expect(dropped.text).toContain('data: {"text":"Quorums "}');
+      expect(dropped.text).toMatch(/data: \{"error":/);
+
+      mode = "stall";
+      __setStreamIdleTimeoutMs(150);
+      const stalled = await agent.post("/api/chat/stream").send({ message: "Explain quorums", model }).expect(200);
+      expect(stalled.text).toContain('data: {"text":"intersect"}');
+      expect(stalled.text).toContain("The AI provider stopped responding");
+      expect(stalled.text).not.toContain("[DONE]");
+
+      __setStreamIdleTimeoutMs(60_000);
+      const { port } = appServer.address() as AddressInfo;
+      const upstreamGone = await new Promise<Promise<void>>((resolve) => {
+        const req = http.request(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/api/chat/stream",
+            method: "POST",
+            headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+          },
+          (res) =>
+            res.once("data", () => {
+              resolve(upstreamClosed);
+              req.destroy();
+            }),
+        );
+        req.on("error", () => undefined);
+        req.end(JSON.stringify({ message: "Explain quorums", model }));
+      });
+      await upstreamGone;
+
+      mode = "json";
+      const schema = z.object({ ok: z.boolean() });
+      for (let i = 0; i <= 256; i++) {
+        await runStructured({ model: `custom:${epId}:distinct-${i}`, prompt: "ok?", schema });
+      }
+      expect(__getStructuredModeFor(`instance:${epId}`, "distinct-0")).toBeUndefined();
+      expect(__getStructuredModeFor(`instance:${epId}`, "distinct-256")).toBe("json_schema");
+    } finally {
+      __setStreamIdleTimeoutMs(120_000);
+      appServer.closeAllConnections();
+      upstream.closeAllConnections();
+      await Promise.all([
+        new Promise((resolve) => appServer.close(resolve)),
+        new Promise((resolve) => upstream.close(resolve)),
+      ]);
     }
   });
 });
