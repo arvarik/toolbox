@@ -3,6 +3,7 @@ import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Express } from "express";
+import { makeKitSkeleton, setupTwoTenants } from "./testHelpers.ts";
 
 const mockRunStructured = vi.fn();
 
@@ -24,11 +25,16 @@ const {
   nextIntervalDays,
   retrievability,
 } = await import("../srs/scheduler.ts");
-const {
-  EvaluationResultLlmSchema,
-  enforceAntiSycophancy,
-} = await import("../srs/antiSycophancy.ts");
+const { EvaluationResultLlmSchema, enforceAntiSycophancy } = await import(
+  "../srs/antiSycophancy.ts"
+);
 const { cardStrength, computeGraphHealth } = await import("../graph/health.ts");
+const {
+  planRemediation,
+  isShaky,
+  MAX_REMEDIATION_CARDS,
+} = await import("../graph/remediation.ts");
+import type { RemediationCardRow } from "../graph/remediation.ts";
 const { applyImplicitPrerequisiteCredit } = await import(
   "../graph/encompassing.ts"
 );
@@ -39,9 +45,6 @@ const { __resetAuthRateLimits } = await import(
 );
 const { scopeForOwnerId } = await import("../platform/tenancy/scope.ts");
 const { ensureLocalOwner } = await import("../platform/db/connection.ts");
-const { SYSTEM_DESIGN_KIT_SKELETON } = await import(
-  "../../shared/kits/systemDesignKit.ts"
-);
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MIN_MS = 60 * 1000;
@@ -63,11 +66,8 @@ describe("FSRS-6 Pure Math, Lazy SM-2 Bootstrap & State Transitions", () => {
       expect(nextIntervalDays(s, 0.9)).toBe(Math.round(s));
     }
 
-    // Higher desired retention schedules shorter intervals; lower schedules longer
     expect(nextIntervalDays(20, 0.95)).toBeLessThan(nextIntervalDays(20, 0.9));
-    expect(nextIntervalDays(20, 0.82)).toBeGreaterThan(
-      nextIntervalDays(20, 0.9),
-    );
+    expect(nextIntervalDays(20, 0.82)).toBeGreaterThan(nextIntervalDays(20, 0.9));
     expect(clampDesiredRetention(0.5)).toBe(0.75);
     expect(clampDesiredRetention(0.999)).toBe(0.97);
   });
@@ -85,29 +85,16 @@ describe("FSRS-6 Pure Math, Lazy SM-2 Bootstrap & State Transitions", () => {
         repetitions: 3,
         last_reviewed: new Date(NOW.getTime() - 12 * DAY_MS).toISOString(),
       },
-      {
-        state: 3,
-        learning_step: 0,
-        stability: 3.5,
-        difficulty: 6.5,
-        lapses: 1,
-      },
+      { state: 3, learning_step: 0, stability: 3.5, difficulty: 6.5, lapses: 1 },
     ];
 
     for (const sample of sampleCards) {
-      const again = calculateNextSrsState(sample, 1, null, "medium", NOW);
-      const hard = calculateNextSrsState(sample, 3, null, "medium", NOW);
-      const good = calculateNextSrsState(sample, 4, null, "medium", NOW);
-      const easy = calculateNextSrsState(sample, 5, null, "medium", NOW);
-
-      const tAgain = Date.parse(again.next_review);
-      const tHard = Date.parse(hard.next_review);
-      const tGood = Date.parse(good.next_review);
-      const tEasy = Date.parse(easy.next_review);
-
-      expect(tHard).toBeGreaterThan(tAgain);
-      expect(tGood).toBeGreaterThan(tHard);
-      expect(tEasy).toBeGreaterThan(tGood);
+      const [again, hard, good, easy] = ([1, 3, 4, 5] as const).map((q) =>
+        Date.parse(calculateNextSrsState(sample, q, null, "medium", NOW).next_review),
+      );
+      expect(hard).toBeGreaterThan(again);
+      expect(good).toBeGreaterThan(hard);
+      expect(easy).toBeGreaterThan(good);
     }
 
     const previews = getCardPreviews({ state: 0 }, null, NOW);
@@ -138,42 +125,35 @@ describe("FSRS-6 Pure Math, Lazy SM-2 Bootstrap & State Transitions", () => {
     expect(goodNext.interval).toBeGreaterThan(10);
     expect(goodNext.lapses).toBe(0);
 
-    // Guessed confidence on Good downgrades to Hard
-    const guessedNext = calculateNextSrsState(
-      legacySm2,
-      4,
-      null,
-      "guessed",
-      NOW,
-    );
+    const guessedNext = calculateNextSrsState(legacySm2, 4, null, "guessed", NOW);
     expect(guessedNext.stability).toBeLessThan(goodNext.stability);
 
-    // Lapse on Again increments lapses and reduces post-lapse stability
     const lapsed = calculateNextSrsState(goodNext, 1, null, "medium", NOW);
     expect(lapsed.state).toBe(3);
     expect(lapsed.lapses).toBe(1);
     expect(lapsed.stability).toBeLessThan(goodNext.stability);
-    expect(
-      nextForgetStability(goodNext.difficulty, goodNext.stability, 0.9),
-    ).toBeLessThan(goodNext.stability);
+    expect(nextForgetStability(goodNext.difficulty, goodNext.stability, 0.9)).toBeLessThan(
+      goodNext.stability,
+    );
   });
 });
 
-describe("Continuous Retrievability in computeGraphHealth", () => {
+describe("Continuous Retrievability & Remediation Planner", () => {
   const NOW = new Date("2026-09-01T12:00:00.000Z");
-  const nodes = [
-    {
-      id: "raft",
-      name: "Raft Consensus",
-      pillarId: "distributed",
-      topicId: null,
-      keywords: ["raft"],
-      components: [],
-      summary: "Leader election and log replication.",
-    },
-  ];
+  const daysFromNow = (d: number) => new Date(NOW.getTime() + d * DAY_MS).toISOString();
 
   it("decays node strength smoothly and continuously as elapsedDays increases", () => {
+    const nodes = [
+      {
+        id: "raft",
+        name: "Raft Consensus",
+        pillarId: "distributed",
+        topicId: null,
+        keywords: ["raft"],
+        components: [],
+        summary: "Leader election and log replication.",
+      },
+    ];
     const makeCardAtElapsed = (elapsedDays: number) => ({
       id: "c-raft",
       node_id: "raft",
@@ -184,57 +164,132 @@ describe("Continuous Retrievability in computeGraphHealth", () => {
       difficulty: 4.5,
       ease_factor: 2.6,
       interval: 20,
-      last_reviewed: new Date(NOW.getTime() - elapsedDays * DAY_MS).toISOString(),
-      next_review: new Date(
-        NOW.getTime() + (20 - elapsedDays) * DAY_MS,
-      ).toISOString(),
+      last_reviewed: daysFromNow(-elapsedDays),
+      next_review: daysFromNow(20 - elapsedDays),
     });
 
-    const h0 = computeGraphHealth([makeCardAtElapsed(0)], {
-      now: NOW,
-      nodes,
-      edges: [],
-    }).byNode.get("raft")!;
-    const h10 = computeGraphHealth([makeCardAtElapsed(10)], {
-      now: NOW,
-      nodes,
-      edges: [],
-    }).byNode.get("raft")!;
-    const h20 = computeGraphHealth([makeCardAtElapsed(20)], {
-      now: NOW,
-      nodes,
-      edges: [],
-    }).byNode.get("raft")!;
-    const h60 = computeGraphHealth([makeCardAtElapsed(60)], {
-      now: NOW,
-      nodes,
-      edges: [],
-    }).byNode.get("raft")!;
+    const strengthAt = (d: number) =>
+      computeGraphHealth([makeCardAtElapsed(d)], { now: NOW, nodes, edges: [] }).byNode.get(
+        "raft",
+      )!.strength;
 
-    expect(h0.strength).toBeCloseTo(1.0, 5);
-    expect(h10.strength).toBeLessThan(h0.strength);
-    expect(h10.strength).toBeGreaterThan(0.9);
-    expect(h20.strength).toBeCloseTo(0.9, 5);
-    expect(h60.strength).toBeLessThan(h20.strength);
-    expect(h60.strength).toBeGreaterThan(0.7);
+    const [s0, s10, s20, s60] = [0, 10, 20, 60].map(strengthAt);
+    expect(s0).toBeCloseTo(1.0, 5);
+    expect(s10).toBeLessThan(s0);
+    expect(s10).toBeGreaterThan(0.9);
+    expect(s20).toBeCloseTo(0.9, 5);
+    expect(s60).toBeLessThan(s20);
+    expect(s60).toBeGreaterThan(0.7);
 
-    // Fallback when last_reviewed is absent derives elapsedDays from (interval - daysUntilDue)
-    const withoutLastReviewed = {
-      ...makeCardAtElapsed(20),
-      last_reviewed: null,
-    };
-    expect(cardStrength(withoutLastReviewed, NOW.getTime())).toBeCloseTo(
-      0.9,
-      5,
+    expect(
+      cardStrength({ ...makeCardAtElapsed(20), last_reviewed: null }, NOW.getTime()),
+    ).toBeCloseTo(0.9, 5);
+  });
+
+  it("evaluates isShaky & planRemediation (direct prereqs only, weakest-first cap, explicit prerequisite_id, no self/orphan)", () => {
+    const nodes = [
+      { id: "hashing", pillarId: "dm", topicId: null, keywords: ["hash function basics"], components: [], summary: "s" },
+      { id: "partitioning", pillarId: "dm", topicId: null, keywords: ["partitioning basics"], components: [], summary: "s" },
+      { id: "consistent-hashing", pillarId: "dm", topicId: null, keywords: ["consistent hashing"], components: [], summary: "s" },
+    ];
+    const edges = [
+      { from: "hashing", to: "partitioning" },
+      { from: "partitioning", to: "consistent-hashing" },
+    ];
+    const mkCard = (
+      id: string,
+      front: string,
+      overrides: Partial<RemediationCardRow> = {},
+    ): RemediationCardRow => ({
+      id,
+      front,
+      back: "b",
+      state: 2,
+      ease_factor: 2.6,
+      interval: 30,
+      next_review: daysFromNow(10),
+      prerequisite_id: null,
+      ...overrides,
+    });
+    const failedCard = mkCard("adv-1", "Explain consistent hashing");
+
+    // isShaky flags states 0/1/3 and weak/overdue review cards, skips solid review cards
+    expect([0, 1, 3].every((state) => isShaky({ state }, NOW))).toBe(true);
+    expect(isShaky(mkCard("x", "q", { ease_factor: 2.2 }), NOW)).toBe(true);
+    expect(isShaky(mkCard("x", "q", { interval: 3 }), NOW)).toBe(true);
+    expect(isShaky(mkCard("x", "q", { next_review: daysFromNow(-1) }), NOW)).toBe(true);
+    expect(isShaky(failedCard, NOW)).toBe(false);
+
+    // Direct 1-hop shaky prerequisite queued; 2-hop grandparent & solid foundations ignored
+    const directPlan = planRemediation(
+      failedCard,
+      [failedCard, mkCard("part-1", "partitioning basics question", { state: 0 })],
+      { now: NOW, nodes, edges },
     );
+    expect(directPlan).toEqual([
+      expect.objectContaining({
+        cardId: "part-1",
+        nodeId: "partitioning",
+        nodeName: "partitioning",
+      }),
+    ]);
+    expect(
+      planRemediation(
+        failedCard,
+        [failedCard, mkCard("hash-1", "hash function basics question", { state: 0 })],
+        { now: NOW, nodes, edges },
+      ),
+    ).toEqual([]);
+    expect(
+      planRemediation(
+        failedCard,
+        [failedCard, mkCard("part-solid", "partitioning basics question")],
+        { now: NOW, nodes, edges },
+      ),
+    ).toEqual([]);
+
+    // Caps at MAX_REMEDIATION_CARDS and prioritizes weakest cards first
+    const capped = planRemediation(
+      failedCard,
+      [
+        failedCard,
+        mkCard("p1", "partitioning basics 1", { state: 0, ease_factor: 2.5 }),
+        mkCard("p2", "partitioning basics 2", { ease_factor: 1.5, next_review: daysFromNow(-3) }),
+        mkCard("p3", "partitioning basics 3", { ease_factor: 1.8, next_review: daysFromNow(-2) }),
+        mkCard("p4", "partitioning basics 4", { ease_factor: 2.0, next_review: daysFromNow(-1) }),
+        mkCard("p5", "partitioning basics 5", { state: 1 }),
+      ],
+      { now: NOW, nodes, edges },
+    );
+    expect(capped).toHaveLength(MAX_REMEDIATION_CARDS);
+    expect([capped[0].cardId, capped[1].cardId]).toEqual(["p2", "p3"]);
+
+    // Never queues self; returns [] for orphan cards; honors explicit prerequisite_id first
+    const selfBoth = mkCard("adv-2", "consistent hashing vs partitioning basics", { state: 3 });
+    expect(
+      planRemediation(selfBoth, [selfBoth], { now: NOW, nodes, edges }).every(
+        (p) => p.cardId !== "adv-2",
+      ),
+    ).toBe(true);
+    const orphan = mkCard("o1", "nothing here", { state: 3 });
+    expect(planRemediation(orphan, [orphan], { now: NOW, nodes, edges })).toEqual([]);
+
+    const manualPrereq = mkCard("manual-1", "unrelated text", { state: 0 });
+    const withExplicit = { ...failedCard, prerequisite_id: "manual-1" };
+    const explicitPlan = planRemediation(
+      withExplicit,
+      [withExplicit, manualPrereq, mkCard("part-1", "partitioning basics question", { state: 0 })],
+      { now: NOW, nodes, edges },
+    );
+    expect(explicitPlan[0].cardId).toBe("manual-1");
+    expect(explicitPlan[0].reason).toMatch(/Linked prerequisite/);
+    expect(explicitPlan.map((p) => p.cardId)).toContain("part-1");
   });
 });
 
 describe("Strict Zod v4 Schema & Anti-Sycophancy Invariants", () => {
   it("puts 100% of EvaluationResultLlmSchema properties into JSON Schema required[] for OpenAI strict mode", () => {
-    const jsonSchema = z.toJSONSchema(EvaluationResultLlmSchema, {
-      io: "input",
-    }) as {
+    const jsonSchema = z.toJSONSchema(EvaluationResultLlmSchema, { io: "input" }) as {
       properties?: Record<string, unknown>;
       required?: string[];
     };
@@ -275,48 +330,32 @@ describe("Strict Zod v4 Schema & Anti-Sycophancy Invariants", () => {
     expect(enforced.masteryEligible).toBe(false);
     expect(enforced.score).toBeLessThanOrEqual(0.59);
 
-    // Hint 2 caps score at 0.80 while remaining unassisted
-    const cleanRaw = {
-      ...sycophanticRaw,
-      factualOrLogicalErrors: [],
-      score: 0.96,
-      pass: true,
-    };
+    const cleanRaw = { ...sycophanticRaw, factualOrLogicalErrors: [], score: 0.96, pass: true };
     const hint2 = enforceAntiSycophancy(cleanRaw, { hintsUsed: 2 });
-    expect(hint2.score).toBe(0.8);
-    expect(hint2.assisted).toBe(false);
-    expect(hint2.pass).toBe(true);
-    expect(hint2.masteryEligible).toBe(true);
+    expect(hint2).toMatchObject({ score: 0.8, assisted: false, pass: true, masteryEligible: true });
 
-    // Hint 3 or viewing workedSolution marks assisted=true and masteryEligible=false
     const hint3 = enforceAntiSycophancy(cleanRaw, { hintsUsed: 3 });
-    expect(hint3.assisted).toBe(true);
-    expect(hint3.masteryEligible).toBe(false);
+    expect(hint3).toMatchObject({ assisted: true, masteryEligible: false });
 
-    const peeked = enforceAntiSycophancy(cleanRaw, {
-      hintsUsed: 0,
-      viewedWorkedSolution: true,
-    });
-    expect(peeked.assisted).toBe(true);
-    expect(peeked.masteryEligible).toBe(false);
+    const peeked = enforceAntiSycophancy(cleanRaw, { hintsUsed: 0, viewedWorkedSolution: true });
+    expect(peeked).toMatchObject({ assisted: true, masteryEligible: false });
   });
 });
 
 describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynman & Due Badges", () => {
   let app: Express;
   let localOwnerId: string;
-  let customKitId: string;
+  const customKitId = "kit-distributed-lab";
 
-  const customSkeleton = {
-    ...SYSTEM_DESIGN_KIT_SKELETON,
-    identity: {
-      ...SYSTEM_DESIGN_KIT_SKELETON.identity,
+  const customSkeleton = makeKitSkeleton((s) => {
+    s.identity = {
+      ...s.identity,
       slug: "distributed-lab",
       name: "Distributed Lab",
       icon: "⚡",
       color: "#0ea5e9",
-    },
-    pillars: [
+    };
+    s.pillars = [
       {
         id: "consensus-pillar",
         number: 1,
@@ -339,16 +378,10 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
             ownershipRule: "Edge cases",
           },
         ],
-        topics: [
-          {
-            id: "raft-topic",
-            name: "Raft Replication",
-            summary: "Leader election, log matching, and quorum commit rules.",
-          },
-        ],
+        topics: [{ id: "raft-topic", name: "Raft Replication" }],
       },
-    ],
-    graph: {
+    ];
+    s.graph = {
       nodes: [
         {
           id: "node-a",
@@ -383,19 +416,14 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
         { from: "node-b", to: "node-c" },
       ],
       tracks: [],
-    },
-    seeds: {
-      drills: [],
-      baselineGuideNotes: [],
-    },
-  };
+    };
+  });
 
   beforeAll(() => {
     __resetAuthRateLimits();
     localOwnerId = ensureLocalOwner();
     app = createApp();
 
-    customKitId = "kit-distributed-lab";
     db.prepare(
       `INSERT INTO kits (
          id, ownerId, slug, name, description, icon, color, status, skeleton_json
@@ -423,9 +451,7 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       stability: number,
       elapsedDaysAgo: number,
     ) => {
-      const lastRev = new Date(
-        now.getTime() - elapsedDaysAgo * DAY_MS,
-      ).toISOString();
+      const lastRev = new Date(now.getTime() - elapsedDaysAgo * DAY_MS).toISOString();
       const nextRev = new Date(
         now.getTime() + (stability - elapsedDaysAgo) * DAY_MS,
       ).toISOString();
@@ -434,24 +460,11 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
            id, ownerId, deck_id, node_id, front, back, state, stability, difficulty,
            ease_factor, interval, repetitions, last_reviewed, next_review
          ) VALUES (?, ?, ?, ?, ?, 'Answer', 2, ?, 5.0, 2.4, ?, 3, ?, ?)`,
-      ).run(
-        id,
-        localOwnerId,
-        deckId,
-        nodeId,
-        front,
-        stability,
-        Math.round(stability),
-        lastRev,
-        nextRev,
-      );
+      ).run(id, localOwnerId, deckId, nodeId, front, stability, Math.round(stability), lastRev, nextRev);
     };
 
-    // Overdue 2-hop card on node-a (elapsed 25d on S=5 -> R ~ 0.76, delta = 0.25 * 0.24 = 0.06 >= 0.05)
     insertGraduatedCard("card-a-overdue", "node-a", "Quorum Math Q1", 5, 25);
-    // Overdue 1-hop card on node-b (elapsed 15d on S=5 -> R ~ 0.81, delta = 0.5 * 0.19 = 0.095 >= 0.05)
     insertGraduatedCard("card-b-overdue", "node-b", "Leader Election Q1", 5, 15);
-    // Freshly reviewed 1 minute ago on node-b (R ~ 0.99999 -> delta << 0.05 -> ZERO inflation!)
     const oneMinAgo = new Date(now.getTime() - MIN_MS).toISOString();
     const freshNextRev = new Date(now.getTime() + 10 * DAY_MS).toISOString();
     db.prepare(
@@ -460,11 +473,8 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
          ease_factor, interval, repetitions, last_reviewed, next_review
        ) VALUES ('card-b-fresh', ?, ?, 'node-b', 'Fresh Election Q2', 'Answer', 2, 10, 5.0, 2.4, 10, 3, ?, ?)`,
     ).run(localOwnerId, deckId, oneMinAgo, freshNextRev);
-
-    // Downstream card on node-c
     insertGraduatedCard("card-c-main", "node-c", "Log Replication Q1", 8, 8);
 
-    // Review downstream card-c-main with Good (quality = 4) via decks route
     const reviewRes = await request(app)
       .post(`/api/decks/${deckId}/cards/card-c-main/review`)
       .set("X-Toolbox-Kit", "distributed-lab")
@@ -474,38 +484,22 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
     expect(reviewRes.body.implicit_credit_count).toBe(2);
     expect(reviewRes.body.stability).toBeGreaterThan(8);
 
-    const cardA = db
-      .prepare("SELECT stability, interval, next_review FROM flashcards WHERE ownerId = ? AND id = 'card-a-overdue'")
-      .get(localOwnerId) as {
-      stability: number;
-      interval: number;
-      next_review: string;
-    };
-    const cardB = db
-      .prepare("SELECT stability, interval, next_review FROM flashcards WHERE ownerId = ? AND id = 'card-b-overdue'")
-      .get(localOwnerId) as {
-      stability: number;
-      interval: number;
-      next_review: string;
-    };
-    const cardBFresh = db
-      .prepare("SELECT stability, interval, next_review FROM flashcards WHERE ownerId = ? AND id = 'card-b-fresh'")
-      .get(localOwnerId) as {
-      stability: number;
-      interval: number;
-      next_review: string;
-    };
+    const readCard = (id: string) =>
+      db
+        .prepare("SELECT stability, interval, next_review FROM flashcards WHERE ownerId = ? AND id = ?")
+        .get(localOwnerId, id) as { stability: number; interval: number; next_review: string };
+
+    const cardA = readCard("card-a-overdue");
+    const cardB = readCard("card-b-overdue");
+    const cardBFresh = readCard("card-b-fresh");
 
     expect(cardB.stability).toBeGreaterThan(5);
     expect(cardA.stability).toBeGreaterThan(5);
     expect(Date.parse(cardB.next_review)).toBeGreaterThan(now.getTime());
     expect(Date.parse(cardA.next_review)).toBeGreaterThan(now.getTime());
-
-    // Freshly reviewed card (1 min ago) MUST have zero stability inflation!
     expect(cardBFresh.stability).toBe(10);
     expect(cardBFresh.next_review).toBe(freshNextRev);
 
-    // Also verify direct helper idempotence on same-minute repeat
     const secondCredit = applyImplicitPrerequisiteCredit(
       db,
       scopeForOwnerId(localOwnerId),
@@ -533,11 +527,9 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .expect(201);
 
     const drillId = genRes.body.id as string;
-    // Hints are normalized to 3 progressive hints [Nudge, Setup, Key Step]
     expect(genRes.body.hints).toHaveLength(3);
     expect(genRes.body.mastered).toBe(false);
 
-    // Add a shaky prerequisite card on node-b so failing node-c's drill queues it in remediation_queue
     const decks = await request(app)
       .get("/api/decks")
       .set("X-Toolbox-Kit", "distributed-lab")
@@ -555,17 +547,12 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .expect(201);
     const shakyCardId = shakyRes.body.id as string;
 
-    // 1. Sycophantic LLM returns pass=true, score=0.92 WITH a factual error -> overridden to pass=false, score=0.59 (< 0.6 -> triggers remediation!)
     mockRunStructured.mockResolvedValueOnce({
       extractedClaims: ["Raft commits entries as soon as term increments"],
       factualOrLogicalErrors: ["Confused Raft term with commit index"],
       unexplainedJargon: [],
       rubricChecks: [
-        {
-          point: "Requires 3-of-5 majority quorum",
-          met: false,
-          evidenceOrGap: "Did not mention majority quorum",
-        },
+        { point: "Requires 3-of-5 majority quorum", met: false, evidenceOrGap: "Did not mention majority quorum" },
       ],
       socraticFollowUp: "How many nodes must acknowledge before commitIndex moves?",
       constructiveFeedback: "Review election vs commit rules.",
@@ -579,16 +566,11 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .send({ submission: "The leader increments term to commit immediately." })
       .expect(200);
 
-    expect(sycSubmit.body.pass).toBe(false);
-    expect(sycSubmit.body.score).toBe(0.59);
-    expect(sycSubmit.body.masteryEligible).toBe(false);
+    expect(sycSubmit.body).toMatchObject({ pass: false, score: 0.59, masteryEligible: false });
     expect(
-      sycSubmit.body.remediation.some(
-        (r: { cardId: string }) => r.cardId === shakyCardId,
-      ),
+      sycSubmit.body.remediation.some((r: { cardId: string }) => r.cardId === shakyCardId),
     ).toBe(true);
 
-    // Also test an explicit low-score failure (score = 0.35)
     mockRunStructured.mockResolvedValueOnce({
       extractedClaims: ["Not sure"],
       factualOrLogicalErrors: ["Incorrectly claimed 2 of 5 nodes form a quorum"],
@@ -615,17 +597,12 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
     ).c;
     expect(openRemCount).toBe(1);
 
-    // 2. Submitting with hintsUsed: 3 marks assisted=true and masteryEligible=false even with high score
     mockRunStructured.mockResolvedValueOnce({
       extractedClaims: ["3 of 5 majority elects leader with up-to-date log"],
       factualOrLogicalErrors: [],
       unexplainedJargon: [],
       rubricChecks: [
-        {
-          point: "Requires 3-of-5 majority quorum",
-          met: true,
-          evidenceOrGap: "Explicitly stated 3 of 5",
-        },
+        { point: "Requires 3-of-5 majority quorum", met: true, evidenceOrGap: "Explicitly stated 3 of 5" },
       ],
       socraticFollowUp: "Now try a variant without hints!",
       constructiveFeedback: "Accurate mechanism.",
@@ -642,9 +619,11 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       })
       .expect(200);
 
-    expect(assistedSubmit.body.pass).toBe(true);
-    expect(assistedSubmit.body.assisted).toBe(true);
-    expect(assistedSubmit.body.masteryEligible).toBe(false);
+    expect(assistedSubmit.body).toMatchObject({
+      pass: true,
+      assisted: true,
+      masteryEligible: false,
+    });
 
     const listAfterAssisted = await request(app)
       .get("/api/drills?nodeId=node-c")
@@ -653,7 +632,6 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
     expect(listAfterAssisted.body[0].attemptCount).toBe(3);
     expect(listAfterAssisted.body[0].mastered).toBe(false);
 
-    // 3. Server-grounded POST /api/feynman/evaluate enforces anti-sycophancy
     mockRunStructured.mockResolvedValueOnce({
       extractedClaims: ["Raft uses Paxos proposers without a leader"],
       factualOrLogicalErrors: ["Raft uses a strong single leader per term, not leaderless proposers"],
@@ -674,9 +652,11 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       })
       .expect(200);
 
-    expect(feynmanRes.body.pass).toBe(false);
-    expect(feynmanRes.body.score).toBe(0.59);
-    expect(feynmanRes.body.conceptName).toBe("Log Replication");
+    expect(feynmanRes.body).toMatchObject({
+      pass: false,
+      score: 0.59,
+      conceptName: "Log Replication",
+    });
   });
 
   it("fast-tracks via Challenge Node: graduates node cards to state=2, stability=21, commits guide note, and credits prerequisites", async () => {
@@ -686,7 +666,6 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .expect(200);
     const deckId = decks.body[0].id as string;
 
-    // Create an ungraduated (state=0) card on node-c and an overdue graduated card on prerequisite node-b
     const newNodeCCardRes = await request(app)
       .post(`/api/decks/${deckId}/cards`)
       .set("X-Toolbox-Kit", "distributed-lab")
@@ -706,7 +685,6 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
        ) VALUES ('prereq-b-for-challenge', ?, ?, 'node-b', 'Term monotonicity', 'Terms never decrease', 2, 5, 5.0, 2.4, 5, 2, ?, ?)`,
     ).run(localOwnerId, deckId, overduePast, overduePast);
 
-    // GET /api/drills/challenge/node-c generates a difficulty=3 drill since none exists yet
     mockRunStructured.mockResolvedValueOnce({
       prompt: "Prove why a Raft leader cannot directly commit entries from prior terms by counting replicas alone.",
       hints: ["Think Figure 8.", "Consider a new current-term entry.", "Indirect commitment via Log Matching."],
@@ -726,7 +704,6 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
     expect(getChallenge.body.passThreshold).toBe(0.85);
     const challengeDrillId = getChallenge.body.drill.id as string;
 
-    // POST /api/drills/challenge/node-c with passing unassisted synthesis (score = 0.93, zero errors)
     mockRunStructured.mockResolvedValueOnce({
       extractedClaims: [
         "Raft only commits entries from the leader's current term by counting replicas",
@@ -735,11 +712,7 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       factualOrLogicalErrors: [],
       unexplainedJargon: [],
       rubricChecks: [
-        {
-          point: "Explains Figure 8 overwrite hazard",
-          met: true,
-          evidenceOrGap: "Accurately explained",
-        },
+        { point: "Explains Figure 8 overwrite hazard", met: true, evidenceOrGap: "Accurately explained" },
       ],
       socraticFollowUp: "How does ReadIndex optimize read-only queries?",
       constructiveFeedback: "Spot-on Figure 8 safety proof and clear synthesis.",
@@ -765,7 +738,6 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
     expect(postChallenge.body.graduatedCardIds).toContain(nodeCCardId);
     expect(postChallenge.body.implicit_credit_count).toBeGreaterThanOrEqual(1);
 
-    // Verify card graduated to state = 2, stability = 21, difficulty = 4.5, interval = 21
     const graduatedCard = db
       .prepare(
         "SELECT state, stability, difficulty, interval, repetitions FROM flashcards WHERE ownerId = ? AND id = ?",
@@ -777,13 +749,14 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       interval: number;
       repetitions: number;
     };
-    expect(graduatedCard.state).toBe(2);
-    expect(graduatedCard.stability).toBe(21);
-    expect(graduatedCard.difficulty).toBe(4.5);
-    expect(graduatedCard.interval).toBe(21);
+    expect(graduatedCard).toMatchObject({
+      state: 2,
+      stability: 21,
+      difficulty: 4.5,
+      interval: 21,
+    });
     expect(graduatedCard.repetitions).toBeGreaterThanOrEqual(1);
 
-    // Verify guide_content slot was populated
     const savedGuide = db
       .prepare(
         "SELECT content FROM guide_content WHERE ownerId = ? AND kit_id = ? AND pillar_id = 'consensus-pillar' AND topic_id = 'raft-topic' AND section_id = 'mental-model'",
@@ -791,17 +764,13 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .get(localOwnerId, customKitId) as { content: string } | undefined;
     expect(savedGuide?.content).toBe(feynmanSynthesis);
 
-    // Verify prerequisite card received upward FIRe stability credit
     const creditedPrereq = db
-      .prepare(
-        "SELECT stability FROM flashcards WHERE ownerId = ? AND id = 'prereq-b-for-challenge'",
-      )
+      .prepare("SELECT stability FROM flashcards WHERE ownerId = ? AND id = 'prereq-b-for-challenge'")
       .get(localOwnerId) as { stability: number };
     expect(creditedPrereq.stability).toBeGreaterThan(5);
   });
 
-  it("attaches Kit badge metadata on GET /api/decks/all/cards/due, supports ?kitId=, and enforces strict tenant isolation", async () => {
-    // Create a due new card in Distributed Lab for local owner (Alice)
+  it("attaches Kit badge metadata on GET /api/decks/all/cards/due, supports ?kitId=, and enforces strict tenant & cross-Kit isolation", async () => {
     const decks = await request(app)
       .get("/api/decks")
       .set("X-Toolbox-Kit", "distributed-lab")
@@ -824,46 +793,16 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
     const badgeCard = allDueBeforeSetup.body.find(
       (c: { id: string }) => c.id === aliceDueCardId,
     );
-    expect(badgeCard).toBeDefined();
-    expect(badgeCard.kit_id).toBe(customKitId);
-    expect(badgeCard.kit_slug).toBe("distributed-lab");
-    expect(badgeCard.kit_name).toBe("Distributed Lab");
-    expect(badgeCard.kit_icon).toBe("⚡");
-    expect(badgeCard.kit_color).toBe("#0ea5e9");
+    expect(badgeCard).toMatchObject({
+      kit_id: customKitId,
+      kit_slug: "distributed-lab",
+      kit_name: "Distributed Lab",
+      kit_icon: "⚡",
+      kit_color: "#0ea5e9",
+    });
 
-    // Upgrade instance to multi-user mode (Alice Admin + Bob Member) and verify tenant isolation
-    const aliceAgent = request.agent(app);
-    await aliceAgent
-      .post("/api/auth/setup")
-      .send({
-        email: "alice-wave1d@example.com",
-        username: "alice1d",
-        displayName: "Alice",
-        password: "alice-strong-password-123",
-      })
-      .expect(201);
+    const { aliceAgent, bobAgent } = await setupTwoTenants(app, "wave1d");
 
-    const inviteRes = await aliceAgent
-      .post("/api/admin/invitations")
-      .send({ email: "bob-wave1d@example.com", role: "member" })
-      .expect(201);
-    const token = new URL(inviteRes.body.link as string).searchParams.get(
-      "token",
-    )!;
-
-    const bobAgent = request.agent(app);
-    await bobAgent
-      .post("/api/auth/accept-invitation")
-      .send({
-        token,
-        email: "bob-wave1d@example.com",
-        username: "bob1d",
-        displayName: "Bob",
-        password: "bob-strong-password-123",
-      })
-      .expect(201);
-
-    // Bob sees ZERO of Alice's due cards or drills!
     const bobDue = await bobAgent.get("/api/decks/all/cards/due").expect(200);
     expect(bobDue.body).toEqual([]);
 
@@ -873,17 +812,12 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .expect(200);
     expect(aliceDrills.body.length).toBeGreaterThanOrEqual(2);
 
-    // Bob cannot access Alice's kit or submit to Alice's drill
-    await bobAgent
-      .get("/api/drills")
-      .set("X-Toolbox-Kit", "distributed-lab")
-      .expect(404);
+    await bobAgent.get("/api/drills").set("X-Toolbox-Kit", "distributed-lab").expect(404);
     await bobAgent
       .post(`/api/drills/${aliceDrills.body[0].id}/submit`)
       .send({ submission: "Cross-tenant attempt" })
       .expect(404);
 
-    // Cross-Kit isolation on /api/graph + /api/graph/health, deck stats, interleaved/review due, card-only review & prereq guard
     const sdDeckRes = await aliceAgent
       .post("/api/decks")
       .set("X-Toolbox-Kit", "system-design")
@@ -900,7 +834,6 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .expect(201);
     const sdCardId = sdCardRes.body.id as string;
 
-    // Cross-Kit prerequisite_id is rejected/stripped so prerequisites never cross Kits
     const crossPrereqCard = await aliceAgent
       .post(`/api/decks/${deckId}/cards`)
       .set("X-Toolbox-Kit", "distributed-lab")
@@ -912,50 +845,37 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .expect(201);
     expect(crossPrereqCard.body.prerequisite_id).toBeNull();
 
-    // /api/graph, /api/graph/health, and /api/graph/nodes/:id scope strictly to distributed-lab and compute FSRS stability strength
     for (const graphPath of ["/api/graph", "/api/graph/health"]) {
       const gRes = await aliceAgent
         .get(graphPath)
         .set("X-Toolbox-Kit", "distributed-lab")
         .expect(200);
       const nodeA = gRes.body.nodes.find((n: { id: string }) => n.id === "node-a");
-      expect(nodeA).toBeDefined();
-      expect(nodeA.strength).toBeGreaterThan(0);
+      expect(nodeA?.strength).toBeGreaterThan(0);
     }
     const nodeDetail = await aliceAgent
       .get("/api/graph/nodes/node-a")
       .set("X-Toolbox-Kit", "distributed-lab")
       .expect(200);
-    expect(
-      nodeDetail.body.cards.some((c: { id: string }) => c.id === sdCardId),
-    ).toBe(false);
+    expect(nodeDetail.body.cards.some((c: { id: string }) => c.id === sdCardId)).toBe(false);
 
-    // /api/decks/interleaved/due honors X-Toolbox-Kit while /api/review/due spans all owned Kits
     const kitInterleaved = await aliceAgent
       .get("/api/decks/interleaved/due")
       .set("X-Toolbox-Kit", "distributed-lab")
       .expect(200);
     expect(
-      kitInterleaved.body.every(
-        (c: { kit_slug: string }) => c.kit_slug === "distributed-lab",
-      ),
+      kitInterleaved.body.every((c: { kit_slug: string }) => c.kit_slug === "distributed-lab"),
     ).toBe(true);
-
-    await aliceAgent
-      .get("/api/decks/interleaved/due?kitId=nonexistent-kit")
-      .expect(404);
+    await aliceAgent.get("/api/decks/interleaved/due?kitId=nonexistent-kit").expect(404);
 
     const unifiedReview = await aliceAgent
       .get("/api/review/due")
       .set("X-Toolbox-Kit", "distributed-lab")
       .expect(200);
-    const reviewSlugs = new Set(
-      unifiedReview.body.map((c: { kit_slug: string }) => c.kit_slug),
-    );
+    const reviewSlugs = new Set(unifiedReview.body.map((c: { kit_slug: string }) => c.kit_slug));
     expect(reviewSlugs.has("distributed-lab")).toBe(true);
     expect(reviewSlugs.has("system-design")).toBe(true);
 
-    // /api/decks/stats scopes to active Kit or aggregates across all Kits via ?kitId=all
     const kitStats = await aliceAgent
       .get("/api/decks/stats")
       .set("X-Toolbox-Kit", "distributed-lab")
@@ -968,16 +888,13 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
     expect(allStats.body.kitId).toBeNull();
     expect(allStats.body.cardCount).toBeGreaterThan(kitStats.body.cardCount);
 
-    // POST /api/decks/cards/:cardId/review grades without requiring :deckId in URL
     const directRev = await aliceAgent
       .post(`/api/decks/cards/${sdCardId}/review`)
       .send({ quality: 5, confidence: "high" })
       .expect(200);
-    expect(directRev.body.state).toBe(2);
-    expect(directRev.body.repetitions).toBe(1);
+    expect(directRev.body).toMatchObject({ state: 2, repetitions: 1 });
     expect(directRev.body.stability).toBeGreaterThan(0);
 
-    // POST /api/calculator/audit passes tenant scope to runStructured
     mockRunStructured.mockResolvedValueOnce({
       verdict: "sound",
       summary: "Throughput fits single-node NVMe budget.",
@@ -986,10 +903,7 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
     });
     const calcRes = await aliceAgent
       .post("/api/calculator/audit")
-      .send({
-        inputs: { dau: 100000, readsPerUser: 10 },
-        results: { qps: 12 },
-      })
+      .send({ inputs: { dau: 100000, readsPerUser: 10 }, results: { qps: 12 } })
       .expect(200);
     expect(calcRes.body.summary).toContain("NVMe");
     expect(mockRunStructured).toHaveBeenCalledWith(

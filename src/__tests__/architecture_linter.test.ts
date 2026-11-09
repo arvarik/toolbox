@@ -140,7 +140,7 @@ describe('Architecture Linter Engine', () => {
     expect(report.passes.length).toBeGreaterThanOrEqual(4)
   })
 
-  it('supports domain-general concept map audit mode', () => {
+  it('supports domain-general Novakian concept map audit mode', () => {
     const single = auditArchitecture(
       [{ id: 'c1', data: { name: 'Ownership' } }],
       [],
@@ -148,15 +148,35 @@ describe('Architecture Linter Engine', () => {
     )
     expect(single.findings.some((f) => f.id === 'single-concept')).toBe(true)
 
-    const linked = auditArchitecture(
+    const partial = auditArchitecture(
       [
-        { id: 'c1', data: { name: 'Ownership' } },
-        { id: 'c2', data: { name: 'Borrow Checker' } },
+        { id: 'k1', data: { name: 'Ownership', category: 'Foundations', icon: 'brain' } },
+        { id: 'k2', data: { name: 'Move Semantics', category: 'Mechanisms', icon: 'cog' } },
+        { id: 'k3', data: { name: 'Orphan Concept', category: 'Foundations', icon: 'brain' } },
       ],
-      [{ id: 'e1', source: 'c1', target: 'c2', label: 'enforced at compile time by' }],
+      [{ id: 'ce1', source: 'k1', target: 'k2' }],
       { mode: 'concept' },
     )
-    expect(linked.score).toBe(100)
-    expect(linked.findings).toHaveLength(0)
+    const ids = partial.findings.map((f) => f.id)
+    expect(ids).not.toContain('compute-spof')
+    expect(ids).not.toContain('missing-cache-tier')
+    expect(ids).toContain('orphan-concepts')
+    expect(ids).toContain('unlabeled-propositions')
+
+    const clean = auditArchitecture(
+      [
+        { id: 'k1', data: { name: 'Ownership', category: 'Foundations', icon: 'brain' } },
+        { id: 'k2', data: { name: 'Single Drop', category: 'Mechanisms', icon: 'cog' } },
+        { id: 'k3', data: { name: 'Vec<u8> Move Example', category: 'Evidence', icon: 'file-text' } },
+      ],
+      [
+        { id: 'e1', source: 'k1', target: 'k2', label: 'guarantees' },
+        { id: 'e2', source: 'k2', target: 'k3', label: 'example of' },
+      ],
+      { mode: 'concept' },
+    )
+    expect(clean.score).toBe(100)
+    expect(clean.rating).toBe('Well-Structured Concept Map')
+    expect(clean.findings).toHaveLength(0)
   })
 })

@@ -1,77 +1,18 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { MemoryRouter, useLocation } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { SYSTEM_DESIGN_KIT_SKELETON } from '../../shared/kits/systemDesignKit'
+import CommitModal from '../components/chat/CommitModal'
+import LearningChat from '../components/chat/LearningChat'
 import ChatPanel from '../components/shared/ChatPanel'
 import SearchDialog from '../components/shared/SearchDialog'
+import ChatPage from '../pages/ChatPage'
 import useAppStore from '../stores/appStore'
 import useCommitStore from '../stores/useCommitStore'
 import useKitStore from '../stores/useKitStore'
-import type { KitDetailItem } from '../stores/useKitStore'
 import { ApiError, chatApi, getActiveKitHeaders } from '../utils/api'
+import { makeTestKit, resetKitStore, sseStreamResponse } from './testHelpers'
 
-function sseStreamResponse(chunks: string[], status = 200): Response {
-  const encoder = new TextEncoder()
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      for (const chunk of chunks) {
-        controller.enqueue(encoder.encode(chunk))
-      }
-      controller.close()
-    },
-  })
-  return new Response(stream, {
-    status,
-    headers: { 'Content-Type': 'text/event-stream' },
-  })
-}
-
-function makeKit(slug: string, name: string, canvas: 'architecture' | 'concept' = 'concept'): KitDetailItem {
-  const capabilities = {
-    ...SYSTEM_DESIGN_KIT_SKELETON.capabilities,
-    canvas,
-    calculator: false,
-  }
-  return {
-    id: `kit-${slug}`,
-    slug,
-    name,
-    description: `${name} description`,
-    icon: '📘',
-    color: '#6366f1',
-    status: 'ready',
-    statusDetail: null,
-    forkedFromSharedId: null,
-    forkedVersion: null,
-    upstreamSlug: null,
-    upstreamLatestVersion: null,
-    hasUpstreamUpdate: false,
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    lastOpenedAt: null,
-    pillarCount: 1,
-    topicCount: 1,
-    nodeCount: 1,
-    capabilities,
-    deckCount: 0,
-    cardCount: 0,
-    dueCount: 0,
-    newCount: 0,
-    reviewedCount: 0,
-    masteryPercent: 0,
-    guideFilledCount: 0,
-    guideTotalCount: 1,
-    archivedNotesCount: 0,
-    drillCount: 0,
-    skeleton: {
-      ...SYSTEM_DESIGN_KIT_SKELETON,
-      identity: { ...SYSTEM_DESIGN_KIT_SKELETON.identity, slug, name },
-      capabilities,
-    },
-  }
-}
-
-describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () => {
+describe('ChatPanel, LearningChat, SSE Streaming, XSS Safety & Multi-Kit Isolation', () => {
   let originalLocalStorage: Storage
   let originalClipboard: Clipboard
 
@@ -84,7 +25,7 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     } catch {
       // Ignore if mocked
     }
-    useKitStore.setState({ kits: [], activeKitSlug: null, activeKit: null, kitCache: {} })
+    resetKitStore()
     ;(globalThis as { __toolboxActiveKitSlug?: string | null }).__toolboxActiveKitSlug = null
     useAppStore.getState().resetWorkspaceState()
     useAppStore.setState({
@@ -140,7 +81,6 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
       }),
     )
 
-    // Verify 401 dispatches toolbox:unauthorized and throws structured ApiError
     const unauthSpy = vi.fn()
     window.addEventListener('toolbox:unauthorized', unauthSpy)
     fetchSpy.mockResolvedValueOnce(
@@ -179,15 +119,12 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     })
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-    const stopBtn = await screen.findByRole('button', { name: /stop generating/i })
-    fireEvent.click(stopBtn)
-
+    fireEvent.click(await screen.findByRole('button', { name: /stop generating/i }))
     await waitFor(() => {
       expect(capturedSignal?.aborted).toBe(true)
       expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     })
 
-    // Failure -> role="alert" -> Retry recovers cleanly
     fetchSpy
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ message: 'Upstream quota exceeded' }), {
@@ -202,17 +139,11 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     })
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
 
-    const alert = await screen.findByRole('alert')
-    expect(alert).toHaveTextContent('Upstream quota exceeded')
-
+    expect(await screen.findByRole('alert')).toHaveTextContent('Upstream quota exceeded')
     const retryButtons = screen.getAllByRole('button', { name: 'Retry this prompt' })
     fireEvent.click(retryButtons[retryButtons.length - 1])
+    await waitFor(() => expect(screen.getByText('Recovered response')).toBeInTheDocument())
 
-    await waitFor(() => {
-      expect(screen.getByText('Recovered response')).toBeInTheDocument()
-    })
-
-    // Unmount during active stream aborts cleanly
     let unmountSignal: AbortSignal | undefined
     fetchSpy.mockImplementationOnce((_input, init) => {
       unmountSignal = init?.signal ?? undefined
@@ -259,20 +190,17 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     const dragHandle = screen.getByTestId('chat-drag-handle')
     expect(panel.style.width).toBe('350px')
 
-    // Recover from corrupt initial localStorage on first drag: 350 - (400 - 500) = 450px
     fireEvent.mouseDown(dragHandle, { clientX: 500 })
     fireEvent.mouseMove(document, { clientX: 400 })
     fireEvent.mouseUp(document)
     expect(panel.style.width).toBe('450px')
     expect(window.localStorage.getItem('toolbox_chat_width')).toBe('450')
 
-    // Clamp min at 300px
     fireEvent.mouseDown(dragHandle, { clientX: 500 })
     fireEvent.mouseMove(document, { clientX: 800 })
     fireEvent.mouseUp(document)
     expect(panel.style.width).toBe('300px')
 
-    // Clamp max at 600px
     fireEvent.mouseDown(dragHandle, { clientX: 500 })
     fireEvent.mouseMove(document, { clientX: 100 })
     fireEvent.mouseUp(document)
@@ -280,7 +208,6 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
   })
 
   it('survives throwing/corrupt localStorage and isolates chat history per page and per Kit', async () => {
-    // 1. Corrupt JSON & non-array page history do not crash
     window.localStorage.setItem('toolbox_chat_history', 'invalid-json-string{]!')
     const { unmount: unmountCorrupt } = render(<ChatPanel page="guide" />)
     expect(screen.getByTestId('chat-panel-container')).toBeInTheDocument()
@@ -291,7 +218,6 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     expect(screen.getByText('Ask about system design')).toBeInTheDocument()
     unmountNonArray()
 
-    // 2. Per-page & per-Kit isolation + scoped Clear conversation
     window.localStorage.setItem(
       'toolbox_chat_history',
       JSON.stringify({
@@ -314,36 +240,34 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     expect(afterClear.builder).toEqual([])
     expect(afterClear.guide).toHaveLength(1)
 
-    act(() => {
-      useKitStore.getState().setActiveKitDirect(makeKit('rust-kit', 'Rust Kit'))
-    })
+    act(() => useKitStore.getState().setActiveKitDirect(makeTestKit({ slug: 'rust-kit', name: 'Rust Kit' })))
     rerender(<ChatPanel page="guide" />)
     expect(screen.getByText('Rust kit msg')).toBeInTheDocument()
     expect(screen.queryByText('ML kit msg')).not.toBeInTheDocument()
 
-    act(() => {
-      useKitStore.getState().setActiveKitDirect(makeKit('ml-kit', 'ML Kit'))
-    })
+    act(() =>
+      useKitStore
+        .getState()
+        .setActiveKitDirect(makeTestKit({ slug: 'ml-kit', name: 'ML Kit', capabilities: { canvas: 'concept' } })),
+    )
     rerender(<ChatPanel page="guide" />)
     expect(screen.getByText('ML kit msg')).toBeInTheDocument()
     expect(screen.queryByText('Rust kit msg')).not.toBeInTheDocument()
     unmountScoped()
 
-    // 3. Throwing SecurityError localStorage still renders and streams
-    const throwingStorage = {
-      getItem: vi.fn(() => {
-        throw new Error('SecurityError')
-      }),
-      setItem: vi.fn(() => {
-        throw new Error('SecurityError')
-      }),
-      removeItem: vi.fn(),
-      clear: vi.fn(),
-      key: vi.fn(),
-      length: 0,
-    }
     Object.defineProperty(window, 'localStorage', {
-      value: throwingStorage,
+      value: {
+        getItem: vi.fn(() => {
+          throw new Error('SecurityError')
+        }),
+        setItem: vi.fn(() => {
+          throw new Error('SecurityError')
+        }),
+        removeItem: vi.fn(),
+        clear: vi.fn(),
+        key: vi.fn(),
+        length: 0,
+      },
       writable: true,
       configurable: true,
     })
@@ -352,9 +276,7 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
       sseStreamResponse(['data: {"text":"Streamed without storage"}\n\ndata: [DONE]\n\n']),
     )
 
-    act(() => {
-      useKitStore.getState().setActiveKitDirect(null)
-    })
+    act(() => useKitStore.getState().setActiveKitDirect(null))
     render(<ChatPanel page="guide" />)
     fireEvent.change(screen.getByPlaceholderText('Ask a question...'), {
       target: { value: 'Blocked storage question' },
@@ -374,13 +296,7 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     )
 
     const { unmount } = render(
-      <ChatPanel
-        page="guide"
-        title={undefined}
-        placeholder={undefined}
-        initialMessages={undefined}
-        context={undefined}
-      />,
+      <ChatPanel page="guide" title={undefined} placeholder={undefined} initialMessages={undefined} context={undefined} />,
     )
     expect(screen.getByText('Ask AI')).toBeInTheDocument()
 
@@ -396,7 +312,6 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     })
     expect(await screen.findByText('Single response')).toBeInTheDocument()
 
-    // Clipboard fallback via document.execCommand('copy')
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: vi.fn().mockRejectedValue(new Error('Permission denied')) },
       writable: true,
@@ -411,26 +326,17 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     }
     const execSpy = vi.spyOn(document, 'execCommand').mockReturnValue(true)
     fireEvent.click(screen.getByRole('button', { name: 'Copy to clipboard' }))
-    await waitFor(() => {
-      expect(execSpy).toHaveBeenCalledWith('copy')
-    })
+    await waitFor(() => expect(execSpy).toHaveBeenCalledWith('copy'))
     unmount()
 
-    // Rapid builder canvas node updates debounce auto-verify to 1 stream request
     fetchSpy.mockClear()
     fetchSpy.mockResolvedValue(sseStreamResponse(['data: {"text":"Verified"}\n\ndata: [DONE]\n\n']))
-    useAppStore.setState({
-      nodes: [{ id: '1', type: 'loadBalancer', position: { x: 0, y: 0 } }],
-    })
+    useAppStore.setState({ nodes: [{ id: '1', type: 'loadBalancer', position: { x: 0, y: 0 } }] })
 
     const { rerender } = render(<ChatPanel page="builder" />)
-    act(() => {
-      useAppStore.setState({ nodes: [{ id: '1', type: 'loadBalancer', position: { x: 10, y: 10 } }] })
-    })
+    act(() => useAppStore.setState({ nodes: [{ id: '1', type: 'loadBalancer', position: { x: 10, y: 10 } }] }))
     rerender(<ChatPanel page="builder" />)
-    act(() => {
-      useAppStore.setState({ nodes: [{ id: '1', type: 'loadBalancer', position: { x: 20, y: 20 } }] })
-    })
+    act(() => useAppStore.setState({ nodes: [{ id: '1', type: 'loadBalancer', position: { x: 20, y: 20 } }] }))
     rerender(<ChatPanel page="builder" />)
 
     await act(async () => {
@@ -440,7 +346,6 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
   })
 
   it('prevents toast ID collisions, clears canvas/commit state across Kit switches, and scopes SearchDialog to active Kit', async () => {
-    // 1. Monotonic toast IDs under identical Date.now()
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(123456789)
     act(() => {
       useAppStore.getState().addToast({ type: 'success', message: 'Toast 1' })
@@ -449,15 +354,12 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     const toasts = useAppStore.getState().toasts
     expect(toasts).toHaveLength(2)
     expect(toasts[0].id).not.toBe(toasts[1].id)
-    act(() => {
-      useAppStore.getState().removeToast(toasts[0].id)
-    })
+    act(() => useAppStore.getState().removeToast(toasts[0].id))
     expect(useAppStore.getState().toasts.map((t) => t.message)).toEqual(['Toast 2'])
     nowSpy.mockRestore()
 
-    // 2. Cross-Kit switch clears canvas nodes/edges and active CommitModal state
     act(() => {
-      useKitStore.getState().setActiveKitDirect(makeKit('rust-kit', 'Rust Kit'))
+      useKitStore.getState().setActiveKitDirect(makeTestKit({ slug: 'rust-kit', name: 'Rust Kit' }))
       useAppStore.setState({
         nodes: [{ id: 'n1', data: { name: 'Kit A Node' } }],
         edges: [{ id: 'e1', source: 'n1', target: 'n1' }],
@@ -466,15 +368,16 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     })
     const prevCallId = useCommitStore.getState().currentCallId
 
-    act(() => {
-      useKitStore.getState().setActiveKitDirect(makeKit('ml-kit', 'ML Kit'))
-    })
+    act(() =>
+      useKitStore
+        .getState()
+        .setActiveKitDirect(makeTestKit({ slug: 'ml-kit', name: 'ML Kit', capabilities: { canvas: 'concept' } })),
+    )
     expect(useAppStore.getState().nodes).toEqual([])
     expect(useAppStore.getState().edges).toEqual([])
     expect(useCommitStore.getState().isOpen).toBe(false)
     expect(useCommitStore.getState().currentCallId).toBeGreaterThan(prevCallId)
 
-    // 3. SearchDialog scopes navigation paths and X-Toolbox-Kit header to active /k/:slug
     window.history.pushState({}, '', '/k/ml-kit/guide')
     const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
       new Response(
@@ -489,8 +392,7 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
     )
 
     function PathProbe() {
-      const loc = useLocation()
-      return <div data-testid="current-path">{loc.pathname}</div>
+      return <div data-testid="current-path">{useLocation().pathname}</div>
     }
 
     render(
@@ -500,9 +402,9 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
       </MemoryRouter>,
     )
 
-    const searchInput = screen.getByPlaceholderText(/search topics, notes, flashcards/i)
-    fireEvent.change(searchInput, { target: { value: 'Gradient' } })
-
+    fireEvent.change(screen.getByPlaceholderText(/search topics, notes, flashcards/i), {
+      target: { value: 'Gradient' },
+    })
     const boardHit = await screen.findByText('Gradient Descent Map')
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.stringContaining('/api/search?q=Gradient'),
@@ -510,8 +412,159 @@ describe('ChatPanel, SSE Streaming, XSS Safety & Multi-Kit Store Isolation', () 
         headers: expect.objectContaining({ 'X-Toolbox-Kit': 'ml-kit' }),
       }),
     )
-
     fireEvent.click(boardHit)
     expect(screen.getByTestId('current-path')).toHaveTextContent('/k/ml-kit/canvas')
+  })
+
+  it('switches LearningChat persona instructions, generates Mermaid concept map + CommitModal, and isolates per-Kit sessions without migrateBulk leakage', async () => {
+    const streamSpy = vi
+      .spyOn(chatApi, 'stream')
+      .mockImplementation(async (_data, onChunk) => {
+        onChunk?.('Socratic reply')
+        return 'Socratic reply'
+      })
+    const conceptMapSpy = vi
+      .spyOn(chatApi, 'generateConceptMap')
+      .mockResolvedValue({ response: 'graph TD\n  A[Client] --> B[Gateway]' })
+    const getSessionsSpy = vi.spyOn(chatApi, 'getSessions').mockResolvedValue({})
+    vi.spyOn(chatApi, 'saveSession').mockResolvedValue({ success: true })
+    const migrateBulkSpy = vi.spyOn(chatApi, 'migrateBulk').mockResolvedValue({ success: true, count: 0 })
+    vi.spyOn(chatApi, 'commitAnalyze').mockResolvedValue({ updates: [] })
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ suggestions: ['Explain ownership transfer in Rust'] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    // 1. PersonaPicker switches persona context instructions across sessions
+    const personaRender = await act(async () => render(<LearningChat />))
+    fireEvent.click(screen.getByText('Explain consistent hashing with a concrete example and when I should use it'))
+    await waitFor(() => {
+      expect(streamSpy).toHaveBeenCalledTimes(1)
+      expect((streamSpy.mock.calls[0][0] as { context: string }).context).toContain('Socratic questioning')
+    })
+
+    fireEvent.click(screen.getByTitle('Change AI Persona'))
+    fireEvent.click(screen.getByText('Strict'))
+    fireEvent.click(document.querySelector('#session-picker-btn')!)
+    fireEvent.click(screen.getByText('New Session'))
+    fireEvent.click(screen.getByText('Walk me through the tradeoffs of SQL vs NoSQL for a social feed at scale'))
+    await waitFor(() => {
+      expect(streamSpy).toHaveBeenCalledTimes(2)
+      expect((streamSpy.mock.calls[1][0] as { context: string }).context).toContain('highly demanding, intense, and strict')
+    })
+    personaRender.unmount()
+
+    // 2. Mermaid concept map from More Actions + CommitModal on topic-linked ChatPage
+    const testSessionId = 'session-topic-1'
+    const testSession = {
+      id: testSessionId,
+      name: 'Traffic Gateways Study',
+      pillarId: 'compute',
+      topicId: 'traffic-gateways',
+      topicName: 'Traffic Gateways & Proxies',
+      createdAt: new Date().toISOString(),
+      messages: [
+        { id: '1', role: 'user' as const, content: 'How do L4 and L7 load balancers differ?' },
+        { id: '2', role: 'ai' as const, content: 'L4 operates at transport layer; L7 inspects HTTP.' },
+        { id: '3', role: 'user' as const, content: 'When should I terminate TLS at L7?' },
+        { id: '4', role: 'ai' as const, content: 'When routing by path/header or offloading certs.' },
+      ],
+    }
+    getSessionsSpy.mockResolvedValueOnce({ [testSessionId]: testSession })
+    window.localStorage.setItem('toolbox_learning_sessions', JSON.stringify({ [testSessionId]: testSession }))
+    window.localStorage.setItem('toolbox_learning_current', testSessionId)
+
+    const chatPageRender = await act(async () =>
+      render(
+        <MemoryRouter initialEntries={['/chat']}>
+          <ChatPage />
+          <CommitModal />
+        </MemoryRouter>,
+      ),
+    )
+
+    fireEvent.click(await screen.findByTitle('More Actions'))
+    fireEvent.click(await screen.findByText(/Generate Map/))
+    await waitFor(() => {
+      expect(conceptMapSpy).toHaveBeenCalledTimes(1)
+      expect(screen.getByText(/Here's a concept map summarizing what we just discussed/i)).toBeInTheDocument()
+    })
+
+    const commitBtn = document.querySelector<HTMLButtonElement>('#commit-to-guide-btn')!
+    expect(commitBtn).not.toBeDisabled()
+    fireEvent.click(commitBtn)
+    await waitFor(() => expect(document.getElementById('commit-modal')).toBeInTheDocument())
+    chatPageRender.unmount()
+
+    // 3. Per-Kit session isolation & X-Toolbox-Kit header on /api/chat/starters
+    window.localStorage.setItem(
+      'toolbox_learning_sessions',
+      JSON.stringify({
+        'sys-session-1': {
+          id: 'sys-session-1',
+          name: 'System Design CAP Chat',
+          createdAt: new Date().toISOString(),
+          messages: [{ id: 'm1', role: 'user', content: 'System Design secret message' }],
+        },
+      }),
+    )
+    window.localStorage.setItem('toolbox_learning_current', 'sys-session-1')
+    getSessionsSpy.mockClear()
+    migrateBulkSpy.mockClear()
+    fetchSpy.mockClear()
+
+    const rustKit = makeTestKit({
+      id: 'kit-rust-1',
+      slug: 'distributed-rust',
+      name: 'Distributed Rust',
+      mutateSkeleton: (s) => {
+        s.pillars = [
+          {
+            id: 'ownership',
+            number: 1,
+            name: 'Ownership & Borrowing',
+            shortName: 'Ownership',
+            color: '#f97316',
+            sections: [{ id: 'mechanics', name: 'Borrow Mechanics', icon: 'cpu', promptHint: '', ownershipRule: '' }],
+            topics: [{ id: 'move-semantics', name: 'Move Semantics', summary: 'Affine transfer.' }],
+          },
+        ]
+      },
+    })
+    useCommitStore.getState().closeCompletely()
+    resetKitStore(rustKit)
+
+    await act(async () => {
+      render(
+        <MemoryRouter initialEntries={['/k/distributed-rust/chat']}>
+          <Routes>
+            <Route
+              path="/k/:slug/chat"
+              element={
+                <LearningChat
+                  routeKitSlug="distributed-rust"
+                  activeTopic={{
+                    pillar: rustKit.skeleton.pillars[0],
+                    topic: rustKit.skeleton.pillars[0].topics[0],
+                  }}
+                />
+              }
+            />
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+
+    await waitFor(() => expect(getSessionsSpy).toHaveBeenCalled())
+    expect(screen.queryByText('System Design secret message')).not.toBeInTheDocument()
+    expect(migrateBulkSpy).not.toHaveBeenCalled()
+
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalled())
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect((init.headers as Record<string, string>)['X-Toolbox-Kit']).toBe('distributed-rust')
+    expect(await screen.findByText('Explain ownership transfer in Rust')).toBeInTheDocument()
   })
 })
