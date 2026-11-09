@@ -67,3 +67,9 @@ The older workspace pages consume CSS variables and reusable classes:
   - Use `addToast({ type: 'success' | 'error' | 'info', message })` from `useAppStore` — never `window.alert()`.
   - Use `lucide-react` icons at consistent pixel sizes (`14`, `16`, `18`, `20`, `24`).
   - Provide `<EmptyState />` for empty collections and `AbortController` stop controls on all streaming AI views.
+
+---
+
+## 6. Brand
+
+Kit, a box turtle whose shell is a toolbox, is the logo and mascot, and the tagline is **Tools for Thought**. `scripts/brand/kit.ts` holds the one drawing, and `npm run brand` renders every file in `docs/brand/` from it. The [brand guide](brand/README.md) lists the masters, the colors, and the rules.
