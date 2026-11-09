@@ -472,6 +472,11 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
         res.writeHead(302, { Location: "http://169.254.169.254/latest/meta-data/" }).end();
         return;
       }
+      if (req.url?.startsWith("/huge/")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(`{"data":[{"id":"${"x".repeat(3 * 1024 * 1024)}"}]}`);
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ data: [{ id: "tiny" }] }));
     });
@@ -489,6 +494,10 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
       await expect(
         fetchEndpointModels("", `${base}/redirect`, { allowPrivate: true }),
       ).rejects.toThrow(/blocked address/);
+      // A user-configured endpoint cannot make the server buffer an unbounded body.
+      await expect(
+        fetchEndpointModels("", `${base}/huge`, { allowPrivate: true }),
+      ).rejects.toThrow(/exceeds/);
 
       // A member endpoint saved earlier (DNS rebinding, or the opt-in env var was
       // later removed) now points at loopback. Chat calls must not reach it.

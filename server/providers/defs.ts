@@ -1,4 +1,4 @@
-import { safeFetch } from "../platform/net/originAndFetch.ts";
+import { readBodyCapped, safeFetch } from "../platform/net/originAndFetch.ts";
 
 const LIST_TIMEOUT_MS = 15_000;
 
@@ -57,7 +57,7 @@ export function parseCustomModelId(
 async function extractErrorMessage(res: Response): Promise<string> {
   let detail = "";
   try {
-    const body = (await res.json()) as {
+    const body = JSON.parse(await readBodyCapped(res, { maxBytes: 64 * 1024 })) as {
       error?: { message?: string };
       message?: string;
     };
@@ -71,6 +71,7 @@ async function extractErrorMessage(res: Response): Promise<string> {
 async function fetchGeminiModels(apiKey: string): Promise<RawDiscoveredModel[]> {
   const models: RawDiscoveredModel[] = [];
   let pageToken = "";
+  let pages = 0;
   do {
     const url = new URL(
       "https://generativelanguage.googleapis.com/v1beta/models",
@@ -104,7 +105,8 @@ async function fetchGeminiModels(apiKey: string): Promise<RawDiscoveredModel[]> 
       });
     }
     pageToken = data.nextPageToken || "";
-  } while (pageToken);
+    pages += 1;
+  } while (pageToken && pages < 10);
 
   return models;
 }
@@ -177,7 +179,8 @@ export async function fetchEndpointModels(
   }
   if (!res.ok) throw new Error(await extractErrorMessage(res));
 
-  const data = (await res.json()) as
+  // The endpoint is user-configured, so its body is read with a 2 MB cap.
+  const data = JSON.parse(await readBodyCapped(res)) as
     | { data?: Array<{ id?: string; name?: string; created?: number }> }
     | Array<{ id?: string; name?: string; created?: number }>;
   const rawModels = Array.isArray(data)
