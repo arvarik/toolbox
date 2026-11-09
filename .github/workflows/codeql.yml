@@ -42,3 +42,22 @@ jobs:
         uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: /language:${{ matrix.language }}
+          output: sarif-results
+          upload: failure-only
+
+      # safeFetch in server/platform/net/originAndFetch.ts is the SSRF guard. It checks the
+      # address of every connection and every redirect. js/request-forgery cannot see that
+      # check, so it reports each user-set URL that reaches the guard. This step drops only
+      # those results. The query still runs, and it still reports a request outside safeFetch.
+      - name: Drop request-forgery results inside the SSRF guard
+        run: |
+          for f in sarif-results/*.sarif; do
+            jq '.runs |= map(.results |= map(select(.ruleId != "js/request-forgery" or .locations[0].physicalLocation.artifactLocation.uri != "server/platform/net/originAndFetch.ts")))' "$f" > "$f.tmp"
+            mv "$f.tmp" "$f"
+          done
+
+      - name: Upload results
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: sarif-results
+          category: /language:${{ matrix.language }}
