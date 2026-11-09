@@ -20,10 +20,10 @@ import {
   formatRelativeTime,
   parseDeckSettings,
   type DeckSettings,
+  type SrsNextState,
 } from "../srs/scheduler.ts";
-import { nodesForCard } from "../../shared/kits/kitSkeleton.ts";
-import { applyImplicitPrerequisiteCredit } from "../graph/encompassing.ts";
-import { planRemediation, type RemediationCardRow } from "../graph/remediation.ts";
+import { creditReviewedCard } from "../graph/encompassing.ts";
+import { queueLapseRemediation } from "../graph/remediation.ts";
 import logger from "../utils/logger.ts";
 
 const router = Router();
@@ -669,17 +669,12 @@ router.get("/:deckId/cards", (req, res) => {
   res.json(cards);
 });
 
-router.get("/:deckId/cards/due", (req, res) => {
-  const scope = scopeOf(req);
-  const deckId = req.params.deckId;
-  const deck = getOwnedDeck(scope, deckId);
-  if (!deck) {
-    res.status(404).json({ message: "Deck not found" });
-    return;
-  }
-
-  const settings = parseDeckSettings(deck.settings);
-
+/** One deck's due learning cards, then review cards, then new cards, within the deck's daily limits. */
+export function deckSessionCards(
+  scope: Scope,
+  deckId: string,
+  settings: DeckSettings,
+): FlashcardRow[] {
   const todayRow = db
     .prepare(
       `SELECT
@@ -738,11 +733,20 @@ router.get("/:deckId/cards/due", (req, res) => {
           .all(scope.ownerId, deckId, remainingNew) as FlashcardRow[])
       : [];
 
-  const combined = applyRemediation(
-    scope,
-    [...learningCards, ...reviewCards, ...newCards],
-    deckId,
-  );
+  return [...learningCards, ...reviewCards, ...newCards];
+}
+
+router.get("/:deckId/cards/due", (req, res) => {
+  const scope = scopeOf(req);
+  const deckId = req.params.deckId;
+  const deck = getOwnedDeck(scope, deckId);
+  if (!deck) {
+    res.status(404).json({ message: "Deck not found" });
+    return;
+  }
+
+  const settings = parseDeckSettings(deck.settings);
+  const combined = applyRemediation(scope, deckSessionCards(scope, deckId, settings), deckId);
 
   res.json(
     combined.map((c) => ({
@@ -1012,6 +1016,49 @@ router.put(
   }),
 );
 
+/** Saves a review's SRS state, counts it in study_sessions, and resolves the card's open remediation rows. */
+export function saveReview(scope: Scope, cardId: string, updated: SrsNextState): void {
+  db.prepare(
+    `UPDATE flashcards SET
+       ease_factor = ?,
+       interval = ?,
+       repetitions = ?,
+       next_review = ?,
+       last_reviewed = ?,
+       state = ?,
+       learning_step = ?,
+       stability = ?,
+       difficulty = ?,
+       lapses = ?,
+       updated_at = datetime('now')
+     WHERE ownerId = ? AND id = ?`,
+  ).run(
+    updated.ease_factor,
+    updated.interval,
+    updated.repetitions,
+    updated.next_review,
+    updated.last_reviewed,
+    updated.state,
+    updated.learning_step,
+    updated.stability,
+    updated.difficulty,
+    updated.lapses,
+    scope.ownerId,
+    cardId,
+  );
+
+  db.prepare(
+    `INSERT INTO study_sessions (ownerId, date, count)
+     VALUES (?, date('now', 'localtime'), 1)
+     ON CONFLICT(ownerId, date) DO UPDATE SET count = count + 1`,
+  ).run(scope.ownerId);
+
+  db.prepare(
+    `UPDATE remediation_queue SET resolved_at = datetime('now')
+     WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL`,
+  ).run(scope.ownerId, cardId);
+}
+
 function handleReview(req: Request, res: Response): void {
   const scope = scopeOf(req);
   const { quality, confidence } = req.body as {
@@ -1047,60 +1094,12 @@ function handleReview(req: Request, res: Response): void {
 
   const settings = parseDeckSettings(deck.settings);
   const updated = calculateNextSrsState(card, quality, settings, confidence);
-
-  db.prepare(
-    `UPDATE flashcards SET
-       ease_factor = ?,
-       interval = ?,
-       repetitions = ?,
-       next_review = ?,
-       last_reviewed = ?,
-       state = ?,
-       learning_step = ?,
-       stability = ?,
-       difficulty = ?,
-       lapses = ?,
-       updated_at = datetime('now')
-     WHERE ownerId = ? AND id = ?`,
-  ).run(
-    updated.ease_factor,
-    updated.interval,
-    updated.repetitions,
-    updated.next_review,
-    updated.last_reviewed,
-    updated.state,
-    updated.learning_step,
-    updated.stability,
-    updated.difficulty,
-    updated.lapses,
-    scope.ownerId,
-    card.id,
-  );
-
-  db.prepare(
-    `INSERT INTO study_sessions (ownerId, date, count)
-     VALUES (?, date('now', 'localtime'), 1)
-     ON CONFLICT(ownerId, date) DO UPDATE SET count = count + 1`,
-  ).run(scope.ownerId);
-
-  db.prepare(
-    `UPDATE remediation_queue SET resolved_at = datetime('now')
-     WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL`,
-  ).run(scope.ownerId, card.id);
+  saveReview(scope, card.id, updated);
 
   let implicitCreditCount = 0;
   if (quality >= 4 && (card.state === 2 || updated.state === 2)) {
     try {
-      const matchedNodes = nodesForCard(card, kit.skeleton.graph.nodes);
-      const creditedIds = new Set<string>();
-      for (const nodeId of matchedNodes) {
-        const credit = applyImplicitPrerequisiteCredit(db, scope, kit, {
-          nodeId,
-          excludeCardId: card.id,
-        });
-        for (const id of credit.updatedCardIds) creditedIds.add(id);
-      }
-      implicitCreditCount = creditedIds.size;
+      implicitCreditCount = creditReviewedCard(db, scope, kit, card);
     } catch (err) {
       logger.error(
         "[decks/review] Implicit credit propagation failed:",
@@ -1109,55 +1108,10 @@ function handleReview(req: Request, res: Response): void {
     }
   }
 
-  const remediation: Array<{
-    cardId: string;
-    front: string;
-    nodeName: string | null;
-    reason: string;
-  }> = [];
-
+  let remediation: ReturnType<typeof queueLapseRemediation> = [];
   if (quality < 3) {
     try {
-      const allCards = db
-        .prepare(
-          `SELECT f.id, f.node_id, f.front, f.back, f.state, f.ease_factor, f.interval,
-                  f.next_review, f.prerequisite_id, f.source_topic_id
-           FROM flashcards f
-           JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
-           WHERE f.ownerId = ? AND d.kit_id = ?`,
-        )
-        .all(scope.ownerId, kit.id) as RemediationCardRow[];
-      const plan = planRemediation(card, allCards, {
-        nodes: kit.skeleton.graph.nodes,
-        edges: kit.skeleton.graph.edges,
-      });
-
-      const hasOpenRow = db.prepare(
-        "SELECT 1 FROM remediation_queue WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL",
-      );
-      const insert = db.prepare(
-        `INSERT INTO remediation_queue (ownerId, kit_id, card_id, source_card_id, node_id, node_name, reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      );
-      for (const item of plan) {
-        if (hasOpenRow.get(scope.ownerId, item.cardId)) continue;
-        insert.run(
-          scope.ownerId,
-          kit.id,
-          item.cardId,
-          card.id,
-          item.nodeId,
-          item.nodeName,
-          item.reason,
-        );
-        const prereqCard = allCards.find((c) => c.id === item.cardId);
-        remediation.push({
-          cardId: item.cardId,
-          front: prereqCard?.front || "",
-          nodeName: item.nodeName,
-          reason: item.reason,
-        });
-      }
+      remediation = queueLapseRemediation(db, scope, kit, card);
     } catch (err) {
       logger.error(
         "[decks/review] Remediation planning failed:",

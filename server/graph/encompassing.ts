@@ -4,6 +4,7 @@ import type { ActiveKitContext } from "../kits/kitContext.ts";
 import {
   prerequisitesOf,
   nodesForCard,
+  type CardForNodeMatching,
 } from "../../shared/kits/kitSkeleton.ts";
 import {
   bootstrapSm2Card,
@@ -210,4 +211,19 @@ export function applyImplicitPrerequisiteCredit(
     updatedCardIds,
     nodesCredited: [...creditedNodeSet],
   };
+}
+
+/** Credits every graph node the reviewed card covers, and returns the number of distinct cards credited. */
+export function creditReviewedCard(
+  db: Database.Database,
+  scope: Scope,
+  kit: Pick<ActiveKitContext, "id" | "skeleton">,
+  card: CardForNodeMatching & { id: string },
+): number {
+  const creditedIds = new Set<string>();
+  for (const nodeId of nodesForCard(card, kit.skeleton.graph.nodes)) {
+    const credit = applyImplicitPrerequisiteCredit(db, scope, kit, { nodeId, excludeCardId: card.id });
+    for (const id of credit.updatedCardIds) creditedIds.add(id);
+  }
+  return creditedIds.size;
 }
