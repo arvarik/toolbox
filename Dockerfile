@@ -1,5 +1,5 @@
 # ---- Build Stage ----
-FROM node:24-trixie-slim AS builder
+FROM node:25-trixie-slim AS builder
 
 WORKDIR /app
 
@@ -13,7 +13,7 @@ COPY . .
 RUN npm run build
 
 # ---- Production Stage ----
-FROM node:24-trixie-slim
+FROM node:25-trixie-slim
 
 WORKDIR /app
 
