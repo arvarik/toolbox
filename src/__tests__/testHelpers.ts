@@ -1,4 +1,3 @@
-import { fireEvent } from '@testing-library/react'
 import type { KitSkeletonV1 } from '../../shared/kits/kitSkeleton'
 import { SYSTEM_DESIGN_KIT_SKELETON } from '../../shared/kits/systemDesignKit'
 import useKitStore, { type KitDetailItem, type KitSummaryItem } from '../stores/useKitStore'
@@ -86,15 +85,6 @@ export function resetKitStore(
     kitCache: cache,
     isLoadingList: false,
   })
-}
-
-export function setViewport(width: number): void {
-  Object.defineProperty(window, 'innerWidth', {
-    writable: true,
-    configurable: true,
-    value: width,
-  })
-  fireEvent(window, new Event('resize'))
 }
 
 export function sseStreamResponse(chunks: string[], status = 200): Response {

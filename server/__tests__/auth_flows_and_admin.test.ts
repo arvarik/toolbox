@@ -691,15 +691,7 @@ describe("Credential lifecycle, email links, passkeys, OIDC SSO & instance admin
     expect(backups).toHaveLength(2);
     expect(backups.every((b) => b.verification !== null)).toBe(true);
 
-    const download = await alice
-      .get(`/api/admin/backups/${backups[0]!.filename}`)
-      .buffer(true)
-      .parse((res, cb) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => cb(null, Buffer.concat(chunks)));
-      })
-      .expect(200);
+    const download = await alice.get(`/api/admin/backups/${backups[0]!.filename}`).responseType("blob").expect(200);
     expect((download.body as Buffer).subarray(0, 15).toString()).toBe("SQLite format 3");
     expect(download.headers["content-disposition"]).toContain(backups[0]!.filename);
     for (const probe of ["..%2F..%2Fsecret.key", "toolbox-missing.db", `${backups[0]!.filename}.json`]) {
