@@ -24,6 +24,7 @@ import {
 } from "./platform/auth/authMiddleware.ts";
 import { authRouter } from "./platform/routes/authRoutes.ts";
 import { adminRouter } from "./platform/routes/adminRoutes.ts";
+import { mountKitRoutes } from "./kits/kitRoutesMount.ts";
 
 import configRoutes from "./routes/config.ts";
 import endpointRoutes from "./routes/endpoints.ts";
@@ -72,6 +73,7 @@ export function createApp(): Express {
   app.use("/api/admin", requireAdmin, requirePasswordCurrent, adminRouter);
 
   const authed = [requireAuth, requirePasswordCurrent];
+  mountKitRoutes(app, authed);
   app.use("/api/config", ...authed, configRoutes);
   app.use("/api/endpoints", ...authed, endpointRoutes);
   app.use("/api/decks", ...authed, deckRoutes);

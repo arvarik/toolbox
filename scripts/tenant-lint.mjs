@@ -28,14 +28,17 @@ export const OWNED_TABLES = [
   "study_sessions",
   "user_learning_profile",
   "user_ai_settings",
+  "rag_chunks",
 ];
 
-/** Virtual tables partitioned by owner (`ownerTok`). */
+/** Virtual tables partitioned by owner (`ownerTok` or `ownerId`). */
 export const VIRTUAL_TABLES = [
   "flashcards_fts",
   "guide_content_fts",
   "kit_source_chunks_fts",
   "episodic_memory_fts",
+  "rag_chunks_fts",
+  "rag_chunks_vec",
 ];
 
 /** Allowed justification reasons in `// tenant-lint: allow <reason>`. */

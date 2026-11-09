@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { v4 as uuid } from "uuid";
 import db from "../db.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
-import { ensureDefaultSystemDesignKit } from "../kits/kitsSchema.ts";
+import { resolveActiveKit, resolveKitById } from "../kits/kitContext.ts";
 import {
   calculateNextSrsState,
   getCardPreviews,
@@ -141,7 +141,7 @@ function applyRemediation<T extends FlashcardRow>(
 
 router.get("/", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
 
   const results = db
     .prepare(
@@ -360,7 +360,7 @@ router.get("/:id", (req, res) => {
 
 router.post("/", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { name, description, color_index, tags } = req.body as {
     name?: string;
     description?: string;
@@ -818,7 +818,6 @@ router.put("/:deckId/cards/:cardId", (req, res) => {
 
 function handleReview(req: Request, res: Response): void {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
   const { quality, confidence } = req.body as {
     quality?: number;
     confidence?: string;
@@ -833,6 +832,7 @@ function handleReview(req: Request, res: Response): void {
     res.status(404).json({ message: "Deck not found" });
     return;
   }
+  const kit = resolveKitById(db, scope, deck.kit_id) ?? resolveActiveKit(req, db, scope);
 
   const card = db
     .prepare(

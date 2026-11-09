@@ -75,6 +75,19 @@ export const TutorPersonaSchema = z.object({
   prompt: z.string().min(1),
 });
 
+export const CanvasTemplateV1Schema = z.object({
+  id: slugId,
+  name: z.string().min(1).max(100),
+  description: z.string().max(400).default(""),
+  nodesJson: z.string().default("[]"),
+  edgesJson: z.string().default("[]"),
+});
+
+export const KitMigrationsSchema = z.object({
+  nodeAliases: z.record(slugId, slugId).default({}),
+  topicAliases: z.record(slugId, slugId).default({}),
+});
+
 export const KitSkeletonV1Schema = z.object({
   format: z.literal("toolbox-kit"),
   schemaVersion: z.literal(1),
@@ -135,10 +148,12 @@ export const KitSkeletonV1Schema = z.object({
         )
         .default([]),
       protocols: z.array(z.string()).default([]),
-      templates: z.array(z.unknown()).default([]),
+      templates: z.array(CanvasTemplateV1Schema).default([]),
       auditRubric: z.array(z.string()).default([]),
     })
     .optional(),
+
+  migrations: KitMigrationsSchema.optional(),
 
   seeds: z.object({
     starterDeck: z

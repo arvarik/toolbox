@@ -175,11 +175,17 @@ function createV2Tables(db: Database.Database): void {
       source_section_id TEXT DEFAULT NULL,
       is_reverse INTEGER DEFAULT 0,
       reverse_of_id TEXT DEFAULT NULL,
+      seed_key TEXT DEFAULT NULL,
+      stability REAL DEFAULT NULL,
+      difficulty REAL DEFAULT NULL,
+      lapses INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_flashcards_owner_deck ON flashcards(ownerId, deck_id);
     CREATE INDEX IF NOT EXISTS idx_flashcards_prereq ON flashcards(prerequisite_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_seed_key
+      ON flashcards(ownerId, deck_id, seed_key) WHERE seed_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS remediation_queue (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -206,9 +212,12 @@ function createV2Tables(db: Database.Database): void {
       hints_json TEXT NOT NULL DEFAULT '[]',
       worked_solution TEXT NOT NULL DEFAULT '',
       rubric_json TEXT NOT NULL DEFAULT '[]',
+      seed_key TEXT DEFAULT NULL,
       created_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_drills_owner_kit ON drills(ownerId, kit_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_drills_seed_key
+      ON drills(ownerId, kit_id, seed_key) WHERE seed_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS drill_attempts (
       id TEXT PRIMARY KEY,
@@ -302,6 +311,87 @@ function createV2Tables(db: Database.Database): void {
       capabilities_json TEXT DEFAULT '{}',
       web_search_engine TEXT DEFAULT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS rag_chunks (
+      chunk_id TEXT PRIMARY KEY,
+      ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      source_ref_id TEXT NOT NULL,
+      node_id TEXT DEFAULT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      embedding_gen TEXT DEFAULT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_rag_chunks_owner_kit ON rag_chunks(ownerId, kit_id, kind);
+    CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(ownerId, kit_id, kind, source_ref_id);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
+      chunk_id UNINDEXED,
+      ownerTok,
+      kitTok,
+      kindTok,
+      title,
+      content,
+      tokenize='porter unicode61'
+    );
+  `);
+}
+
+export function ownerTokFor(ownerId: string): string {
+  return `o_${ownerId.replace(/[^a-zA-Z0-9]/g, "_")}`;
+}
+
+export function kitTokFor(kitId: string): string {
+  return `k_${kitId.replace(/[^a-zA-Z0-9]/g, "_")}`;
+}
+
+function ensureV2ColumnMigrations(db: Database.Database): void {
+  const addCol = (table: string, col: string, def: string) => {
+    if (hasTable(db, table) && !hasColumn(db, table, col)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${col} ${def}`);
+    }
+  };
+
+  addCol("flashcards", "seed_key", "TEXT DEFAULT NULL");
+  addCol("flashcards", "stability", "REAL DEFAULT NULL");
+  addCol("flashcards", "difficulty", "REAL DEFAULT NULL");
+  addCol("flashcards", "lapses", "INTEGER DEFAULT 0");
+  addCol("drills", "seed_key", "TEXT DEFAULT NULL");
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_seed_key
+      ON flashcards(ownerId, deck_id, seed_key) WHERE seed_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_drills_seed_key
+      ON drills(ownerId, kit_id, seed_key) WHERE seed_key IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS rag_chunks (
+      chunk_id TEXT PRIMARY KEY,
+      ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      source_ref_id TEXT NOT NULL,
+      node_id TEXT DEFAULT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      content TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      embedding_gen TEXT DEFAULT NULL,
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_rag_chunks_owner_kit ON rag_chunks(ownerId, kit_id, kind);
+    CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(ownerId, kit_id, kind, source_ref_id);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
+      chunk_id UNINDEXED,
+      ownerTok,
+      kitTok,
+      kindTok,
+      title,
+      content,
+      tokenize='porter unicode61'
     );
   `);
 }
@@ -701,6 +791,7 @@ export function initKitsSchema(db: Database.Database): void {
     seedOfficialStarterKits(db);
     sealPlaintextCredentialsInDb(db);
   }
+  ensureV2ColumnMigrations(db);
 
   registerOwnerDataHooks({
     countedTables: [
@@ -774,6 +865,13 @@ export function initKitsSchema(db: Database.Database): void {
     },
     purgeOwnerData: (ownerId: string) => {
       // Explicit cleanup alongside ON DELETE CASCADE for thoroughness.
+      db.prepare("DELETE FROM rag_chunks_fts WHERE ownerTok = ?").run(
+        ownerTokFor(ownerId),
+      );
+      if (hasTable(db, "rag_chunks_vec")) {
+        db.prepare("DELETE FROM rag_chunks_vec WHERE ownerId = ?").run(ownerId);
+      }
+      db.prepare("DELETE FROM rag_chunks WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM kits WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM study_sessions WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM user_learning_profile WHERE ownerId = ?").run(

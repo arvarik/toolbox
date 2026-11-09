@@ -1,7 +1,7 @@
 import { Router } from "express";
 import db from "../db.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
-import { ensureDefaultSystemDesignKit } from "../kits/kitsSchema.ts";
+import { resolveActiveKit } from "../kits/kitContext.ts";
 import {
   nodeMap,
   prerequisitesOf,
@@ -92,7 +92,7 @@ function toSessionCard(
 
 router.get("/", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { pillars, graph: graphDef } = kit.skeleton;
 
   try {
@@ -160,7 +160,7 @@ router.get("/", (req, res) => {
 
 router.get("/nodes/:id", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { pillars, graph: graphDef, canvasConfig } = kit.skeleton;
   const nodesById = nodeMap(graphDef.nodes);
   const node = nodesById.get(req.params.id);
@@ -293,7 +293,7 @@ router.get("/nodes/:id", (req, res) => {
 
 router.post("/nodes/:id/session", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { graph: graphDef } = kit.skeleton;
   const node = nodeMap(graphDef.nodes).get(req.params.id);
   if (!node) {
@@ -329,7 +329,7 @@ router.post("/nodes/:id/session", (req, res) => {
 
 router.post("/tracks/:id/session", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { graph: graphDef } = kit.skeleton;
   const track = graphDef.tracks.find((t) => t.id === req.params.id);
   if (!track) {
