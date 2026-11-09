@@ -38,10 +38,10 @@ npm run dev
 | `server/kits/`, `server/compiler/`, `server/srs/`, `server/graph/`, `server/mcp/`, `server/search/` | Toolbox v2 domain modules |
 | `server/routes/` | Tenant-scoped Express route handlers |
 | `shared/` | Runtime-pure TypeScript + Zod v4 schemas shared by server, client, and MCP |
-| `src/App.jsx` | React Router v7 route definitions (Library, `/k/:slug/*`, `/new`, `/review`, `/settings`) |
+| `src/App.tsx` | React Router v7 route definitions (Library, `/k/:slug/*`, `/new`, `/review`, `/settings`) |
 | `src/theme.css` & `src/index.css` | Tailwind v4 semantic `@theme` tokens + legacy CSS component classes |
 | `src/stores/` | Zustand global state (`appStore`, `useKitStore`, `useTimerStore`, `useCalcStore`) |
-| `src/utils/` | API clients (`api.js`, `authApi.ts`, `kitsApi.ts`, `compilerApi.ts`, `pedagogyApi.ts`, `aiSettingsApi.ts`) |
+| `src/utils/` | API clients (`api.ts` including `kitsApi`, `authApi.ts`, `compilerApi.ts`, `pedagogyApi.ts`, `aiSettingsApi.ts`) |
 
 ---
 
@@ -51,7 +51,7 @@ npm run dev
 2. **Tenant Isolation (`Scope`)**: Every SQL query against a user-owned table must extract `const scope = scopeOf(req)` and filter by `ownerId = ?` (`scope.ownerId`). `npm run lint:tenant` AST-checks every `db.prepare()` / `db.exec()` call.
 3. **Runtime-Pure `shared/`**: Files in `shared/` must not import `node:*` or `react`. Validate external payloads with Zod v4 schemas.
 4. **Encrypted Secrets**: Never store plaintext API keys, OIDC client secrets, or SMTP credentials in SQLite. Seal them via `secretBox` (`AES-256-GCM`).
-5. **Styling & Contrast**: New `.tsx` views use semantic Tailwind v4 `@theme` tokens (`src/theme.css` synchronized with `src/lib/themePalette.ts`) clearing WCAG 2.1 AA (≥ 4.5:1) in both dark and light modes, verified by `src/__tests__/theme_contrast.test.ts`. Legacy `.jsx` components use CSS variables in `src/index.css`.
+5. **Styling & Contrast**: `.tsx` views use semantic Tailwind v4 `@theme` tokens (`src/theme.css` synchronized with `src/lib/themePalette.ts`) clearing WCAG 2.1 AA (≥ 4.5:1) in both dark and light modes, verified by `npm run audit:contrast` and `src/__tests__/theme_contrast.test.ts`. Legacy component classes use CSS variables in `src/index.css`.
 6. **Minimal Dependencies**: Prefer Node 24 built-ins (`node:zlib`, `node:crypto`, `fetch`, `worker_threads`) before adding packages.
 
 ---
@@ -62,10 +62,17 @@ Run all checks locally before opening a pull request:
 
 ```bash
 npm run lint           # Runs oxlint + tsc --noEmit + scripts/tenant-lint.mjs
+npm run audit:contrast # Static WCAG 2.1 AA contrast audit across src/
 npm test               # Vitest unit + Supertest API/security integration tests
 npm run test:coverage  # Vitest with v8 coverage
 npm run build          # Production Vite frontend build
 npm run test:e2e       # Playwright end-to-end browser suite
+```
+
+For locked-out self-hosted operators on `AUTH_REQUIRED=true` instances, recover account access via CLI:
+
+```bash
+npm run reset-password -- <username-or-email>
 ```
 
 ---
@@ -89,6 +96,6 @@ npm run test:e2e       # Playwright end-to-end browser suite
 ## Pull Request Checklist
 
 - Focused branch name (`feat/...`, `fix/...`, `docs/...`)
-- `npm run lint`, `npm test`, and `npm run build` pass with zero errors
+- `npm run lint`, `npm run audit:contrast`, `npm test`, and `npm run build` pass with zero errors
 - Relevant tests added or updated (`src/__tests__/`, `server/**/__tests__/`, or `tests/e2e/`)
 - Documentation updated (`docs/api.md`, `docs/architecture.md`, `docs/user-guide.md`) when behavior changes

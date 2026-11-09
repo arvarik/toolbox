@@ -20,7 +20,7 @@
 | Runtime | Node.js ≥ 24 (`node server/index.ts`) | Native TypeScript type-stripping — no server build step |
 | Contracts | TypeScript + Zod v4 (`shared/`) | Runtime-pure (`no-restricted-imports` blocks `node:*` and `react`) |
 | Frontend | React 19 + Vite 8 + React Router v7 | Zustand stores in `src/stores/` |
-| Styling | Tailwind v4 semantic `@theme` (`src/theme.css`) + legacy CSS (`src/index.css`) | WCAG 2.1 AA contrast verified by `src/__tests__/theme_contrast.test.ts` |
+| Styling | Tailwind v4 semantic `@theme` (`src/theme.css`) + legacy CSS (`src/index.css`) | WCAG 2.1 AA contrast verified by `scripts/contrast-audit.mjs` and `src/__tests__/theme_contrast.test.ts` |
 | Icons | `lucide-react` | Consistent icon set |
 | Diagrams & Math | `@xyflow/react` + `dagre`, strict `mermaid`, sanitized `language-svg`, bundled `katex` | Canvas + Knowledge Graph DAG + inline constructive figures |
 | Database & RAG | SQLite (`better-sqlite3`, WAL + `foreign_keys = ON`) + `sqlite-vec` + `FTS5` | Tenant-scoped via branded `Scope`; local ONNX embeddings in persistent worker |
@@ -76,13 +76,14 @@ server/
 └── routes/                 # Tenant-scoped Express routers
 
 src/
+├── App.tsx                 # React Router v7 route definitions
 ├── theme.css               # Tailwind v4 semantic @theme tokens (dark + light)
 ├── index.css               # Legacy design system classes (.btn, .card, .sidebar, etc.)
 ├── components/auth/        # AuthGate.tsx + useAuth() context
 ├── components/settings/    # Account, Passkeys, BYOK, Capability Router, tbk_ Tokens & Admin UI
 ├── pages/                  # Library, NewKitStudio, KitPath, Drills, Review, Chat, Guide, Canvas, etc.
 ├── stores/                 # Zustand global state (appStore, useKitStore, useTimerStore, useCalcStore)
-└── utils/                  # API clients, sanitizeSvg.ts, markdownPreprocess.ts
+└── utils/                  # API clients (api.ts, authApi.ts, compilerApi.ts, pedagogyApi.ts, aiSettingsApi.ts), sanitizeSvg.ts, markdownPreprocess.ts
 ```
 
 ---
@@ -90,12 +91,14 @@ src/
 ## Commands
 
 ```bash
-npm run dev             # Concurrent Vite (:5173) + Express (:3100)
-npm run lint            # oxlint + tsc --noEmit + tenant-lint
-npm test                # Vitest unit + supertest integration suite
-npm run test:coverage   # Vitest with v8 coverage
-npm run test:e2e        # Playwright end-to-end suite
-npm run build           # Production Vite frontend bundle
+npm run dev                        # Concurrent Vite (:5173) + Express (:3100)
+npm run lint                       # oxlint + tsc --noEmit + tenant-lint
+npm run audit:contrast             # Static WCAG 2.1 AA contrast audit
+npm test                           # Vitest unit + supertest integration suite
+npm run test:coverage              # Vitest with v8 coverage
+npm run test:e2e                   # Playwright end-to-end suite
+npm run build                      # Production Vite frontend bundle
+npm run reset-password -- <user>   # CLI temporary password reset for locked-out operators
 ```
 
 ---
@@ -107,6 +110,6 @@ npm run build           # Production Vite frontend bundle
 3. **Chat panel state**: Each page (`guide`, `builder`, `study`) has its own chat panel state in `appStore.chatOpen`. Toggle with `toggleChat(page)`.
 4. **Streaming abort**: Always pass an `AbortController.signal` to `chatApi.stream()` so users can stop generation.
 5. **Toast notifications**: Use `addToast({ type: 'success'|'error'|'info', message: '...' })` from `useAppStore` for user feedback. Never use `alert()`.
-6. **Two board shapes**: `appStore` holds whiteboard state in React Flow shape (`position: {x,y}`, `data: {...}`, `source`/`target`), while SQLite and templates persist `{x, y, from, to}` (plus optional `mode` and edge `label` for Novakian concept maps). Convert ONLY at boundaries via `src/components/builder/boardModel.js`.
+6. **Two board shapes**: `appStore` holds whiteboard state in React Flow shape (`position: {x,y}`, `data: {...}`, `source`/`target`), while SQLite and templates persist `{x, y, from, to}` (plus optional `mode` and edge `label` for Novakian concept maps). Convert ONLY at boundaries via `src/components/builder/boardModel.ts`.
 7. **Global `svg { max-width: 100% }` reset**: React Flow's edge SVGs collapse to zero width without `.react-flow svg { max-width: none }` in `src/index.css` — keep that override intact, and keep bare-element resets inside `@layer base` so Tailwind v4 utilities win cleanly.
 8. **Persistent ONNX worker (`cpuHost.ts`)**: Never terminate/respawn the `worker_threads` worker once `onnxruntime-node` has initialized in-process, because unloading native ONNX C++ bindings crashes V8 on thread re-entry.

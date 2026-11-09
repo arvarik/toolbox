@@ -1,0 +1,76 @@
+name: Bug report
+description: Something in Toolbox does not work the way the docs say
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. Search the [issues](https://github.com/arvarik/toolbox/issues?q=is%3Aissue) first, because the problem may be known.
+
+        **Do not report a security problem here.** The [security policy](https://github.com/arvarik/toolbox/security/policy) says how to report one privately.
+
+        Remove personal data, email addresses, API keys and tokens from everything you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Say what you saw. Add a screenshot if it helps.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open Settings -> Data Management
+        2. Import a .toolbox-kit.json or .toolbox-backup.zip file
+        3. Open the Kit in My Study Library
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Toolbox version
+      description: The image tag you run, such as `2.0.0`, or the commit of a native install (`git rev-parse --short HEAD`).
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run Toolbox
+      options:
+        - Docker image from ghcr.io
+        - Docker Compose, built from source
+        - Native install (Node.js)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: ai
+    attributes:
+      label: AI provider
+      options:
+        - None, AI is off
+        - Gemini
+        - OpenAI
+        - Claude (Anthropic)
+        - An OpenAI-compatible server (Ollama, vLLM, LM Studio, OpenRouter or other)
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser and operating system
+      placeholder: Chrome 141 on macOS 26, server on Debian 13
+  - type: textarea
+    id: logs
+    attributes:
+      label: Server log lines
+      description: The lines around the error from `docker compose logs toolbox` or the Node server console.
+      render: text
