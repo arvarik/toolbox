@@ -377,65 +377,64 @@ export function calculateNextSrsState(
       nextRepetitions = 1;
       nextReviewMs = nowMs + nextInterval * DAY_MS;
     }
-  } else if (state === 1) {
-    const prevS =
-      card.stability !== undefined &&
-      card.stability !== null &&
-      card.stability > 0
+  } else if (state === 1 || state === 3) {
+    const isInitial = state === 1;
+    const steps = isInitial ? stepsMins : lapseStepsMins;
+    const { stability: bootS, difficulty: bootD } = bootstrapSm2Card(card);
+    const prevS = isInitial
+      ? card.stability && card.stability > 0
         ? card.stability
-        : initStability(3);
-    const prevD =
-      card.difficulty !== undefined &&
-      card.difficulty !== null &&
-      card.difficulty > 0
+        : initStability(3)
+      : bootS;
+    const prevD = isInitial
+      ? card.difficulty && card.difficulty > 0
         ? clamp(1, 10, card.difficulty)
-        : initDifficulty(3);
+        : initDifficulty(3)
+      : bootD;
 
     nextDiff = nextDifficulty(prevD, grade);
     nextStability = nextShortTermStability(prevS, grade);
-    const idx = Math.min(Math.max(0, learningStep), stepsMins.length - 1);
+    const idx = Math.min(Math.max(0, learningStep), steps.length - 1);
+    const stayState = isInitial ? 1 : 3;
 
     if (grade === 1) {
-      nextState = 1;
+      nextState = stayState;
       nextLearningStep = 0;
       nextInterval = 0;
-      nextReviewMs = nowMs + stepsMins[0] * MIN_MS;
+      nextReviewMs = nowMs + steps[0] * MIN_MS;
     } else if (grade === 2) {
-      nextState = 1;
+      nextState = stayState;
       nextLearningStep = idx;
       nextInterval = 0;
       const hardMins =
-        idx < stepsMins.length - 1
+        idx < steps.length - 1
           ? Math.max(
-              stepsMins[0] + 1,
-              Math.round((stepsMins[idx] + stepsMins[idx + 1]) / 2),
+              steps[0] + 1,
+              Math.round((steps[idx] + steps[idx + 1]) / 2),
             )
-          : Math.max(stepsMins[0] + 1, Math.round(stepsMins[idx] * 1.5));
+          : Math.max(steps[0] + 1, Math.round(steps[idx] * 1.5));
       nextReviewMs = nowMs + hardMins * MIN_MS;
+    } else if (grade === 3 && idx < steps.length - 1) {
+      nextState = stayState;
+      nextLearningStep = idx + 1;
+      nextInterval = 0;
+      const hardMins = Math.max(
+        steps[0] + 1,
+        Math.round((steps[idx] + steps[idx + 1]) / 2),
+      );
+      nextReviewMs = nowMs + Math.max(hardMins + 1, steps[idx + 1]) * MIN_MS;
     } else if (grade === 3) {
-      if (idx < stepsMins.length - 1) {
-        nextState = 1;
-        nextLearningStep = idx + 1;
-        nextInterval = 0;
-        const hardMins = Math.max(
-          stepsMins[0] + 1,
-          Math.round((stepsMins[idx] + stepsMins[idx + 1]) / 2),
-        );
-        const goodMins = Math.max(hardMins + 1, stepsMins[idx + 1]);
-        nextReviewMs = nowMs + goodMins * MIN_MS;
-      } else {
-        nextState = 2;
-        nextLearningStep = 0;
-        nextInterval = scaleInterval(
-          nextIntervalDays(nextStability, desiredRetention),
-        );
-        nextRepetitions = Math.max(1, prevReps + 1);
-        nextReviewMs = nowMs + nextInterval * DAY_MS;
-      }
+      nextState = 2;
+      nextLearningStep = 0;
+      nextInterval = scaleInterval(
+        nextIntervalDays(nextStability, desiredRetention),
+      );
+      nextRepetitions = Math.max(1, prevReps + 1);
+      nextReviewMs = nowMs + nextInterval * DAY_MS;
     } else {
       nextState = 2;
       nextLearningStep = 0;
-      nextStability = Math.max(initStability(4), nextStability);
+      if (isInitial) nextStability = Math.max(initStability(4), nextStability);
       const goodGradFloor = scaleInterval(
         nextIntervalDays(nextShortTermStability(prevS, 3), desiredRetention),
       );
@@ -446,7 +445,8 @@ export function calculateNextSrsState(
       nextRepetitions = Math.max(1, prevReps + 1);
       nextReviewMs = nowMs + nextInterval * DAY_MS;
     }
-  } else if (state === 2) {
+  } else {
+    // state === 2 (Review)
     const { stability: prevS, difficulty: prevD } = bootstrapSm2Card(card);
     const elapsedDays = deriveReviewElapsedDays(card, prevS, nowMs);
     const r = retrievability(elapsedDays, prevS);
@@ -487,77 +487,12 @@ export function calculateNextSrsState(
       nextState = 2;
       nextLearningStep = 0;
       nextRepetitions = prevReps + 1;
-
-      if (grade === 2) {
-        nextStability = sHard;
-        nextInterval = hardInt;
-      } else if (grade === 3) {
-        nextStability = sGood;
-        nextInterval = goodInt;
-      } else {
-        nextStability = sEasy;
-        nextInterval = easyInt;
-      }
-      nextReviewMs = nowMs + nextInterval * DAY_MS;
-    }
-  } else {
-    // state === 3 (Relearning)
-    const { stability: prevS, difficulty: prevD } = bootstrapSm2Card(card);
-    nextDiff = nextDifficulty(prevD, grade);
-    nextStability = nextShortTermStability(prevS, grade);
-    const idx = Math.min(Math.max(0, learningStep), lapseStepsMins.length - 1);
-
-    if (grade === 1) {
-      nextState = 3;
-      nextLearningStep = 0;
-      nextInterval = 0;
-      nextReviewMs = nowMs + lapseStepsMins[0] * MIN_MS;
-    } else if (grade === 2) {
-      nextState = 3;
-      nextLearningStep = idx;
-      nextInterval = 0;
-      const hardMins =
-        idx < lapseStepsMins.length - 1
-          ? Math.max(
-              lapseStepsMins[0] + 1,
-              Math.round((lapseStepsMins[idx] + lapseStepsMins[idx + 1]) / 2),
-            )
-          : Math.max(
-              lapseStepsMins[0] + 1,
-              Math.round(lapseStepsMins[idx] * 1.5),
-            );
-      nextReviewMs = nowMs + hardMins * MIN_MS;
-    } else if (grade === 3) {
-      if (idx < lapseStepsMins.length - 1) {
-        nextState = 3;
-        nextLearningStep = idx + 1;
-        nextInterval = 0;
-        const hardMins = Math.max(
-          lapseStepsMins[0] + 1,
-          Math.round((lapseStepsMins[idx] + lapseStepsMins[idx + 1]) / 2),
-        );
-        const goodMins = Math.max(hardMins + 1, lapseStepsMins[idx + 1]);
-        nextReviewMs = nowMs + goodMins * MIN_MS;
-      } else {
-        nextState = 2;
-        nextLearningStep = 0;
-        nextInterval = scaleInterval(
-          nextIntervalDays(nextStability, desiredRetention),
-        );
-        nextRepetitions = Math.max(1, prevReps + 1);
-        nextReviewMs = nowMs + nextInterval * DAY_MS;
-      }
-    } else {
-      nextState = 2;
-      nextLearningStep = 0;
-      const goodGradFloor = scaleInterval(
-        nextIntervalDays(nextShortTermStability(prevS, 3), desiredRetention),
-      );
-      nextInterval = Math.max(
-        goodGradFloor + 1,
-        scaleInterval(nextIntervalDays(nextStability, desiredRetention)),
-      );
-      nextRepetitions = Math.max(1, prevReps + 1);
+      [nextStability, nextInterval] =
+        grade === 2
+          ? [sHard, hardInt]
+          : grade === 3
+            ? [sGood, goodInt]
+            : [sEasy, easyInt];
       nextReviewMs = nowMs + nextInterval * DAY_MS;
     }
   }
@@ -584,38 +519,28 @@ export function getCardPreviews(
   settings?: Partial<DeckSettings> | null,
   now: Date = new Date(),
 ): { again: string; hard: string; good: string; easy: string } {
-  const againState = calculateNextSrsState(card, 1, settings, "medium", now);
-  const hardState = calculateNextSrsState(card, 3, settings, "medium", now);
-  const goodState = calculateNextSrsState(card, 4, settings, "medium", now);
-  const easyState = calculateNextSrsState(card, 5, settings, "medium", now);
-
-  const formatStr = (
-    nextReviewStr: string,
-    interval: number,
-    state: number,
-  ): string => {
-    if (state === 1 || state === 3) {
-      const diffMs = new Date(nextReviewStr).getTime() - now.getTime();
-      const diffMins = Math.max(1, Math.round(diffMs / MIN_MS));
+  const preview = (quality: number): string => {
+    const s = calculateNextSrsState(card, quality, settings, "medium", now);
+    if (s.state === 1 || s.state === 3) {
+      const diffMins = Math.max(
+        1,
+        Math.round((new Date(s.next_review).getTime() - now.getTime()) / MIN_MS),
+      );
       if (diffMins < 60) return `${diffMins}m`;
       const diffHours = Math.round(diffMins / 60);
-      if (diffHours < 24) return `${diffHours}h`;
-      return `${Math.round(diffHours / 24)}d`;
+      return diffHours < 24 ? `${diffHours}h` : `${Math.round(diffHours / 24)}d`;
     }
-    if (interval < 30) return `${interval}d`;
-    if (interval < 365) return `${Math.round(interval / 30)}mo`;
-    return `${Math.round(interval / 365)}y`;
+    if (s.interval < 30) return `${s.interval}d`;
+    return s.interval < 365
+      ? `${Math.round(s.interval / 30)}mo`
+      : `${Math.round(s.interval / 365)}y`;
   };
 
   return {
-    again: formatStr(
-      againState.next_review,
-      againState.interval,
-      againState.state,
-    ),
-    hard: formatStr(hardState.next_review, hardState.interval, hardState.state),
-    good: formatStr(goodState.next_review, goodState.interval, goodState.state),
-    easy: formatStr(easyState.next_review, easyState.interval, easyState.state),
+    again: preview(1),
+    hard: preview(3),
+    good: preview(4),
+    easy: preview(5),
   };
 }
 

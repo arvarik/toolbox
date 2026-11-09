@@ -17,28 +17,15 @@ import {
   seedKitStarterContent,
   type OwnedKitDetail,
 } from "../kits/kitService.ts";
-import {
-  AppError,
-  getErrorMessage,
-  log,
-  NotFoundError,
-} from "../platform/net/errors.ts";
+import { AppError, getErrorMessage, log } from "../platform/net/errors.ts";
 import { scopeForOwnerId, type Scope } from "../platform/tenancy/scope.ts";
-import {
-  upsertRagChunksBatch,
-  type UpsertRagChunkInput,
-} from "../search/hybridSearch.ts";
+import { upsertRagChunksBatch, type UpsertRagChunkInput } from "../search/hybridSearch.ts";
 import { normalizeEditedDraftSkeleton } from "./dagCompiler.ts";
-import {
-  commitStagedSourcesToKit,
-  type LoadedStagedSource,
-} from "./sourceIngest.ts";
-import {
-  sanitizeUntrustedExcerpt,
-  UNTRUSTED_POOL_INSTRUCTION,
-} from "./verifiedPool.ts";
+import { commitStagedSourcesToKit, type LoadedStagedSource } from "./sourceIngest.ts";
+import { sanitizeUntrustedExcerpt, UNTRUSTED_POOL_INSTRUCTION } from "./verifiedPool.ts";
 
 export const SEED_KIT_JOB_KIND = "seed_kit_pillars";
+export const ORPHANED_JOB_RESTART_ERROR = "Interrupted by server restart";
 
 export interface SeedJobPayload {
   kitId: string;
@@ -109,6 +96,22 @@ export const PillarSeedLlmSchema = z.object({
 
 const activeJobRunners = new Map<string, Promise<void>>();
 
+const emptySeedProgress = (totalPillars: number): SeedJobProgress => ({
+  totalPillars,
+  completedPillarIds: [],
+  currentPillarId: null,
+  addedCards: 0,
+  addedDrills: 0,
+  addedGuideNotes: 0,
+});
+
+export function shouldAutoKickSeeder(override?: boolean): boolean {
+  return (
+    override ??
+    !(process.env.VITEST || process.env.NODE_ENV === "test" || isBackgroundJobsDisabled())
+  );
+}
+
 function parseJsonOr<T>(raw: string | null | undefined, fallback: T): T {
   if (!raw) return fallback;
   try {
@@ -118,28 +121,16 @@ function parseJsonOr<T>(raw: string | null | undefined, fallback: T): T {
   }
 }
 
-function normalizeThreeHints(
-  rawHints: readonly string[],
-  nodeName: string,
-): [string, string, string] {
+function normalizeThreeHints(rawHints: readonly string[], nodeName: string): [string, string, string] {
   const cleaned = rawHints.map((h) => h.trim()).filter(Boolean);
-  const h1 =
-    cleaned[0] ??
-    `Start by recalling the core invariant and purpose of ${nodeName}.`;
-  const h2 =
-    cleaned[1] ??
-    `Consider the primary bottleneck, failure mode, or boundary condition in ${nodeName}.`;
-  const h3 =
-    cleaned[2] ??
-    `Walk through a concrete step-by-step trace applying ${nodeName} to verify your answer.`;
-  return [h1, h2, h3];
+  return [
+    cleaned[0] ?? `Start by recalling the core invariant and purpose of ${nodeName}.`,
+    cleaned[1] ?? `Consider the primary bottleneck, failure mode, or boundary condition in ${nodeName}.`,
+    cleaned[2] ?? `Walk through a concrete step-by-step trace applying ${nodeName} to verify your answer.`,
+  ];
 }
 
-function clampDifficulty(raw: number): 1 | 2 | 3 {
-  if (raw <= 1) return 1;
-  if (raw >= 3) return 3;
-  return 2;
-}
+const clampDifficulty = (raw: number): 1 | 2 | 3 => (raw <= 1 ? 1 : raw >= 3 ? 3 : 2);
 
 function selectRelevantSourceChunks(
   db: Database.Database,
@@ -147,7 +138,7 @@ function selectRelevantSourceChunks(
   kitId: string,
   pillar: Pillar,
   nodes: ReadonlyArray<{ name: string; keywords: string[] }>,
-  limit: number = 6,
+  limit = 6,
 ): Array<{ id: string; title: string; text: string }> {
   const rows = db
     .prepare(
@@ -158,40 +149,34 @@ function selectRelevantSourceChunks(
        ORDER BY c.chunk_index ASC
        LIMIT 80`,
     )
-    .all(scope.ownerId, kitId) as Array<{
-    id: string;
-    title: string;
-    text: string;
-  }>;
+    .all(scope.ownerId, kitId) as Array<{ id: string; title: string; text: string }>;
 
   if (rows.length === 0) return [];
 
   const terms = new Set<string>();
-  for (const w of pillar.name.toLowerCase().split(/\W+/)) {
-    if (w.length >= 4) terms.add(w);
-  }
-  for (const t of pillar.topics) {
-    for (const w of t.name.toLowerCase().split(/\W+/)) {
+  const addWords = (str: string) => {
+    for (const w of str.toLowerCase().split(/\W+/)) {
       if (w.length >= 4) terms.add(w);
     }
-  }
+  };
+  addWords(pillar.name);
+  for (const t of pillar.topics) addWords(t.name);
   for (const n of nodes) {
     for (const kw of n.keywords) {
       if (kw.trim().length >= 3) terms.add(kw.trim().toLowerCase());
     }
   }
 
-  const scored = rows.map((row, idx) => {
-    const lower = row.text.toLowerCase();
-    let score = 0;
-    for (const term of terms) {
-      if (lower.includes(term)) score += 2;
-    }
-    return { row, score, idx };
-  });
-
-  scored.sort((a, b) => (b.score !== a.score ? b.score - a.score : a.idx - b.idx));
-  return scored.slice(0, limit).map((s) => s.row);
+  return rows
+    .map((row, idx) => {
+      const lower = row.text.toLowerCase();
+      let score = 0;
+      for (const term of terms) if (lower.includes(term)) score += 2;
+      return { row, score, idx };
+    })
+    .sort((a, b) => (b.score !== a.score ? b.score - a.score : a.idx - b.idx))
+    .slice(0, limit)
+    .map((s) => s.row);
 }
 
 function mintUniqueSeedKey(base: string, existingKeys: Set<string>): string {
@@ -227,8 +212,7 @@ export function enqueueKitSeedJob(
   const dedupeKey = `seed_kit:${opts.kitId}`;
   const existingActive = db
     .prepare(
-      `SELECT id, payload, progress
-       FROM jobs
+      `SELECT id, payload, progress FROM jobs
        WHERE ownerId = ? AND dedupeKey = ? AND status IN ('queued', 'running')
        LIMIT 1`,
     )
@@ -243,20 +227,16 @@ export function enqueueKitSeedJob(
       targetNodeIds: null,
       model: opts.model ?? null,
     });
-    const prevProgress = parseJsonOr<SeedJobProgress>(existingActive.progress, {
-      totalPillars: prevPayload.targetPillarIds.length,
-      completedPillarIds: [],
-      currentPillarId: null,
-      addedCards: 0,
-      addedDrills: 0,
-      addedGuideNotes: 0,
-    });
+    const prevProgress = parseJsonOr<SeedJobProgress>(
+      existingActive.progress,
+      emptySeedProgress(prevPayload.targetPillarIds.length),
+    );
 
     const mergedPillars = Array.from(
       new Set([...prevPayload.targetPillarIds, ...opts.targetPillarIds]),
     );
     const mergedNodes =
-      prevPayload.targetNodeIds === null || opts.targetNodeIds === undefined || opts.targetNodeIds === null
+      prevPayload.targetNodeIds === null || !opts.targetNodeIds
         ? null
         : Array.from(new Set([...prevPayload.targetNodeIds, ...opts.targetNodeIds]));
 
@@ -266,25 +246,18 @@ export function enqueueKitSeedJob(
       targetNodeIds: mergedNodes,
       model: opts.model ?? prevPayload.model,
     };
-    const completedFiltered = prevProgress.completedPillarIds.filter(
-      (id) => !opts.targetPillarIds.includes(id),
-    );
     const nextProgress: SeedJobProgress = {
       ...prevProgress,
       totalPillars: mergedPillars.length,
-      completedPillarIds: completedFiltered,
+      completedPillarIds: prevProgress.completedPillarIds.filter(
+        (id) => !opts.targetPillarIds.includes(id),
+      ),
     };
 
     db.prepare(
-      `UPDATE jobs
-       SET payload = ?, progress = ?, attempts = 0, lastError = NULL
+      `UPDATE jobs SET payload = ?, progress = ?, attempts = 0, lastError = NULL
        WHERE ownerId = ? AND id = ?`,
-    ).run(
-      JSON.stringify(nextPayload),
-      JSON.stringify(nextProgress),
-      scope.ownerId,
-      existingActive.id,
-    );
+    ).run(JSON.stringify(nextPayload), JSON.stringify(nextProgress), scope.ownerId, existingActive.id);
 
     return { jobId: existingActive.id, progress: nextProgress };
   }
@@ -296,27 +269,12 @@ export function enqueueKitSeedJob(
     targetNodeIds: opts.targetNodeIds ?? null,
     model: opts.model ?? null,
   };
-  const progress: SeedJobProgress = {
-    totalPillars: opts.targetPillarIds.length,
-    completedPillarIds: [],
-    currentPillarId: null,
-    addedCards: 0,
-    addedDrills: 0,
-    addedGuideNotes: 0,
-  };
+  const progress = emptySeedProgress(opts.targetPillarIds.length);
 
   db.prepare(
-    `INSERT INTO jobs (
-       id, kind, ownerId, payload, status, attempts, maxAttempts, progress, dedupeKey
-     ) VALUES (?, ?, ?, ?, 'queued', 0, 3, ?, ?)`,
-  ).run(
-    jobId,
-    SEED_KIT_JOB_KIND,
-    scope.ownerId,
-    JSON.stringify(payload),
-    JSON.stringify(progress),
-    dedupeKey,
-  );
+    `INSERT INTO jobs (id, kind, ownerId, payload, status, attempts, maxAttempts, progress, dedupeKey)
+     VALUES (?, ?, ?, ?, 'queued', 0, 3, ?, ?)`,
+  ).run(jobId, SEED_KIT_JOB_KIND, scope.ownerId, JSON.stringify(payload), JSON.stringify(progress), dedupeKey);
 
   return { jobId, progress };
 }
@@ -330,10 +288,7 @@ export function kickSeedJobRunner(db: Database.Database, jobId: string): void {
     .then(() => runSeedKitJob(db, jobId))
     .then(() => undefined)
     .catch((err) => {
-      log.warn(
-        "compiler.seedHydrator",
-        `Background seed job ${jobId} error: ${getErrorMessage(err)}`,
-      );
+      log.warn("compiler.seedHydrator", `Background seed job ${jobId} error: ${getErrorMessage(err)}`);
     })
     .finally(() => {
       activeJobRunners.delete(jobId);
@@ -354,9 +309,7 @@ export async function runSeedKitJob(
   const jobRow = db
     .prepare(
       `SELECT id, ownerId, payload, status, attempts, maxAttempts, progress
-       FROM jobs
-       WHERE id = ? AND kind = ?
-       LIMIT 1`,
+       FROM jobs WHERE id = ? AND kind = ? LIMIT 1`,
     )
     .get(jobId, SEED_KIT_JOB_KIND) as
     | {
@@ -371,9 +324,7 @@ export async function runSeedKitJob(
     | undefined;
 
   if (!jobRow || !jobRow.ownerId || jobRow.status === "done") {
-    return jobRow?.progress
-      ? parseJsonOr<SeedJobProgress | null>(jobRow.progress, null)
-      : null;
+    return jobRow?.progress ? parseJsonOr<SeedJobProgress | null>(jobRow.progress, null) : null;
   }
 
   const scope = scopeForOwnerId(jobRow.ownerId);
@@ -384,32 +335,23 @@ export async function runSeedKitJob(
     model: null,
   });
 
-  const kitExists = db
-    .prepare("SELECT id FROM kits WHERE ownerId = ? AND id = ? LIMIT 1")
-    .get(scope.ownerId, payload.kitId) as { id: string } | undefined;
-
-  if (!kitExists) {
+  if (!db.prepare("SELECT id FROM kits WHERE ownerId = ? AND id = ? LIMIT 1").get(scope.ownerId, payload.kitId)) {
     db.prepare(
-      `UPDATE jobs
-       SET status = 'done', finishedAt = CURRENT_TIMESTAMP
-       WHERE ownerId = ? AND id = ?`,
+      "UPDATE jobs SET status = 'done', finishedAt = CURRENT_TIMESTAMP WHERE ownerId = ? AND id = ?",
     ).run(scope.ownerId, jobId);
     return null;
   }
 
-  let progress = parseJsonOr<SeedJobProgress>(jobRow.progress, {
-    totalPillars: payload.targetPillarIds.length,
-    completedPillarIds: [],
-    currentPillarId: null,
-    addedCards: 0,
-    addedDrills: 0,
-    addedGuideNotes: 0,
-  });
+  let progress = parseJsonOr<SeedJobProgress>(
+    jobRow.progress,
+    emptySeedProgress(payload.targetPillarIds.length),
+  );
+
+  const saveProgressStmt = db.prepare("UPDATE jobs SET progress = ? WHERE ownerId = ? AND id = ?");
+  const saveProgress = () => saveProgressStmt.run(JSON.stringify(progress), scope.ownerId, jobId);
 
   db.prepare(
-    `UPDATE jobs
-     SET status = 'running', startedAt = COALESCE(startedAt, CURRENT_TIMESTAMP)
-     WHERE ownerId = ? AND id = ?`,
+    "UPDATE jobs SET status = 'running', startedAt = COALESCE(startedAt, CURRENT_TIMESTAMP) WHERE ownerId = ? AND id = ?",
   ).run(scope.ownerId, jobId);
 
   let processedInThisCall = 0;
@@ -420,21 +362,14 @@ export async function runSeedKitJob(
       // Re-read fresh payload/progress in case Living Kit Expand merged new pillars mid-run
       const freshJob = db
         .prepare("SELECT payload, progress FROM jobs WHERE ownerId = ? AND id = ?")
-        .get(scope.ownerId, jobId) as
-        | { payload: string; progress: string | null }
-        | undefined;
+        .get(scope.ownerId, jobId) as { payload: string; progress: string | null } | undefined;
       if (!freshJob) break;
 
-      const currentPayload = parseJsonOr<SeedJobPayload>(
-        freshJob.payload,
-        payload,
-      );
+      const currentPayload = parseJsonOr<SeedJobPayload>(freshJob.payload, payload);
       progress = parseJsonOr<SeedJobProgress>(freshJob.progress, progress);
 
       const kitRow = db
-        .prepare(
-          "SELECT id, slug, name, skeleton_json FROM kits WHERE ownerId = ? AND id = ? LIMIT 1",
-        )
+        .prepare("SELECT id, slug, name, skeleton_json FROM kits WHERE ownerId = ? AND id = ? LIMIT 1")
         .get(scope.ownerId, currentPayload.kitId) as
         | { id: string; slug: string; name: string; skeleton_json: string }
         | undefined;
@@ -448,74 +383,40 @@ export async function runSeedKitJob(
       const pendingPillars = targetPillars.filter((p) => !completedSet.has(p.id));
 
       if (pendingPillars.length === 0) {
-        // All target pillars seeded -> mark Kit ready and Job done!
-        const finishTx = db.transaction(() => {
+        db.transaction(() => {
           db.prepare(
-            `UPDATE kits
-             SET status = 'ready', status_detail = NULL, updated_at = datetime('now')
-             WHERE ownerId = ? AND id = ?`,
+            "UPDATE kits SET status = 'ready', status_detail = NULL, updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
           ).run(scope.ownerId, kitRow.id);
-
-          progress = {
-            ...progress,
-            totalPillars: targetPillars.length,
-            currentPillarId: null,
-          };
+          progress = { ...progress, totalPillars: targetPillars.length, currentPillarId: null };
           db.prepare(
-            `UPDATE jobs
-             SET status = 'done', progress = ?, finishedAt = CURRENT_TIMESTAMP, lastError = NULL
-             WHERE ownerId = ? AND id = ?`,
+            "UPDATE jobs SET status = 'done', progress = ?, finishedAt = CURRENT_TIMESTAMP, lastError = NULL WHERE ownerId = ? AND id = ?",
           ).run(JSON.stringify(progress), scope.ownerId, jobId);
-        });
-        finishTx();
+        })();
         return progress;
       }
 
       const pillar = pendingPillars[0];
       const doneIdx = targetPillars.length - pendingPillars.length + 1;
-      const statusBanner = `Seeding Pillar ${doneIdx}/${targetPillars.length}: ${pillar.shortName}…`;
+      progress = { ...progress, totalPillars: targetPillars.length, currentPillarId: pillar.id };
 
-      progress = {
-        ...progress,
-        totalPillars: targetPillars.length,
-        currentPillarId: pillar.id,
-      };
       db.prepare(
         "UPDATE kits SET status = 'seeding', status_detail = ? WHERE ownerId = ? AND id = ?",
-      ).run(statusBanner, scope.ownerId, kitRow.id);
-      db.prepare(
-        "UPDATE jobs SET progress = ? WHERE ownerId = ? AND id = ?",
-      ).run(JSON.stringify(progress), scope.ownerId, jobId);
+      ).run(`Seeding Pillar ${doneIdx}/${targetPillars.length}: ${pillar.shortName}…`, scope.ownerId, kitRow.id);
+      saveProgress();
 
-      // Filter nodes belonging to this pillar (and optional targetNodeIds for Living Kit expand)
-      const targetNodeSet = currentPayload.targetNodeIds
-        ? new Set(currentPayload.targetNodeIds)
-        : null;
+      const targetNodeSet = currentPayload.targetNodeIds ? new Set(currentPayload.targetNodeIds) : null;
       const pillarNodes = currentSkeleton.graph.nodes.filter(
-        (n) =>
-          n.pillarId === pillar.id &&
-          (targetNodeSet === null || targetNodeSet.has(n.id)),
+        (n) => n.pillarId === pillar.id && (targetNodeSet === null || targetNodeSet.has(n.id)),
       );
 
       if (pillarNodes.length === 0) {
-        progress.completedPillarIds = Array.from(
-          new Set([...progress.completedPillarIds, pillar.id]),
-        );
-        db.prepare(
-          "UPDATE jobs SET progress = ? WHERE ownerId = ? AND id = ?",
-        ).run(JSON.stringify(progress), scope.ownerId, jobId);
+        progress.completedPillarIds = Array.from(new Set([...progress.completedPillarIds, pillar.id]));
+        saveProgress();
         processedInThisCall++;
         continue;
       }
 
-      const groundingChunks = selectRelevantSourceChunks(
-        db,
-        scope,
-        kitRow.id,
-        pillar,
-        pillarNodes,
-        6,
-      );
+      const groundingChunks = selectRelevantSourceChunks(db, scope, kitRow.id, pillar, pillarNodes, 6);
       const groundingBlock =
         groundingChunks.length > 0
           ? `${UNTRUSTED_POOL_INSTRUCTION}\n\n` +
@@ -528,17 +429,12 @@ export async function runSeedKitJob(
           : "Reference Source Chunks: (none uploaded — ground content in rigorous domain fundamentals).";
 
       const nodesDesc = pillarNodes
-        .map(
-          (n) =>
-            `- nodeId="${n.id}" (topicId="${n.topicId ?? ""}"): ${n.name} — ${n.summary}`,
-        )
+        .map((n) => `- nodeId="${n.id}" (topicId="${n.topicId ?? ""}"): ${n.name} — ${n.summary}`)
         .join("\n");
       const sectionsDesc = pillar.sections
         .map((s) => `- sectionId="${s.id}": ${s.name} (${s.promptHint})`)
         .join("\n");
-      const topicsDesc = pillar.topics
-        .map((t) => `- topicId="${t.id}": ${t.name}`)
-        .join("\n");
+      const topicsDesc = pillar.topics.map((t) => `- topicId="${t.id}": ${t.name}`).join("\n");
 
       const targetCardCount = Math.min(20, Math.max(4, pillarNodes.length * 2));
       const targetDrillCount = Math.min(8, Math.max(2, Math.ceil(pillarNodes.length / 2)));
@@ -566,47 +462,33 @@ export async function runSeedKitJob(
         feature: "compiler.seedPillar",
       });
 
-      // Re-load latest skeleton right before commit so concurrent metadata edits aren't overwritten
       const latestKitRow = db
-        .prepare(
-          "SELECT skeleton_json FROM kits WHERE ownerId = ? AND id = ? LIMIT 1",
-        )
+        .prepare("SELECT skeleton_json FROM kits WHERE ownerId = ? AND id = ? LIMIT 1")
         .get(scope.ownerId, kitRow.id) as { skeleton_json: string } | undefined;
       if (!latestKitRow) break;
 
       const latestSkeleton = parseStoredSkeleton(latestKitRow.skeleton_json);
       const latestPillar = latestSkeleton.pillars.find((p) => p.id === pillar.id);
       if (!latestPillar) {
-        progress.completedPillarIds = Array.from(
-          new Set([...progress.completedPillarIds, pillar.id]),
-        );
-        db.prepare(
-          "UPDATE jobs SET progress = ? WHERE ownerId = ? AND id = ?",
-        ).run(JSON.stringify(progress), scope.ownerId, jobId);
+        progress.completedPillarIds = Array.from(new Set([...progress.completedPillarIds, pillar.id]));
+        saveProgress();
         processedInThisCall++;
         continue;
       }
 
       const validPillarNodeIds = new Set(
-        latestSkeleton.graph.nodes
-          .filter((n) => n.pillarId === latestPillar.id)
-          .map((n) => n.id),
+        latestSkeleton.graph.nodes.filter((n) => n.pillarId === latestPillar.id).map((n) => n.id),
       );
       const validTopicIds = new Set(latestPillar.topics.map((t) => t.id));
       const validSectionIds = new Set(latestPillar.sections.map((s) => s.id));
-      const nodeById = new Map(
-        latestSkeleton.graph.nodes.map((n) => [n.id, n]),
-      );
+      const nodeById = new Map(latestSkeleton.graph.nodes.map((n) => [n.id, n]));
       const fallbackNodeId =
-        pillarNodes.find((n) => validPillarNodeIds.has(n.id))?.id ??
-        Array.from(validPillarNodeIds)[0];
+        pillarNodes.find((n) => validPillarNodeIds.has(n.id))?.id ?? Array.from(validPillarNodeIds)[0];
 
       const existingCardKeys = new Set(
         (latestSkeleton.seeds.starterDeck?.cards ?? []).map((c) => c.key),
       );
-      const existingDrillKeys = new Set(
-        latestSkeleton.seeds.drills.map((d) => d.key),
-      );
+      const existingDrillKeys = new Set(latestSkeleton.seeds.drills.map((d) => d.key));
 
       const newCardSeeds: StarterCardSeed[] = [];
       const cardIndexToKey = new Map<number, string>();
@@ -616,9 +498,7 @@ export async function runSeedKitJob(
         const back = rawCard.back.trim();
         if (!front || !back || !fallbackNodeId) return;
 
-        const nodeId = validPillarNodeIds.has(rawCard.nodeId)
-          ? rawCard.nodeId
-          : fallbackNodeId;
+        const nodeId = validPillarNodeIds.has(rawCard.nodeId) ? rawCard.nodeId : fallbackNodeId;
         const nodeObj = nodeById.get(nodeId);
         const topicId =
           rawCard.topicId && validTopicIds.has(rawCard.topicId)
@@ -637,15 +517,11 @@ export async function runSeedKitJob(
         );
         cardIndexToKey.set(idx, key);
 
-        let prerequisiteKey: string | undefined;
-        if (
-          rawCard.prerequisiteCardIndex !== null &&
-          Number.isInteger(rawCard.prerequisiteCardIndex) &&
-          rawCard.prerequisiteCardIndex >= 0 &&
-          rawCard.prerequisiteCardIndex < idx
-        ) {
-          prerequisiteKey = cardIndexToKey.get(rawCard.prerequisiteCardIndex);
-        }
+        const preIdx = rawCard.prerequisiteCardIndex;
+        const prerequisiteKey =
+          preIdx !== null && Number.isInteger(preIdx) && preIdx >= 0 && preIdx < idx
+            ? cardIndexToKey.get(preIdx)
+            : undefined;
 
         newCardSeeds.push({
           key,
@@ -665,26 +541,21 @@ export async function runSeedKitJob(
         const workedSolution = rawDrill.workedSolution.trim();
         if (!prompt || !workedSolution || !fallbackNodeId) return;
 
-        const nodeId = validPillarNodeIds.has(rawDrill.nodeId)
-          ? rawDrill.nodeId
-          : fallbackNodeId;
+        const nodeId = validPillarNodeIds.has(rawDrill.nodeId) ? rawDrill.nodeId : fallbackNodeId;
         const nodeName = nodeById.get(nodeId)?.name ?? latestPillar.name;
         const rubricPoints = rawDrill.rubricPoints
           .map((r) => r.trim())
           .filter(Boolean)
           .slice(0, 6);
         if (rubricPoints.length === 0) {
-          rubricPoints.push(
-            `Accurately applies core principles and tradeoffs of ${nodeName}.`,
-          );
+          rubricPoints.push(`Accurately applies core principles and tradeoffs of ${nodeName}.`);
         }
 
-        const key = mintUniqueSeedKey(
-          `${latestSkeleton.identity.slug}:${latestPillar.id}:drill:${idx + 1}`,
-          existingDrillKeys,
-        );
         newDrillSeeds.push({
-          key,
+          key: mintUniqueSeedKey(
+            `${latestSkeleton.identity.slug}:${latestPillar.id}:drill:${idx + 1}`,
+            existingDrillKeys,
+          ),
           nodeId,
           difficulty: clampDifficulty(rawDrill.difficulty),
           prompt,
@@ -701,8 +572,7 @@ export async function runSeedKitJob(
       );
       const newBaselineNotes = generated.baselineGuideNotes
         .filter((n) => {
-          if (!n.content.trim()) return false;
-          if (!validTopicIds.has(n.topicId) || !validSectionIds.has(n.sectionId)) {
+          if (!n.content.trim() || !validTopicIds.has(n.topicId) || !validSectionIds.has(n.sectionId)) {
             return false;
           }
           const slot = `${latestPillar.id}\0${n.topicId}\0${n.sectionId}`;
@@ -731,10 +601,7 @@ export async function runSeedKitJob(
             cards: [...prevStarterDeck.cards, ...newCardSeeds],
           },
           drills: [...latestSkeleton.seeds.drills, ...newDrillSeeds],
-          baselineGuideNotes: [
-            ...latestSkeleton.seeds.baselineGuideNotes,
-            ...newBaselineNotes,
-          ],
+          baselineGuideNotes: [...latestSkeleton.seeds.baselineGuideNotes, ...newBaselineNotes],
         },
       });
 
@@ -744,20 +611,12 @@ export async function runSeedKitJob(
         ? null
         : `Seeding Pillar ${doneIdx + 1}/${targetPillars.length}: ${remainingAfterThis[0].shortName}…`;
 
-      const commitPillarTx = db.transaction(() => {
-        const hydrated = seedKitStarterContent(
-          db,
-          scope,
-          kitRow.id,
-          updatedSkeleton,
-        );
+      db.transaction(() => {
+        const hydrated = seedKitStarterContent(db, scope, kitRow.id, updatedSkeleton);
 
-        const nextCompleted = Array.from(
-          new Set([...progress.completedPillarIds, latestPillar.id]),
-        );
         progress = {
           totalPillars: targetPillars.length,
-          completedPillarIds: nextCompleted,
+          completedPillarIds: Array.from(new Set([...progress.completedPillarIds, latestPillar.id])),
           currentPillarId: isFinalPillar ? null : remainingAfterThis[0].id,
           addedCards: progress.addedCards + hydrated.addedCards,
           addedDrills: progress.addedDrills + hydrated.addedDrills,
@@ -766,10 +625,7 @@ export async function runSeedKitJob(
 
         db.prepare(
           `UPDATE kits
-           SET skeleton_json = ?,
-               status = ?,
-               status_detail = ?,
-               updated_at = datetime('now')
+           SET skeleton_json = ?, status = ?, status_detail = ?, updated_at = datetime('now')
            WHERE ownerId = ? AND id = ?`,
         ).run(
           JSON.stringify(updatedSkeleton),
@@ -781,23 +637,13 @@ export async function runSeedKitJob(
 
         if (isFinalPillar) {
           db.prepare(
-            `UPDATE jobs
-             SET status = 'done', progress = ?, finishedAt = CURRENT_TIMESTAMP, lastError = NULL
-             WHERE ownerId = ? AND id = ?`,
+            "UPDATE jobs SET status = 'done', progress = ?, finishedAt = CURRENT_TIMESTAMP, lastError = NULL WHERE ownerId = ? AND id = ?",
           ).run(JSON.stringify(progress), scope.ownerId, jobId);
         } else {
-          db.prepare(
-            `UPDATE jobs
-             SET progress = ?
-             WHERE ownerId = ? AND id = ?`,
-          ).run(JSON.stringify(progress), scope.ownerId, jobId);
+          saveProgress();
         }
+      })();
 
-        return hydrated;
-      });
-      commitPillarTx();
-
-      // Index newly inserted flashcards and baseline guide notes into hybrid RAG
       const ragInputs: UpsertRagChunkInput[] = [];
       if (newCardSeeds.length > 0) {
         const cardRows = db
@@ -829,27 +675,21 @@ export async function runSeedKitJob(
         }
       }
 
-      if (newBaselineNotes.length > 0) {
-        for (const note of newBaselineNotes) {
-          if (!note.content.trim()) continue;
-          ragInputs.push({
-            kitId: kitRow.id,
-            kind: "guide",
-            sourceRefId: `${note.pillarId}:${note.topicId}:${note.sectionId}`,
-            title: `${note.topicId} — ${note.sectionId}`,
-            content: note.content,
-          });
-        }
+      for (const note of newBaselineNotes) {
+        if (!note.content.trim()) continue;
+        ragInputs.push({
+          kitId: kitRow.id,
+          kind: "guide",
+          sourceRefId: `${note.pillarId}:${note.topicId}:${note.sectionId}`,
+          title: `${note.topicId} — ${note.sectionId}`,
+          content: note.content,
+        });
       }
 
-      if (ragInputs.length > 0) {
-        await upsertRagChunksBatch(db, scope, ragInputs);
-      }
+      if (ragInputs.length > 0) await upsertRagChunksBatch(db, scope, ragInputs);
 
       processedInThisCall++;
-      if (isFinalPillar) {
-        return progress;
-      }
+      if (isFinalPillar) return progress;
     }
 
     return progress;
@@ -860,26 +700,15 @@ export async function runSeedKitJob(
 
     db.prepare(
       `UPDATE jobs
-       SET status = ?,
-           attempts = ?,
-           lastError = ?,
+       SET status = ?, attempts = ?, lastError = ?,
            finishedAt = CASE WHEN ? THEN CURRENT_TIMESTAMP ELSE NULL END
        WHERE ownerId = ? AND id = ?`,
-    ).run(
-      exhausted ? "failed" : "queued",
-      nextAttempts,
-      errMsg,
-      exhausted ? 1 : 0,
-      scope.ownerId,
-      jobId,
-    );
+    ).run(exhausted ? "failed" : "queued", nextAttempts, errMsg, exhausted ? 1 : 0, scope.ownerId, jobId);
 
     if (exhausted) {
       db.prepare(
         `UPDATE kits
-         SET status = 'ready',
-             status_detail = 'Starter seeding paused (retry via Expand Kit)',
-             updated_at = datetime('now')
+         SET status = 'ready', status_detail = 'Starter seeding paused (retry via Expand Kit)', updated_at = datetime('now')
          WHERE ownerId = ? AND id = ?`,
       ).run(scope.ownerId, payload.kitId);
     }
@@ -888,8 +717,6 @@ export async function runSeedKitJob(
   }
 }
 
-export const ORPHANED_JOB_RESTART_ERROR = "Interrupted by server restart";
-
 export interface RecoverOrphanedJobsResult {
   recoveredCount: number;
   recoveredJobIds: string[];
@@ -897,32 +724,19 @@ export interface RecoverOrphanedJobsResult {
 
 /**
  * Idempotent startup recovery: marks any orphaned `status = 'running'` rows
- * left behind in `jobs` by a crashed or restarted server process as `'failed'`
- * (`lastError = 'Interrupted by server restart'`), leaving `'queued'` and
- * completed (`'done'` / `'completed'`) rows untouched.
+ * left behind in `jobs` by a crashed or restarted server process as `'failed'`.
  */
 export function recoverOrphanedRunningJobs(
   db: Database.Database,
   opts: { ownerId?: string; kitId?: string } = {},
 ): RecoverOrphanedJobsResult {
-  const tx = db.transaction((): RecoverOrphanedJobsResult => {
-    const runningRows = (
-      opts.ownerId
-        ? db
-            .prepare(
-              `SELECT id, kind, ownerId, payload
-               FROM jobs
-               WHERE ownerId = ? AND status = 'running'`,
-            )
-            .all(opts.ownerId)
-        : db
-            .prepare(
-              `SELECT id, kind, ownerId, payload
-               FROM jobs
-               WHERE status = 'running'`,
-            )
-            .all()
-    ) as Array<{
+  return db.transaction((): RecoverOrphanedJobsResult => {
+    const filterOwner = opts.ownerId ?? null;
+    const runningRows = db
+      .prepare(
+        "SELECT id, kind, ownerId, payload FROM jobs WHERE status = 'running' AND (? IS NULL OR ownerId = ?)",
+      )
+      .all(filterOwner, filterOwner) as Array<{
       id: string;
       kind: string;
       ownerId: string | null;
@@ -932,28 +746,21 @@ export function recoverOrphanedRunningJobs(
     const orphaned = runningRows.filter((row) => {
       if (activeJobRunners.has(row.id)) return false;
       if (opts.kitId) {
-        const parsed = parseJsonOr<{ kitId?: string }>(row.payload, {});
-        return parsed.kitId === opts.kitId;
+        return parseJsonOr<{ kitId?: string }>(row.payload, {}).kitId === opts.kitId;
       }
       return true;
     });
 
-    if (orphaned.length === 0) {
-      return { recoveredCount: 0, recoveredJobIds: [] };
-    }
+    if (orphaned.length === 0) return { recoveredCount: 0, recoveredJobIds: [] };
 
     const markJobFailed = db.prepare(
       `UPDATE jobs
-       SET status = 'failed',
-           lastError = ?,
-           finishedAt = COALESCE(finishedAt, CURRENT_TIMESTAMP)
+       SET status = 'failed', lastError = ?, finishedAt = COALESCE(finishedAt, CURRENT_TIMESTAMP)
        WHERE id = ? AND status = 'running'`,
     );
     const resetKitSeedingBanner = db.prepare(
       `UPDATE kits
-       SET status = 'ready',
-           status_detail = ?,
-           updated_at = datetime('now')
+       SET status = 'ready', status_detail = ?, updated_at = datetime('now')
        WHERE ownerId = ? AND id = ? AND status = 'seeding'`,
     );
 
@@ -965,23 +772,14 @@ export function recoverOrphanedRunningJobs(
         if (row.ownerId && row.kind === SEED_KIT_JOB_KIND) {
           const parsed = parseJsonOr<{ kitId?: string }>(row.payload, {});
           if (parsed.kitId) {
-            resetKitSeedingBanner.run(
-              ORPHANED_JOB_RESTART_ERROR,
-              row.ownerId,
-              parsed.kitId,
-            );
+            resetKitSeedingBanner.run(ORPHANED_JOB_RESTART_ERROR, row.ownerId, parsed.kitId);
           }
         }
       }
     }
 
-    return {
-      recoveredCount: recoveredJobIds.length,
-      recoveredJobIds,
-    };
-  });
-
-  return tx();
+    return { recoveredCount: recoveredJobIds.length, recoveredJobIds };
+  })();
 }
 
 /**
@@ -993,22 +791,14 @@ export async function resumePendingSeedJobs(
 ): Promise<string[]> {
   const rows = db
     .prepare(
-      `SELECT id
-       FROM jobs
-       WHERE kind = ? AND status IN ('queued', 'running')
-       ORDER BY createdAt ASC`,
+      "SELECT id FROM jobs WHERE kind = ? AND status IN ('queued', 'running') ORDER BY createdAt ASC",
     )
     .all(SEED_KIT_JOB_KIND) as Array<{ id: string }>;
 
   const ids = rows.map((r) => r.id);
-  if (opts.awaitCompletion) {
-    for (const id of ids) {
-      await runSeedKitJob(db, id);
-    }
-  } else {
-    for (const id of ids) {
-      kickSeedJobRunner(db, id);
-    }
+  for (const id of ids) {
+    if (opts.awaitCompletion) await runSeedKitJob(db, id);
+    else kickSeedJobRunner(db, id);
   }
   return ids;
 }
@@ -1021,11 +811,9 @@ export function getKitSeedStatus(
   const kit = getOwnedKit(db, scope, slugOrId);
   const jobRow = db
     .prepare(
-      `SELECT id, status, attempts, lastError, progress
-       FROM jobs
+      `SELECT id, status, attempts, lastError, progress FROM jobs
        WHERE ownerId = ? AND kind = ? AND dedupeKey = ?
-       ORDER BY createdAt DESC
-       LIMIT 1`,
+       ORDER BY createdAt DESC LIMIT 1`,
     )
     .get(scope.ownerId, SEED_KIT_JOB_KIND, `seed_kit:${kit.id}`) as
     | {
@@ -1051,14 +839,10 @@ export function getKitSeedStatus(
           status: jobRow.status,
           attempts: jobRow.attempts,
           lastError: jobRow.lastError,
-          progress: parseJsonOr<SeedJobProgress>(jobRow.progress, {
-            totalPillars: kit.pillarCount,
-            completedPillarIds: [],
-            currentPillarId: null,
-            addedCards: 0,
-            addedDrills: 0,
-            addedGuideNotes: 0,
-          }),
+          progress: parseJsonOr<SeedJobProgress>(
+            jobRow.progress,
+            emptySeedProgress(kit.pillarCount),
+          ),
         }
       : null,
   };
@@ -1092,28 +876,22 @@ export async function commitCompiledKit(
   try {
     verified = verifyKitSkeleton(normalizeEditedDraftSkeleton(input.skeleton));
   } catch (err) {
-    throw new AppError(
-      `Invalid Study Kit skeleton: ${getErrorMessage(err)}`,
-      400,
-      { code: "INVALID_KIT_SKELETON" },
-    );
+    throw new AppError(`Invalid Study Kit skeleton: ${getErrorMessage(err)}`, 400, {
+      code: "INVALID_KIT_SKELETON",
+    });
   }
 
   const kitId = crypto.randomUUID();
   const uniqueSlug = mintUniqueKitSlug(db, scope, verified.identity.slug);
   const deckName =
-    verified.seeds.starterDeck?.name?.trim() ||
-    `${verified.identity.name} Core`.slice(0, 90);
+    verified.seeds.starterDeck?.name?.trim() || `${verified.identity.name} Core`.slice(0, 90);
   const deckDesc =
     verified.seeds.starterDeck?.description ??
     `Core spaced-repetition cards for ${verified.identity.name}.`;
 
   const storedSkeleton: KitSkeletonV1 = {
     ...verified,
-    identity: {
-      ...verified.identity,
-      slug: uniqueSlug,
-    },
+    identity: { ...verified.identity, slug: uniqueSlug },
     seeds: {
       ...verified.seeds,
       starterDeck: {
@@ -1124,11 +902,10 @@ export async function commitCompiledKit(
     },
   };
 
-  const firstPillar = storedSkeleton.pillars[0];
-  const initialBanner = `Seeding Pillar 1/${storedSkeleton.pillars.length}: ${firstPillar.shortName}…`;
+  const initialBanner = `Seeding Pillar 1/${storedSkeleton.pillars.length}: ${storedSkeleton.pillars[0].shortName}…`;
 
   let jobId = "";
-  const createTx = db.transaction(() => {
+  db.transaction(() => {
     db.prepare(
       `INSERT INTO kits (
          id, ownerId, slug, name, description, icon, color,
@@ -1148,25 +925,21 @@ export async function commitCompiledKit(
       JSON.stringify(storedSkeleton),
     );
 
-    // Create empty starter deck immediately so workspace deck views work on arrival
     db.prepare(
       `INSERT INTO decks (
          id, ownerId, kit_id, name, description, color_index, tags, settings, created_at, updated_at
        ) VALUES (?, ?, ?, ?, ?, 0, '', '{}', datetime('now'), datetime('now'))`,
     ).run(crypto.randomUUID(), scope.ownerId, kitId, deckName, deckDesc);
 
-    // Hydrate any pre-existing seeds if skeleton carried any
     seedKitStarterContent(db, scope, kitId, storedSkeleton);
 
-    const enqueued = enqueueKitSeedJob(db, scope, {
+    jobId = enqueueKitSeedJob(db, scope, {
       kitId,
       targetPillarIds: storedSkeleton.pillars.map((p) => p.id),
       targetNodeIds: null,
       model: input.model ?? null,
-    });
-    jobId = enqueued.jobId;
-  });
-  createTx();
+    }).jobId;
+  })();
 
   const sourceRes = await commitStagedSourcesToKit(
     db,
@@ -1175,24 +948,12 @@ export async function commitCompiledKit(
     input.stagedSources ?? [],
   );
 
-  const shouldKick =
-    input.runSeederInBackground ??
-    !(
-      process.env.VITEST ||
-      process.env.NODE_ENV === "test" ||
-      isBackgroundJobsDisabled()
-    );
-  if (shouldKick) {
+  if (shouldAutoKickSeeder(input.runSeederInBackground)) {
     kickSeedJobRunner(db, jobId);
   }
 
-  const kit = getOwnedKit(db, scope, kitId);
-  if (!kit) {
-    throw new NotFoundError("Kit", kitId);
-  }
-
   return {
-    kit,
+    kit: getOwnedKit(db, scope, kitId),
     jobId,
     committedSourceIds: sourceRes.sourceIds,
   };

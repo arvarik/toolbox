@@ -101,35 +101,10 @@ userAiSettingsRouter.post(
   }),
 );
 
-userAiSettingsRouter.post(
-  "/endpoints",
+const saveUserEndpoint = (statusCode: number) =>
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const skipProbe = body.skipProbe === true;
-    const allowPrivate = canUsePrivateEndpoint({
-      isAdmin: req.principal?.user.role === "admin",
-      scope,
-    });
-    const input = CustomEndpointInputSchema.parse({
-      name: body.name,
-      baseUrl: body.baseUrl,
-      apiKey: body.apiKey,
-    });
-    const endpoint = await upsertUserCustomEndpoint(scope, input, undefined, {
-      skipProbe,
-      allowPrivate,
-    });
-    res.status(201).json(endpoint);
-  }),
-);
-
-userAiSettingsRouter.put(
-  "/endpoints/:id",
-  asyncHandler(async (req, res) => {
-    const scope = scopeOf(req);
-    const body = (req.body ?? {}) as Record<string, unknown>;
-    const skipProbe = body.skipProbe === true;
     const allowPrivate = canUsePrivateEndpoint({
       isAdmin: req.principal?.user.role === "admin",
       scope,
@@ -142,12 +117,14 @@ userAiSettingsRouter.put(
     const endpoint = await upsertUserCustomEndpoint(
       scope,
       input,
-      String(req.params.id),
-      { skipProbe, allowPrivate },
+      req.params.id ? String(req.params.id) : undefined,
+      { skipProbe: body.skipProbe === true, allowPrivate },
     );
-    res.json(endpoint);
-  }),
-);
+    res.status(statusCode).json(endpoint);
+  });
+
+userAiSettingsRouter.post("/endpoints", saveUserEndpoint(201));
+userAiSettingsRouter.put("/endpoints/:id", saveUserEndpoint(200));
 
 userAiSettingsRouter.delete("/endpoints/:id", (req, res) => {
   const scope = scopeOf(req);

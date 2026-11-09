@@ -2,9 +2,8 @@ import type Database from "better-sqlite3";
 import { NotFoundError, ValidationError } from "../platform/net/errors.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
-import { deleteRagChunksBySource } from "../search/hybridSearch.ts";
 import {
-  getArchivedGuideNotes,
+  deleteGuideSlotAndRag,
   getOwnedKit,
   parseStoredSkeleton,
   safeSkeletonSlotSet,
@@ -29,20 +28,14 @@ export function syncKitStructure(
   scope: Scope,
   slugOrId: string,
   nextSkeletonInput: unknown,
-  opts: {
-    forkedVersion?: number;
-    forkedFromSharedId?: string | null;
-  } = {},
+  opts: { forkedVersion?: number; forkedFromSharedId?: string | null } = {},
 ): KitSyncResult {
   const verified = validateAndVerifySkeleton(nextSkeletonInput);
   const existing = getOwnedKit(db, scope, slugOrId);
 
   const normalizedSkeleton: KitSkeletonV1 = {
     ...verified,
-    identity: {
-      ...verified.identity,
-      slug: existing.slug,
-    },
+    identity: { ...verified.identity, slug: existing.slug },
   };
 
   const nodeAliases = normalizedSkeleton.migrations?.nodeAliases ?? {};
@@ -63,19 +56,13 @@ export function syncKitStructure(
   const uniqueTopicPillar = new Map<string, string | null>();
   for (const p of normalizedSkeleton.pillars) {
     for (const t of p.topics) {
-      if (uniqueTopicPillar.has(t.id)) {
-        uniqueTopicPillar.set(t.id, null); // ambiguous across multiple pillars
-      } else {
-        uniqueTopicPillar.set(t.id, p.id);
-      }
+      uniqueTopicPillar.set(t.id, uniqueTopicPillar.has(t.id) ? null : p.id);
     }
   }
 
-  const runSync = db.transaction(() => {
+  const stats = db.transaction(() => {
     const nextForkedVersion =
-      opts.forkedVersion ??
-      normalizedSkeleton.identity.version ??
-      existing.forkedVersion;
+      opts.forkedVersion ?? normalizedSkeleton.identity.version ?? existing.forkedVersion;
     const nextSharedId =
       opts.forkedFromSharedId !== undefined
         ? opts.forkedFromSharedId
@@ -107,10 +94,7 @@ export function syncKitStructure(
          JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
          WHERE f.ownerId = ? AND d.kit_id = ? AND f.node_id IS NOT NULL`,
       )
-      .all(scope.ownerId, existing.id) as Array<{
-      id: string;
-      node_id: string;
-    }>;
+      .all(scope.ownerId, existing.id) as Array<{ id: string; node_id: string }>;
 
     let remappedCards = 0;
     let clearedOrphanNodeCards = 0;
@@ -143,21 +127,20 @@ export function syncKitStructure(
     for (const r of remRows) {
       const aliased = nodeAliases[r.node_id] ?? r.node_id;
       const finalNode = validNodeIds.has(aliased) ? aliased : null;
-      if (finalNode !== r.node_id) {
-        updateRemNode.run(finalNode, scope.ownerId, r.id);
-      }
+      if (finalNode !== r.node_id) updateRemNode.run(finalNode, scope.ownerId, r.id);
     }
 
     // 2. Remap drills.node_id when aliased to a valid node (NEVER DELETE drills!)
+    const updateDrillNode = db.prepare(
+      "UPDATE drills SET node_id = ? WHERE ownerId = ? AND kit_id = ? AND node_id = ?",
+    );
     for (const [oldNodeId, newNodeId] of Object.entries(nodeAliases)) {
       if (oldNodeId !== newNodeId && validNodeIds.has(newNodeId)) {
-        db.prepare(
-          "UPDATE drills SET node_id = ? WHERE ownerId = ? AND kit_id = ? AND node_id = ?",
-        ).run(newNodeId, scope.ownerId, existing.id, oldNodeId);
+        updateDrillNode.run(newNodeId, scope.ownerId, existing.id, oldNodeId);
       }
     }
 
-    // 3. Remap moved guide_content via topicAliases or cross-pillar topic moves (ON CONFLICT DO NOTHING)
+    // 3. Remap moved guide_content via topicAliases or cross-pillar topic moves
     const guideRows = db
       .prepare(
         `SELECT pillar_id, topic_id, section_id, content, committed_at, embedding
@@ -188,38 +171,22 @@ export function syncKitStructure(
          embedding = excluded.embedding
        WHERE guide_content.content IS NULL OR guide_content.content = ''`,
     );
-    const deleteOldNoteStmt = db.prepare(
-      `DELETE FROM guide_content
-       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
-    );
 
     for (const g of guideRows) {
-      if (validSlots.has(`${g.pillar_id}\0${g.topic_id}\0${g.section_id}`)) {
-        continue;
-      }
+      if (validSlots.has(`${g.pillar_id}\0${g.topic_id}\0${g.section_id}`)) continue;
 
       const targetTopicId = topicAliases[g.topic_id] ?? g.topic_id;
-      let targetPillarId: string | null = null;
-
       const samePillar = pillarsById.get(g.pillar_id);
-      if (
-        samePillar &&
-        samePillar.topics.has(targetTopicId) &&
-        samePillar.sections.has(g.section_id)
-      ) {
-        targetPillarId = g.pillar_id;
-      } else {
-        const movedPillarId = uniqueTopicPillar.get(targetTopicId) ?? null;
-        const movedPillar = movedPillarId ? pillarsById.get(movedPillarId) : null;
-        if (movedPillar && movedPillar.sections.has(g.section_id)) {
-          targetPillarId = movedPillarId;
-        }
-      }
+      const movedPillarId = uniqueTopicPillar.get(targetTopicId) ?? null;
+      const targetPillarId =
+        samePillar?.topics.has(targetTopicId) && samePillar.sections.has(g.section_id)
+          ? g.pillar_id
+          : movedPillarId && pillarsById.get(movedPillarId)?.sections.has(g.section_id)
+            ? movedPillarId
+            : null;
 
-      if (!targetPillarId) {
-        // Leave intact in guide_content -> surfaced in Archived Notes drawer
-        continue;
-      }
+      // Leave unmapped notes intact in guide_content -> surfaced in Archived Notes drawer
+      if (!targetPillarId) continue;
 
       const dest = checkDestStmt.get(
         scope.ownerId,
@@ -229,7 +196,7 @@ export function syncKitStructure(
         g.section_id,
       ) as { content: string } | undefined;
 
-      if (!dest || !dest.content || dest.content === "") {
+      if (!dest?.content) {
         upsertDestStmt.run(
           scope.ownerId,
           existing.id,
@@ -240,52 +207,21 @@ export function syncKitStructure(
           g.committed_at,
           g.embedding,
         );
-        deleteOldNoteStmt.run(
-          scope.ownerId,
-          existing.id,
-          g.pillar_id,
-          g.topic_id,
-          g.section_id,
-        );
-        deleteRagChunksBySource(
-          db,
-          scope,
-          existing.id,
-          "guide",
-          `${g.pillar_id}:${g.topic_id}:${g.section_id}`,
-        );
+        deleteGuideSlotAndRag(db, scope, existing.id, g.pillar_id, g.topic_id, g.section_id);
         remappedGuideNotes++;
       }
     }
 
     // 4. Hydrate unseen starter cards, unseen drills, and empty-slot baseline guide notes
-    const seeded = seedKitStarterContent(
-      db,
-      scope,
-      existing.id,
-      normalizedSkeleton,
-    );
+    const seeded = seedKitStarterContent(db, scope, existing.id, normalizedSkeleton);
+    return { ...seeded, remappedCards, clearedOrphanNodeCards, remappedGuideNotes };
+  })();
 
-    return {
-      ...seeded,
-      remappedCards,
-      clearedOrphanNodeCards,
-      remappedGuideNotes,
-    };
-  });
-
-  const stats = runSync();
   const updatedKit = getOwnedKit(db, scope, existing.id);
-  const archivedNotesCount = getArchivedGuideNotes(
-    db,
-    scope,
-    existing.id,
-  ).length;
-
   return {
     kit: updatedKit,
     ...stats,
-    archivedNotesCount,
+    archivedNotesCount: updatedKit.archivedNotesCount,
   };
 }
 
@@ -301,28 +237,18 @@ export function pullUpstreamKitUpdate(
 
   const shared = db
     .prepare("SELECT id, latest_version FROM shared_kits WHERE id = ?")
-    .get(existing.forkedFromSharedId) as
-    | { id: string; latest_version: number }
-    | undefined;
-  if (!shared) {
-    throw new NotFoundError("Upstream Shared Kit", existing.forkedFromSharedId);
-  }
+    .get(existing.forkedFromSharedId) as { id: string; latest_version: number } | undefined;
+  if (!shared) throw new NotFoundError("Upstream Shared Kit", existing.forkedFromSharedId);
 
   const latestVer = db
     .prepare(
-      `SELECT version, skeleton_json
-       FROM shared_kit_versions
-       WHERE shared_kit_id = ?
-       ORDER BY version DESC
-       LIMIT 1`,
+      `SELECT version, skeleton_json FROM shared_kit_versions
+       WHERE shared_kit_id = ? ORDER BY version DESC LIMIT 1`,
     )
     .get(shared.id) as { version: number; skeleton_json: string } | undefined;
-  if (!latestVer) {
-    throw new NotFoundError("Upstream Shared Kit version", shared.id);
-  }
+  if (!latestVer) throw new NotFoundError("Upstream Shared Kit version", shared.id);
 
-  const nextSkeleton = parseStoredSkeleton(latestVer.skeleton_json);
-  return syncKitStructure(db, scope, existing.id, nextSkeleton, {
+  return syncKitStructure(db, scope, existing.id, parseStoredSkeleton(latestVer.skeleton_json), {
     forkedVersion: latestVer.version,
     forkedFromSharedId: shared.id,
   });

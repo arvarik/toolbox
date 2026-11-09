@@ -155,59 +155,61 @@ export default function NewKitStudioPage() {
 
   /* ── Stage 1 Handlers ─────────────────────────────────────────── */
 
+  const runStudioStep = async (
+    setFlag: React.Dispatch<React.SetStateAction<boolean>>,
+    fallbackMsg: string,
+    fn: () => Promise<void>,
+  ) => {
+    setFlag(true);
+    setErrorMsg(null);
+    try {
+      await fn();
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : fallbackMsg);
+    } finally {
+      setFlag(false);
+    }
+  };
+
+  const stagedIds = () => stagedSources.map((s) => s.stagedId);
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = "";
     if (files.length === 0) return;
-    setIngesting(true);
-    setErrorMsg(null);
-    try {
+    await runStudioStep(setIngesting, "File upload failed", async () => {
       const res = await compilerApi.uploadSources(files);
       setStagedSources((prev) => [...prev, ...res.sources]);
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "File upload failed");
-    } finally {
-      setIngesting(false);
-    }
+    });
   };
 
   const handleAddUrl = async () => {
     const trimmed = urlInput.trim();
     if (!trimmed) return;
-    setIngesting(true);
-    setErrorMsg(null);
-    try {
+    await runStudioStep(setIngesting, "Failed to fetch URL", async () => {
       const res = await compilerApi.ingestUrlOrText({ url: trimmed });
       setStagedSources((prev) => [...prev, ...res.sources]);
       setUrlInput("");
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Failed to fetch URL");
-    } finally {
-      setIngesting(false);
-    }
+    });
   };
 
   const handleAddPastedNotes = async () => {
     const trimmed = pasteText.trim();
     if (!trimmed) return;
-    setIngesting(true);
-    setErrorMsg(null);
-    try {
-      const res = await compilerApi.ingestUrlOrText({
-        text: trimmed,
-        title: pasteTitle.trim() || "Pasted Syllabus / Notes",
-      });
-      setStagedSources((prev) => [...prev, ...res.sources]);
-      setPasteText("");
-      setPasteTitle("");
-      setShowPasteBox(false);
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error ? err.message : "Failed to stage pasted text",
-      );
-    } finally {
-      setIngesting(false);
-    }
+    await runStudioStep(
+      setIngesting,
+      "Failed to stage pasted text",
+      async () => {
+        const res = await compilerApi.ingestUrlOrText({
+          text: trimmed,
+          title: pasteTitle.trim() || "Pasted Syllabus / Notes",
+        });
+        setStagedSources((prev) => [...prev, ...res.sources]);
+        setPasteText("");
+        setPasteTitle("");
+        setShowPasteBox(false);
+      },
+    );
   };
 
   const handleRemoveStaged = async (stagedId: string) => {
@@ -220,13 +222,11 @@ export default function NewKitStudioPage() {
       setErrorMsg("Enter a topic, syllabus, or learning goal to begin.");
       return;
     }
-    setCalibrating(true);
-    setErrorMsg(null);
-    try {
+    await runStudioStep(setCalibrating, "Scope calibration failed", async () => {
       const res = await compilerApi.calibrate({
         topicPrompt: topicPrompt.trim(),
         depth,
-        stagedSourceIds: stagedSources.map((s) => s.stagedId),
+        stagedSourceIds: stagedIds(),
       });
       setCalibration(res.calibration);
       setSuggestedTitle(res.calibration.suggestedTitle);
@@ -234,20 +234,13 @@ export default function NewKitStudioPage() {
       setSuggestedDescription(res.calibration.suggestedDescription);
       setCanvasMode(res.calibration.suggestedCapabilities.canvas);
       setEnableCalculator(res.calibration.suggestedCapabilities.calculator);
-
-      const defaults: Record<string, string> = {};
-      for (const dim of res.calibration.dimensions) {
-        defaults[dim.label] = dim.recommended;
-      }
-      setCalibrationAnswers(defaults);
-      setStep(2);
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error ? err.message : "Scope calibration failed",
+      setCalibrationAnswers(
+        Object.fromEntries(
+          res.calibration.dimensions.map((d) => [d.label, d.recommended]),
+        ),
       );
-    } finally {
-      setCalibrating(false);
-    }
+      setStep(2);
+    });
   };
 
   /* ── Stage 2 -> Stage 3 Compile Handler ───────────────────────── */
@@ -257,42 +250,37 @@ export default function NewKitStudioPage() {
       setErrorMsg("Enter a topic, syllabus, or learning goal to compile.");
       return;
     }
-    setCompiling(true);
-    setErrorMsg(null);
-    try {
-      const res = await compilerApi.compile({
-        topicPrompt: topicPrompt.trim(),
-        depth,
-        stagedSourceIds: stagedSources.map((s) => s.stagedId),
-        enableWebResearch,
-        ...(skipCalibration
-          ? {}
-          : {
-              suggestedTitle: suggestedTitle.trim() || undefined,
-              suggestedIcon: suggestedIcon.trim() || undefined,
-              suggestedDescription: suggestedDescription.trim() || undefined,
-              suggestedCapabilities: {
-                canvas: canvasMode,
-                calculator: enableCalculator,
-                webResearchDefault: enableWebResearch,
-                enableSvgDiagrams: true,
-              },
-              calibrationAnswers,
-              customInstructions: customInstructions.trim() || undefined,
-            }),
-      });
-
-      setDraftSkeleton(res.skeleton);
-      setVerifiedPool(res.pool);
-      setCitedSourceIds(res.citedSourceIds);
-      setStep(3);
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error ? err.message : "Blueprint compilation failed",
-      );
-    } finally {
-      setCompiling(false);
-    }
+    await runStudioStep(
+      setCompiling,
+      "Blueprint compilation failed",
+      async () => {
+        const res = await compilerApi.compile({
+          topicPrompt: topicPrompt.trim(),
+          depth,
+          stagedSourceIds: stagedIds(),
+          enableWebResearch,
+          ...(skipCalibration
+            ? {}
+            : {
+                suggestedTitle: suggestedTitle.trim() || undefined,
+                suggestedIcon: suggestedIcon.trim() || undefined,
+                suggestedDescription: suggestedDescription.trim() || undefined,
+                suggestedCapabilities: {
+                  canvas: canvasMode,
+                  calculator: enableCalculator,
+                  webResearchDefault: enableWebResearch,
+                  enableSvgDiagrams: true,
+                },
+                calibrationAnswers,
+                customInstructions: customInstructions.trim() || undefined,
+              }),
+        });
+        setDraftSkeleton(res.skeleton);
+        setVerifiedPool(res.pool);
+        setCitedSourceIds(res.citedSourceIds);
+        setStep(3);
+      },
+    );
   };
 
   /* ── Stage 3 Interactive Blueprint Editing & Chat Refinement ──── */
@@ -478,13 +466,11 @@ export default function NewKitStudioPage() {
 
   const handleChatRefine = async () => {
     if (!draftSkeleton || !refineInput.trim()) return;
-    setRefining(true);
-    setErrorMsg(null);
-    try {
+    await runStudioStep(setRefining, "Refinement failed", async () => {
       const res = await compilerApi.refine({
         skeleton: draftSkeleton,
         instruction: refineInput.trim(),
-        stagedSourceIds: stagedSources.map((s) => s.stagedId),
+        stagedSourceIds: stagedIds(),
         pool: verifiedPool,
       });
       setDraftSkeleton(res.skeleton);
@@ -494,11 +480,7 @@ export default function NewKitStudioPage() {
         type: "success",
         message: "Blueprint refined and DAG verified",
       });
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : "Refinement failed");
-    } finally {
-      setRefining(false);
-    }
+    });
   };
 
   /* ── Stage 4 Instant Save ─────────────────────────────────────── */

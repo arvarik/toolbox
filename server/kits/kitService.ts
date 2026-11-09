@@ -24,6 +24,20 @@ import {
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
 
+const DECK_STATS_COLS = `
+  COUNT(DISTINCT d.id) as deckCount,
+  COUNT(f.id) as cardCount,
+  COALESCE(SUM(CASE
+    WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
+      AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
+    THEN 1 ELSE 0 END), 0) as dueCount,
+  COALESCE(SUM(CASE
+    WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
+    THEN 1 ELSE 0 END), 0) as newCount,
+  COALESCE(SUM(CASE
+    WHEN f.id IS NOT NULL AND f.repetitions > 0
+    THEN 1 ELSE 0 END), 0) as reviewedCount`;
+
 export interface OwnedKitSummary {
   id: string;
   slug: string;
@@ -86,15 +100,11 @@ export interface SharedKitSummary {
 }
 
 export interface SharedKitDetail extends SharedKitSummary {
-  versions: Array<{
-    version: number;
-    changelog: string;
-    createdAt: string;
-  }>;
+  versions: Array<{ version: number; changelog: string; createdAt: string }>;
   skeleton: KitSkeletonV1;
 }
 
-interface RawKitRow {
+export interface RawKitRow {
   id: string;
   ownerId: string;
   slug: string;
@@ -138,8 +148,7 @@ export function validateAndVerifySkeleton(input: unknown): KitSkeletonV1 {
   try {
     return verifyKitSkeleton(input);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "Invalid Kit skeleton";
-    throw new ValidationError(msg);
+    throw new ValidationError(err instanceof Error ? err.message : "Invalid Kit skeleton");
   }
 }
 
@@ -155,9 +164,7 @@ export function safeSkeletonSlotSet(skeleton: KitSkeletonV1): Set<string> {
   const slots = new Set<string>();
   for (const p of skeleton.pillars) {
     for (const t of p.topics) {
-      for (const s of p.sections) {
-        slots.add(`${p.id}\0${t.id}\0${s.id}`);
-      }
+      for (const s of p.sections) slots.add(`${p.id}\0${t.id}\0${s.id}`);
     }
   }
   return slots;
@@ -174,17 +181,11 @@ export function mintUniqueKitSlug(
       .replace(/[^a-z0-9-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "kit";
 
-  const existsStmt = db.prepare(
-    "SELECT 1 FROM kits WHERE ownerId = ? AND slug = ?",
-  );
-  if (!existsStmt.get(scope.ownerId, cleanBase)) {
-    return cleanBase;
-  }
+  const existsStmt = db.prepare("SELECT 1 FROM kits WHERE ownerId = ? AND slug = ?");
+  if (!existsStmt.get(scope.ownerId, cleanBase)) return cleanBase;
   for (let n = 2; n < 10_000; n++) {
     const candidate = `${cleanBase}-${n}`;
-    if (!existsStmt.get(scope.ownerId, candidate)) {
-      return candidate;
-    }
+    if (!existsStmt.get(scope.ownerId, candidate)) return candidate;
   }
   return `${cleanBase}-${crypto.randomBytes(3).toString("hex")}`;
 }
@@ -202,7 +203,7 @@ export function seedKitStarterContent(
   skeleton: KitSkeletonV1,
   opts: { skipBaselineNotes?: boolean } = {},
 ): SeedHydrationResult {
-  const run = db.transaction((): SeedHydrationResult => {
+  return db.transaction((): SeedHydrationResult => {
     let addedCards = 0;
     let addedDrills = 0;
     let addedGuideNotes = 0;
@@ -219,31 +220,19 @@ export function seedKitStarterContent(
         )
         .all(scope.ownerId, kitId) as Array<{ seed_key: string; id: string }>;
 
-      const keyToCardId = new Map<string, string>();
-      for (const r of existingSeedRows) {
-        keyToCardId.set(r.seed_key, r.id);
-      }
-
-      const unseenCards = starterDeck.cards.filter(
-        (c) => !keyToCardId.has(c.key),
-      );
+      const keyToCardId = new Map(existingSeedRows.map((r) => [r.seed_key, r.id]));
+      const unseenCards = starterDeck.cards.filter((c) => !keyToCardId.has(c.key));
 
       if (unseenCards.length > 0) {
-        let deckRow = db
-          .prepare(
-            "SELECT id FROM decks WHERE ownerId = ? AND kit_id = ? AND name = ? LIMIT 1",
-          )
-          .get(scope.ownerId, kitId, starterDeck.name) as
-          | { id: string }
-          | undefined;
-
-        if (!deckRow) {
-          deckRow = db
+        const deckRow =
+          (db
+            .prepare("SELECT id FROM decks WHERE ownerId = ? AND kit_id = ? AND name = ? LIMIT 1")
+            .get(scope.ownerId, kitId, starterDeck.name) as { id: string } | undefined) ??
+          (db
             .prepare(
               "SELECT id FROM decks WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC LIMIT 1",
             )
-            .get(scope.ownerId, kitId) as { id: string } | undefined;
-        }
+            .get(scope.ownerId, kitId) as { id: string } | undefined);
 
         const deckId = deckRow?.id ?? crypto.randomUUID();
         if (!deckRow) {
@@ -251,13 +240,7 @@ export function seedKitStarterContent(
             `INSERT INTO decks (
                id, ownerId, kit_id, name, description, color_index, tags, settings, created_at, updated_at
              ) VALUES (?, ?, ?, ?, ?, 0, '', '{}', datetime('now'), datetime('now'))`,
-          ).run(
-            deckId,
-            scope.ownerId,
-            kitId,
-            starterDeck.name,
-            starterDeck.description ?? "",
-          );
+          ).run(deckId, scope.ownerId, kitId, starterDeck.name, starterDeck.description ?? "");
         }
 
         const maxPosRow = db
@@ -373,26 +356,20 @@ export function seedKitStarterContent(
     }
 
     return { addedCards, addedDrills, addedGuideNotes };
-  });
+  })();
+}
 
-  return run();
+interface DeckStatsRow {
+  deckCount: number;
+  cardCount: number;
+  dueCount: number;
+  newCount: number;
+  reviewedCount: number;
 }
 
 interface PreloadedKitAggregates {
-  deckStats: Map<
-    string,
-    {
-      deckCount: number;
-      cardCount: number;
-      dueCount: number;
-      newCount: number;
-      reviewedCount: number;
-    }
-  >;
-  guideRows: Map<
-    string,
-    Array<{ pillar_id: string; topic_id: string; section_id: string }>
-  >;
+  deckStats: Map<string, DeckStatsRow>;
+  guideRows: Map<string, Array<{ pillar_id: string; topic_id: string; section_id: string }>>;
   drillCounts: Map<string, number>;
 }
 
@@ -410,30 +387,12 @@ function hydrateKitSummary(
     ? preloaded.deckStats.get(row.id)
     : (db
         .prepare(
-          `SELECT
-             COUNT(DISTINCT d.id) as deckCount,
-             COUNT(f.id) as cardCount,
-             COALESCE(SUM(CASE
-               WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
-                 AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
-               THEN 1 ELSE 0 END), 0) as dueCount,
-             COALESCE(SUM(CASE
-               WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
-               THEN 1 ELSE 0 END), 0) as newCount,
-             COALESCE(SUM(CASE
-               WHEN f.id IS NOT NULL AND f.repetitions > 0
-               THEN 1 ELSE 0 END), 0) as reviewedCount
+          `SELECT ${DECK_STATS_COLS}
            FROM decks d
            LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
            WHERE d.ownerId = ? AND d.kit_id = ?`,
         )
-        .get(scope.ownerId, row.id) as {
-        deckCount: number;
-        cardCount: number;
-        dueCount: number;
-        newCount: number;
-        reviewedCount: number;
-      });
+        .get(scope.ownerId, row.id) as DeckStatsRow);
 
   const guideRows = preloaded
     ? (preloaded.guideRows.get(row.id) ?? [])
@@ -452,11 +411,8 @@ function hydrateKitSummary(
   let guideFilledCount = 0;
   let archivedNotesCount = 0;
   for (const g of guideRows) {
-    if (validSlots.has(`${g.pillar_id}\0${g.topic_id}\0${g.section_id}`)) {
-      guideFilledCount++;
-    } else {
-      archivedNotesCount++;
-    }
+    if (validSlots.has(`${g.pillar_id}\0${g.topic_id}\0${g.section_id}`)) guideFilledCount++;
+    else archivedNotesCount++;
   }
 
   const drillCount = preloaded
@@ -469,19 +425,13 @@ function hydrateKitSummary(
 
   const cardCount = deckStat?.cardCount ?? 0;
   const reviewedCount = deckStat?.reviewedCount ?? 0;
-  const masteryPercent =
-    cardCount > 0 ? Math.round((reviewedCount / cardCount) * 100) : 0;
+  const masteryPercent = cardCount > 0 ? Math.round((reviewedCount / cardCount) * 100) : 0;
 
   const upstreamLatestVersion = row.upstream_latest_version ?? null;
   const hasUpstreamUpdate =
     row.forked_from_shared_id !== null &&
     upstreamLatestVersion !== null &&
     upstreamLatestVersion > (row.forked_version ?? 0);
-
-  const topicCount = skeleton.pillars.reduce(
-    (acc, p) => acc + p.topics.length,
-    0,
-  );
 
   return {
     id: row.id,
@@ -501,7 +451,7 @@ function hydrateKitSummary(
     updatedAt: row.updated_at,
     lastOpenedAt: row.last_opened_at,
     pillarCount: skeleton.pillars.length,
-    topicCount,
+    topicCount: skeleton.pillars.reduce((acc, p) => acc + p.topics.length, 0),
     nodeCount: skeleton.graph.nodes.length,
     capabilities: skeleton.capabilities,
     deckCount: deckStat?.deckCount ?? 0,
@@ -525,9 +475,7 @@ function findRawOwnedKit(
 ): RawKitRow | undefined {
   return db
     .prepare(
-      `SELECT k.*,
-         sk.slug as upstream_slug,
-         sk.latest_version as upstream_latest_version
+      `SELECT k.*, sk.slug as upstream_slug, sk.latest_version as upstream_latest_version
        FROM kits k
        LEFT JOIN shared_kits sk ON sk.id = k.forked_from_shared_id
        WHERE k.ownerId = ? AND (k.id = ? OR k.slug = ?)
@@ -536,15 +484,20 @@ function findRawOwnedKit(
     .get(scope.ownerId, slugOrId, slugOrId) as RawKitRow | undefined;
 }
 
-export function listOwnedKits(
+export function requireRawOwnedKit(
   db: Database.Database,
   scope: Scope,
-): OwnedKitSummary[] {
+  slugOrId: string,
+): RawKitRow {
+  const row = findRawOwnedKit(db, scope, slugOrId);
+  if (!row) throw new NotFoundError("Kit", slugOrId);
+  return row;
+}
+
+export function listOwnedKits(db: Database.Database, scope: Scope): OwnedKitSummary[] {
   const rows = db
     .prepare(
-      `SELECT k.*,
-         sk.slug as upstream_slug,
-         sk.latest_version as upstream_latest_version
+      `SELECT k.*, sk.slug as upstream_slug, sk.latest_version as upstream_latest_version
        FROM kits k
        LEFT JOIN shared_kits sk ON sk.id = k.forked_from_shared_id
        WHERE k.ownerId = ?
@@ -556,33 +509,13 @@ export function listOwnedKits(
 
   const deckStatRows = db
     .prepare(
-      `SELECT
-         d.kit_id,
-         COUNT(DISTINCT d.id) as deckCount,
-         COUNT(f.id) as cardCount,
-         COALESCE(SUM(CASE
-           WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
-             AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
-           THEN 1 ELSE 0 END), 0) as dueCount,
-         COALESCE(SUM(CASE
-           WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
-           THEN 1 ELSE 0 END), 0) as newCount,
-         COALESCE(SUM(CASE
-           WHEN f.id IS NOT NULL AND f.repetitions > 0
-           THEN 1 ELSE 0 END), 0) as reviewedCount
+      `SELECT d.kit_id, ${DECK_STATS_COLS}
        FROM decks d
        LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
        WHERE d.ownerId = ?
        GROUP BY d.kit_id`,
     )
-    .all(scope.ownerId) as Array<{
-    kit_id: string;
-    deckCount: number;
-    cardCount: number;
-    dueCount: number;
-    newCount: number;
-    reviewedCount: number;
-  }>;
+    .all(scope.ownerId) as Array<DeckStatsRow & { kit_id: string }>;
 
   const guideAllRows = db
     .prepare(
@@ -598,9 +531,7 @@ export function listOwnedKits(
   }>;
 
   const drillCountRows = db
-    .prepare(
-      "SELECT kit_id, COUNT(*) as c FROM drills WHERE ownerId = ? GROUP BY kit_id",
-    )
+    .prepare("SELECT kit_id, COUNT(*) as c FROM drills WHERE ownerId = ? GROUP BY kit_id")
     .all(scope.ownerId) as Array<{ kit_id: string; c: number }>;
 
   const preloaded: PreloadedKitAggregates = {
@@ -615,12 +546,7 @@ export function listOwnedKits(
   }
 
   return rows.map((row) => {
-    const { skeleton: _skeleton, ...summary } = hydrateKitSummary(
-      db,
-      scope,
-      row,
-      preloaded,
-    );
+    const { skeleton: _skeleton, ...summary } = hydrateKitSummary(db, scope, row, preloaded);
     return summary;
   });
 }
@@ -630,11 +556,7 @@ export function getOwnedKit(
   scope: Scope,
   slugOrId: string,
 ): OwnedKitDetail {
-  const row = findRawOwnedKit(db, scope, slugOrId);
-  if (!row) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
-  return hydrateKitSummary(db, scope, row);
+  return hydrateKitSummary(db, scope, requireRawOwnedKit(db, scope, slugOrId));
 }
 
 export function updateOwnedKit(
@@ -649,10 +571,7 @@ export function updateOwnedKit(
     slug?: string;
   },
 ): OwnedKitDetail {
-  const current = findRawOwnedKit(db, scope, slugOrId);
-  if (!current) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
+  const current = requireRawOwnedKit(db, scope, slugOrId);
 
   const nextSlug =
     patch.slug !== undefined ? patch.slug.trim().toLowerCase() : current.slug;
@@ -674,13 +593,10 @@ export function updateOwnedKit(
   }
 
   const nextName = patch.name !== undefined ? patch.name.trim() : current.name;
-  if (!nextName) {
-    throw new ValidationError("Kit name cannot be empty");
-  }
-  const nextDesc =
-    patch.description !== undefined ? patch.description : current.description;
-  const nextIcon = patch.icon !== undefined ? patch.icon : current.icon;
-  const nextColor = patch.color !== undefined ? patch.color : current.color;
+  if (!nextName) throw new ValidationError("Kit name cannot be empty");
+  const nextDesc = patch.description ?? current.description;
+  const nextIcon = patch.icon ?? current.icon;
+  const nextColor = patch.color ?? current.color;
 
   const skeleton = parseStoredSkeleton(current.skeleton_json);
   const updatedSkeleton: KitSkeletonV1 = {
@@ -714,42 +630,36 @@ export function updateOwnedKit(
   return getOwnedKit(db, scope, current.id);
 }
 
-export function touchOwnedKit(
-  db: Database.Database,
-  scope: Scope,
-  slugOrId: string,
-): void {
-  const current = findRawOwnedKit(db, scope, slugOrId);
-  if (!current) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
-  db.prepare(
-    "UPDATE kits SET last_opened_at = datetime('now') WHERE ownerId = ? AND id = ?",
-  ).run(scope.ownerId, current.id);
+export function touchOwnedKit(db: Database.Database, scope: Scope, slugOrId: string): void {
+  const current = requireRawOwnedKit(db, scope, slugOrId);
+  db.prepare("UPDATE kits SET last_opened_at = datetime('now') WHERE ownerId = ? AND id = ?").run(
+    scope.ownerId,
+    current.id,
+  );
 }
 
-export function deleteOwnedKit(
+export function deleteOwnedKit(db: Database.Database, scope: Scope, slugOrId: string): void {
+  const current = requireRawOwnedKit(db, scope, slugOrId);
+  db.transaction(() => {
+    deleteRagChunksForKit(db, scope, current.id);
+    db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(scope.ownerId, current.id);
+  })();
+  fs.rmSync(kitUploadsDir(scope.ownerId, current.id), { recursive: true, force: true });
+}
+
+export function deleteGuideSlotAndRag(
   db: Database.Database,
   scope: Scope,
-  slugOrId: string,
+  kitId: string,
+  pillarId: string,
+  topicId: string,
+  sectionId: string,
 ): void {
-  const current = findRawOwnedKit(db, scope, slugOrId);
-  if (!current) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
-
-  const runDelete = db.transaction(() => {
-    deleteRagChunksForKit(db, scope, current.id);
-    db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(
-      scope.ownerId,
-      current.id,
-    );
-  });
-
-  runDelete();
-
-  const uploadDir = kitUploadsDir(scope.ownerId, current.id);
-  fs.rmSync(uploadDir, { recursive: true, force: true });
+  db.prepare(
+    `DELETE FROM guide_content
+     WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+  ).run(scope.ownerId, kitId, pillarId, topicId, sectionId);
+  deleteRagChunksBySource(db, scope, kitId, "guide", `${pillarId}:${topicId}:${sectionId}`);
 }
 
 export function getArchivedGuideNotes(
@@ -757,12 +667,8 @@ export function getArchivedGuideNotes(
   scope: Scope,
   slugOrId: string,
 ): ArchivedGuideNote[] {
-  const current = findRawOwnedKit(db, scope, slugOrId);
-  if (!current) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
-  const skeleton = parseStoredSkeleton(current.skeleton_json);
-  const validSlots = safeSkeletonSlotSet(skeleton);
+  const current = requireRawOwnedKit(db, scope, slugOrId);
+  const validSlots = safeSkeletonSlotSet(parseStoredSkeleton(current.skeleton_json));
 
   const rows = db
     .prepare(
@@ -779,19 +685,15 @@ export function getArchivedGuideNotes(
     committed_at: string | null;
   }>;
 
-  const archived: ArchivedGuideNote[] = [];
-  for (const r of rows) {
-    if (!validSlots.has(`${r.pillar_id}\0${r.topic_id}\0${r.section_id}`)) {
-      archived.push({
-        pillarId: r.pillar_id,
-        topicId: r.topic_id,
-        sectionId: r.section_id,
-        content: r.content,
-        committedAt: r.committed_at,
-      });
-    }
-  }
-  return archived;
+  return rows
+    .filter((r) => !validSlots.has(`${r.pillar_id}\0${r.topic_id}\0${r.section_id}`))
+    .map((r) => ({
+      pillarId: r.pillar_id,
+      topicId: r.topic_id,
+      sectionId: r.section_id,
+      content: r.content,
+      committedAt: r.committed_at,
+    }));
 }
 
 export async function refileArchivedGuideNote(
@@ -807,55 +709,38 @@ export async function refileArchivedGuideNote(
     toSectionId: string;
   },
 ): Promise<void> {
-  const current = findRawOwnedKit(db, scope, slugOrId);
-  if (!current) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
-  const skeleton = parseStoredSkeleton(current.skeleton_json);
-  const validSlots = safeSkeletonSlotSet(skeleton);
-  if (
-    !validSlots.has(
-      `${params.toPillarId}\0${params.toTopicId}\0${params.toSectionId}`,
-    )
-  ) {
+  const current = requireRawOwnedKit(db, scope, slugOrId);
+  const validSlots = safeSkeletonSlotSet(parseStoredSkeleton(current.skeleton_json));
+  if (!validSlots.has(`${params.toPillarId}\0${params.toTopicId}\0${params.toSectionId}`)) {
     throw new ValidationError("Target pillar/topic/section does not exist in this Kit");
   }
 
-  const runRefile = db.transaction((): string => {
-    const src = db
-      .prepare(
-        `SELECT content FROM guide_content
-         WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
-      )
-      .get(
-        scope.ownerId,
-        current.id,
-        params.fromPillarId,
-        params.fromTopicId,
-        params.fromSectionId,
-      ) as { content: string } | undefined;
+  const selectSlot = db.prepare(
+    `SELECT content FROM guide_content
+     WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+  );
 
-    if (!src || !src.content) {
-      throw new NotFoundError("Archived guide note");
-    }
+  const mergedContent = db.transaction((): string => {
+    const src = selectSlot.get(
+      scope.ownerId,
+      current.id,
+      params.fromPillarId,
+      params.fromTopicId,
+      params.fromSectionId,
+    ) as { content: string } | undefined;
+    if (!src?.content) throw new NotFoundError("Archived guide note");
 
-    const existingDest = db
-      .prepare(
-        `SELECT content FROM guide_content
-         WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
-      )
-      .get(
-        scope.ownerId,
-        current.id,
-        params.toPillarId,
-        params.toTopicId,
-        params.toSectionId,
-      ) as { content: string } | undefined;
+    const existingDest = selectSlot.get(
+      scope.ownerId,
+      current.id,
+      params.toPillarId,
+      params.toTopicId,
+      params.toSectionId,
+    ) as { content: string } | undefined;
 
-    const mergedContent =
-      existingDest?.content && existingDest.content.trim()
-        ? `${existingDest.content.trim()}\n\n---\n\n${src.content.trim()}`
-        : src.content;
+    const merged = existingDest?.content?.trim()
+      ? `${existingDest.content.trim()}\n\n---\n\n${src.content.trim()}`
+      : src.content;
 
     db.prepare(
       `INSERT INTO guide_content (
@@ -870,7 +755,7 @@ export async function refileArchivedGuideNote(
       params.toPillarId,
       params.toTopicId,
       params.toSectionId,
-      mergedContent,
+      merged,
     );
 
     if (
@@ -878,28 +763,18 @@ export async function refileArchivedGuideNote(
       params.fromTopicId !== params.toTopicId ||
       params.fromSectionId !== params.toSectionId
     ) {
-      db.prepare(
-        `DELETE FROM guide_content
-         WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
-      ).run(
-        scope.ownerId,
+      deleteGuideSlotAndRag(
+        db,
+        scope,
         current.id,
         params.fromPillarId,
         params.fromTopicId,
         params.fromSectionId,
       );
-      deleteRagChunksBySource(
-        db,
-        scope,
-        current.id,
-        "guide",
-        `${params.fromPillarId}:${params.fromTopicId}:${params.fromSectionId}`,
-      );
     }
-    return mergedContent;
-  });
+    return merged;
+  })();
 
-  const mergedContent = runRefile();
   await upsertRagChunk(db, scope, {
     kitId: current.id,
     kind: "guide",
@@ -915,26 +790,14 @@ export function deleteArchivedGuideNote(
   slugOrId: string,
   params: { pillarId: string; topicId: string; sectionId: string },
 ): void {
-  const current = findRawOwnedKit(db, scope, slugOrId);
-  if (!current) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
-  db.prepare(
-    `DELETE FROM guide_content
-     WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
-  ).run(
-    scope.ownerId,
+  const current = requireRawOwnedKit(db, scope, slugOrId);
+  deleteGuideSlotAndRag(
+    db,
+    scope,
     current.id,
     params.pillarId,
     params.topicId,
     params.sectionId,
-  );
-  deleteRagChunksBySource(
-    db,
-    scope,
-    current.id,
-    "guide",
-    `${params.pillarId}:${params.topicId}:${params.sectionId}`,
   );
 }
 
@@ -961,9 +824,7 @@ interface RawSharedKitRow {
 function parseTags(raw: string): string[] {
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed)
-      ? parsed.filter((t): t is string => typeof t === "string")
-      : [];
+    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
   } catch {
     return [];
   }
@@ -1001,32 +862,23 @@ export function listSharedKits(
   const term = query.q?.trim().toLowerCase() ?? "";
   const tagFilter = query.tag?.trim().toLowerCase() ?? "";
 
-  return rows
-    .map(mapSharedKitRow)
-    .filter((item) => {
-      if (tagFilter && !item.tags.some((t) => t.toLowerCase() === tagFilter)) {
-        return false;
-      }
-      if (!term) return true;
-      return (
-        item.name.toLowerCase().includes(term) ||
-        item.description.toLowerCase().includes(term) ||
-        item.slug.toLowerCase().includes(term) ||
-        item.tags.some((t) => t.toLowerCase().includes(term))
-      );
-    });
+  return rows.map(mapSharedKitRow).filter((item) => {
+    if (tagFilter && !item.tags.some((t) => t.toLowerCase() === tagFilter)) return false;
+    if (!term) return true;
+    return (
+      item.name.toLowerCase().includes(term) ||
+      item.description.toLowerCase().includes(term) ||
+      item.slug.toLowerCase().includes(term) ||
+      item.tags.some((t) => t.toLowerCase().includes(term))
+    );
+  });
 }
 
-export function getSharedKitBySlug(
-  db: Database.Database,
-  slug: string,
-): SharedKitDetail {
-  const row = db
-    .prepare("SELECT * FROM shared_kits WHERE slug = ?")
-    .get(slug) as RawSharedKitRow | undefined;
-  if (!row) {
-    throw new NotFoundError("Shared Kit", slug);
-  }
+export function getSharedKitBySlug(db: Database.Database, slug: string): SharedKitDetail {
+  const row = db.prepare("SELECT * FROM shared_kits WHERE slug = ?").get(slug) as
+    | RawSharedKitRow
+    | undefined;
+  if (!row) throw new NotFoundError("Shared Kit", slug);
 
   const versions = db
     .prepare(
@@ -1042,11 +894,8 @@ export function getSharedKitBySlug(
     created_at: string;
   }>;
 
-  if (versions.length === 0) {
-    throw new NotFoundError("Shared Kit version", slug);
-  }
+  if (versions.length === 0) throw new NotFoundError("Shared Kit version", slug);
 
-  const latest = versions[0];
   return {
     ...mapSharedKitRow(row),
     versions: versions.map((v) => ({
@@ -1054,7 +903,7 @@ export function getSharedKitBySlug(
       changelog: v.changelog,
       createdAt: v.created_at,
     })),
-    skeleton: parseStoredSkeleton(latest.skeleton_json),
+    skeleton: parseStoredSkeleton(versions[0].skeleton_json),
   };
 }
 
@@ -1083,9 +932,7 @@ export function snapshotSkeletonFromOwnedKit(
       content: string;
     }>;
     baselineGuideNotes = rows
-      .filter((r) =>
-        validSlots.has(`${r.pillar_id}\0${r.topic_id}\0${r.section_id}`),
-      )
+      .filter((r) => validSlots.has(`${r.pillar_id}\0${r.topic_id}\0${r.section_id}`))
       .map((r) => ({
         pillarId: r.pillar_id,
         topicId: r.topic_id,
@@ -1094,7 +941,7 @@ export function snapshotSkeletonFromOwnedKit(
       }));
   }
 
-  const candidate: KitSkeletonV1 = {
+  return validateAndVerifySkeleton({
     ...base,
     exportedAt: new Date().toISOString(),
     identity: {
@@ -1105,13 +952,8 @@ export function snapshotSkeletonFromOwnedKit(
       icon: kit.icon,
       color: kit.color,
     },
-    seeds: {
-      ...base.seeds,
-      baselineGuideNotes,
-    },
-  };
-
-  return validateAndVerifySkeleton(candidate);
+    seeds: { ...base.seeds, baselineGuideNotes },
+  });
 }
 
 export function publishKitToSharedLibrary(
@@ -1124,36 +966,23 @@ export function publishKitToSharedLibrary(
   },
   scope: Scope,
   slugOrId: string,
-  opts: {
-    changelog?: string;
-    includeBaselineNotes?: boolean;
-    slug?: string;
-  } = {},
+  opts: { changelog?: string; includeBaselineNotes?: boolean; slug?: string } = {},
 ): SharedKitDetail {
-  const kit = findRawOwnedKit(db, scope, slugOrId);
-  if (!kit) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
+  const kit = requireRawOwnedKit(db, scope, slugOrId);
 
   const targetSlug = (opts.slug ?? kit.slug).trim().toLowerCase();
-  if (!SLUG_RE.test(targetSlug)) {
-    throw new ValidationError("Invalid shared kit slug");
-  }
+  if (!SLUG_RE.test(targetSlug)) throw new ValidationError("Invalid shared kit slug");
 
   const snapshot = snapshotSkeletonFromOwnedKit(db, scope, kit, {
     includeGuideNotes: Boolean(opts.includeBaselineNotes),
     slugOverride: targetSlug,
   });
 
-  const existing = db
-    .prepare("SELECT * FROM shared_kits WHERE slug = ?")
-    .get(targetSlug) as RawSharedKitRow | undefined;
+  const existing = db.prepare("SELECT * FROM shared_kits WHERE slug = ?").get(targetSlug) as
+    | RawSharedKitRow
+    | undefined;
 
-  if (
-    existing &&
-    existing.publisher_user_id !== publisher.id &&
-    publisher.role !== "admin"
-  ) {
+  if (existing && existing.publisher_user_id !== publisher.id && publisher.role !== "admin") {
     const suffix = (publisher.username || "community")
       .toLowerCase()
       .replace(/[^a-z0-9-]+/g, "-")
@@ -1166,7 +995,7 @@ export function publishKitToSharedLibrary(
     );
   }
 
-  const runPublish = db.transaction(() => {
+  db.transaction(() => {
     const nextVersion = existing ? existing.latest_version + 1 : 1;
     const authorName =
       snapshot.identity.author ||
@@ -1187,6 +1016,7 @@ export function publishKitToSharedLibrary(
     const changelog =
       opts.changelog?.trim() ||
       (nextVersion === 1 ? "Initial release" : `Release v${nextVersion}`);
+    const { name, description, icon, color, tags } = publishedSkeleton.identity;
 
     let sharedId: string;
     if (!existing) {
@@ -1196,17 +1026,7 @@ export function publishKitToSharedLibrary(
            id, slug, publisher_user_id, latest_version, name, description,
            icon, color, tags, is_official, downloads_count, created_at, updated_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, datetime('now'), datetime('now'))`,
-      ).run(
-        sharedId,
-        targetSlug,
-        publisher.id,
-        nextVersion,
-        publishedSkeleton.identity.name,
-        publishedSkeleton.identity.description,
-        publishedSkeleton.identity.icon,
-        publishedSkeleton.identity.color,
-        JSON.stringify(publishedSkeleton.identity.tags),
-      );
+      ).run(sharedId, targetSlug, publisher.id, nextVersion, name, description, icon, color, JSON.stringify(tags));
     } else {
       sharedId = existing.id;
       db.prepare(
@@ -1214,15 +1034,7 @@ export function publishKitToSharedLibrary(
          SET latest_version = ?, name = ?, description = ?, icon = ?, color = ?,
              tags = ?, updated_at = datetime('now')
          WHERE id = ?`,
-      ).run(
-        nextVersion,
-        publishedSkeleton.identity.name,
-        publishedSkeleton.identity.description,
-        publishedSkeleton.identity.icon,
-        publishedSkeleton.identity.color,
-        JSON.stringify(publishedSkeleton.identity.tags),
-        sharedId,
-      );
+      ).run(nextVersion, name, description, icon, color, JSON.stringify(tags), sharedId);
     }
 
     db.prepare(
@@ -1244,9 +1056,8 @@ export function publishKitToSharedLibrary(
       scope.ownerId,
       kit.id,
     );
-  });
+  })();
 
-  runPublish();
   return getSharedKitBySlug(db, targetSlug);
 }
 
@@ -1258,31 +1069,28 @@ export function forkSharedKit(
 ): OwnedKitDetail {
   const shared = getSharedKitBySlug(db, sharedSlug);
   const targetSlug = (opts.customSlug ?? shared.slug).trim().toLowerCase();
-  if (!SLUG_RE.test(targetSlug)) {
-    throw new ValidationError("Invalid custom slug");
-  }
+  if (!SLUG_RE.test(targetSlug)) throw new ValidationError("Invalid custom slug");
 
-  const runFork = db.transaction((): string => {
+  const kitId = db.transaction((): string => {
     const existing = db
-      .prepare(
-        "SELECT id, forked_from_shared_id FROM kits WHERE ownerId = ? AND slug = ?",
-      )
+      .prepare("SELECT id, forked_from_shared_id FROM kits WHERE ownerId = ? AND slug = ?")
       .get(scope.ownerId, targetSlug) as
       | { id: string; forked_from_shared_id: string | null }
       | undefined;
+
+    const forkedSkeleton: KitSkeletonV1 = {
+      ...shared.skeleton,
+      identity: { ...shared.skeleton.identity, slug: targetSlug },
+    };
 
     if (existing) {
       // If `ensureDefaultSystemDesignKit` lazily created a bare shell with 0 decks & 0 drills,
       // hydrate it seamlessly in-place instead of failing with a slug conflict!
       const deckCount = (
-        db
-          .prepare("SELECT COUNT(*) as c FROM decks WHERE ownerId = ? AND kit_id = ?")
-          .get(scope.ownerId, existing.id) as { c: number }
+        db.prepare("SELECT COUNT(*) as c FROM decks WHERE ownerId = ? AND kit_id = ?").get(scope.ownerId, existing.id) as { c: number }
       ).c;
       const drillCount = (
-        db
-          .prepare("SELECT COUNT(*) as c FROM drills WHERE ownerId = ? AND kit_id = ?")
-          .get(scope.ownerId, existing.id) as { c: number }
+        db.prepare("SELECT COUNT(*) as c FROM drills WHERE ownerId = ? AND kit_id = ?").get(scope.ownerId, existing.id) as { c: number }
       ).c;
       if (
         !opts.customSlug &&
@@ -1290,10 +1098,6 @@ export function forkSharedKit(
         deckCount === 0 &&
         drillCount === 0
       ) {
-        const forkedSkeleton: KitSkeletonV1 = {
-          ...shared.skeleton,
-          identity: { ...shared.skeleton.identity, slug: targetSlug },
-        };
         db.prepare(
           `UPDATE kits
            SET name = ?, description = ?, icon = ?, color = ?,
@@ -1310,28 +1114,19 @@ export function forkSharedKit(
           existing.id,
         );
         seedKitStarterContent(db, scope, existing.id, forkedSkeleton);
-        db.prepare(
-          "UPDATE shared_kits SET downloads_count = downloads_count + 1 WHERE id = ?",
-        ).run(shared.id);
+        db.prepare("UPDATE shared_kits SET downloads_count = downloads_count + 1 WHERE id = ?").run(
+          shared.id,
+        );
         return existing.id;
       }
 
-      throw new AppError(
-        `You already have a Kit with slug "${targetSlug}"`,
-        409,
-        {
-          code: "KIT_SLUG_CONFLICT",
-          details: { existingKitId: existing.id, slug: targetSlug },
-        },
-      );
+      throw new AppError(`You already have a Kit with slug "${targetSlug}"`, 409, {
+        code: "KIT_SLUG_CONFLICT",
+        details: { existingKitId: existing.id, slug: targetSlug },
+      });
     }
 
-    const kitId = crypto.randomUUID();
-    const forkedSkeleton: KitSkeletonV1 = {
-      ...shared.skeleton,
-      identity: { ...shared.skeleton.identity, slug: targetSlug },
-    };
-
+    const newKitId = crypto.randomUUID();
     db.prepare(
       `INSERT INTO kits (
          id, ownerId, slug, name, description, icon, color, status,
@@ -1339,7 +1134,7 @@ export function forkSharedKit(
          created_at, updated_at, last_opened_at
        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, datetime('now'), datetime('now'), datetime('now'))`,
     ).run(
-      kitId,
+      newKitId,
       scope.ownerId,
       targetSlug,
       shared.name,
@@ -1351,15 +1146,14 @@ export function forkSharedKit(
       shared.latestVersion,
     );
 
-    seedKitStarterContent(db, scope, kitId, forkedSkeleton);
-    db.prepare(
-      "UPDATE shared_kits SET downloads_count = downloads_count + 1 WHERE id = ?",
-    ).run(shared.id);
+    seedKitStarterContent(db, scope, newKitId, forkedSkeleton);
+    db.prepare("UPDATE shared_kits SET downloads_count = downloads_count + 1 WHERE id = ?").run(
+      shared.id,
+    );
 
-    return kitId;
-  });
+    return newKitId;
+  })();
 
-  const kitId = runFork();
   return getOwnedKit(db, scope, kitId);
 }
 
@@ -1368,32 +1162,18 @@ export function getKitSourceFile(
   scope: Scope,
   slugOrId: string,
   sourceId: string,
-): {
-  filePath: string;
-  downloadName: string;
-  mimeType: string;
-} {
-  const kit = findRawOwnedKit(db, scope, slugOrId);
-  if (!kit) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
+): { filePath: string; downloadName: string; mimeType: string } {
+  const kit = requireRawOwnedKit(db, scope, slugOrId);
 
   const source = db
     .prepare(
       "SELECT id, title, file_path, mime_type FROM kit_sources WHERE ownerId = ? AND kit_id = ? AND id = ?",
     )
     .get(scope.ownerId, kit.id, sourceId) as
-    | {
-        id: string;
-        title: string;
-        file_path: string | null;
-        mime_type: string | null;
-      }
+    | { id: string; title: string; file_path: string | null; mime_type: string | null }
     | undefined;
 
-  if (!source || !source.file_path) {
-    throw new NotFoundError("Kit source file", sourceId);
-  }
+  if (!source?.file_path) throw new NotFoundError("Kit source file", sourceId);
 
   const kitRoot = kitUploadsDir(scope.ownerId, kit.id);
   const resolved = path.resolve(kitRoot, source.file_path);
@@ -1408,9 +1188,7 @@ export function getKitSourceFile(
     throw new ForbiddenError("Source file is not a regular file");
   }
 
-  const baseName = path
-    .basename(resolved)
-    .replace(/[^A-Za-z0-9._-]/g, "_");
+  const baseName = path.basename(resolved).replace(/[^A-Za-z0-9._-]/g, "_");
   return {
     filePath: resolved,
     downloadName: baseName || "source.bin",

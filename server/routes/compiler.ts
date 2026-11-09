@@ -83,6 +83,17 @@ const DepthEnumSchema = z
   .enum(["quick", "standard", "deep"])
   .default("standard");
 
+const StagedSourceIdsSchema = z.array(z.string().max(120)).max(20).default([]);
+const ModelFieldSchema = z.string().max(120).optional();
+
+const SourceInputsShape = {
+  stagedSourceIds: StagedSourceIdsSchema,
+  urls: z.array(z.string().max(2048)).max(10).default([]),
+  pastedText: z.string().max(2_100_000).optional(),
+  pastedTitle: z.string().max(200).optional(),
+  model: ModelFieldSchema,
+};
+
 const JsonIngestSchema = z.object({
   url: z.string().max(2048).optional(),
   urls: z.array(z.string().max(2048)).max(10).optional(),
@@ -93,20 +104,13 @@ const JsonIngestSchema = z.object({
 const CalibrateBodySchema = z.object({
   topicPrompt: z.string().min(1).max(4000),
   depth: DepthEnumSchema,
-  stagedSourceIds: z.array(z.string().max(120)).max(20).default([]),
-  urls: z.array(z.string().max(2048)).max(10).default([]),
-  pastedText: z.string().max(2_100_000).optional(),
-  pastedTitle: z.string().max(200).optional(),
-  model: z.string().max(120).optional(),
+  ...SourceInputsShape,
 });
 
 const CompileBodySchema = z.object({
   topicPrompt: z.string().min(1).max(4000),
   depth: DepthEnumSchema,
-  stagedSourceIds: z.array(z.string().max(120)).max(20).default([]),
-  urls: z.array(z.string().max(2048)).max(10).default([]),
-  pastedText: z.string().max(2_100_000).optional(),
-  pastedTitle: z.string().max(200).optional(),
+  ...SourceInputsShape,
   enableWebResearch: z.boolean().default(false),
   suggestedTitle: z.string().max(140).optional(),
   suggestedIcon: z.string().max(24).optional(),
@@ -121,7 +125,6 @@ const CompileBodySchema = z.object({
     .optional(),
   calibrationAnswers: z.record(z.string(), z.string()).optional(),
   customInstructions: z.string().max(4000).optional(),
-  model: z.string().max(120).optional(),
 });
 
 const VerifiedPoolInputSchema = z.object({
@@ -143,26 +146,40 @@ const VerifiedPoolInputSchema = z.object({
 const RefineBodySchema = z.object({
   skeleton: z.record(z.string(), z.any()),
   instruction: z.string().min(1).max(4000),
-  stagedSourceIds: z.array(z.string().max(120)).max(20).default([]),
+  stagedSourceIds: StagedSourceIdsSchema,
   pool: VerifiedPoolInputSchema.optional(),
-  model: z.string().max(120).optional(),
+  model: ModelFieldSchema,
 });
 
 const CommitBodySchema = z.object({
   skeleton: z.record(z.string(), z.any()),
-  stagedSourceIds: z.array(z.string().max(120)).max(20).default([]),
-  model: z.string().max(120).optional(),
+  stagedSourceIds: StagedSourceIdsSchema,
+  model: ModelFieldSchema,
 });
 
 const ExpandBodySchema = z.object({
   prompt: z.string().min(1).max(4000),
-  stagedSourceIds: z.array(z.string().max(120)).max(20).default([]),
-  urls: z.array(z.string().max(2048)).max(10).default([]),
-  pastedText: z.string().max(2_100_000).optional(),
-  pastedTitle: z.string().max(200).optional(),
+  ...SourceInputsShape,
   enableWebResearch: z.boolean().default(false),
-  model: z.string().max(120).optional(),
 });
+
+function parseBody<T>(schema: z.ZodType<T>, raw: unknown): T {
+  const parsed = schema.safeParse(raw ?? {});
+  if (!parsed.success) {
+    throw new ValidationError(
+      parsed.error.issues.map((i) => i.message).join("; "),
+    );
+  }
+  return parsed.data;
+}
+
+function toSummaries(
+  loaded: Awaited<ReturnType<typeof resolveInlineAndStagedSources>>,
+): StagedSourceSummary[] {
+  return loaded.map(
+    ({ text: _t, stagedFilePath: _fp, stagedDir: _d, ...summary }) => summary,
+  );
+}
 
 const handleIngestSources = asyncHandler(async (req, res) => {
   const scope = scopeOf(req);
@@ -177,13 +194,7 @@ const handleIngestSources = asyncHandler(async (req, res) => {
     }
 
     if (req.body && typeof req.body === "object") {
-      const parsed = JsonIngestSchema.safeParse(req.body);
-      if (!parsed.success) {
-        throw new ValidationError(
-          parsed.error.issues.map((i) => i.message).join("; "),
-        );
-      }
-      const { url, urls, text, title } = parsed.data;
+      const { url, urls, text, title } = parseBody(JsonIngestSchema, req.body);
       const allUrls = [
         ...(url?.trim() ? [url.trim()] : []),
         ...(urls ?? []).map((u) => u.trim()).filter(Boolean),
@@ -231,21 +242,8 @@ router.post(
   "/calibrate",
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
-    const parsed = CalibrateBodySchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      throw new ValidationError(
-        parsed.error.issues.map((i) => i.message).join("; "),
-      );
-    }
-    const body = parsed.data;
-
-    const loaded = await resolveInlineAndStagedSources(scope, {
-      stagedSourceIds: body.stagedSourceIds,
-      urls: body.urls,
-      pastedText: body.pastedText,
-      pastedTitle: body.pastedTitle,
-    });
-
+    const body = parseBody(CalibrateBodySchema, req.body);
+    const loaded = await resolveInlineAndStagedSources(scope, body);
     const calibration = await calibrateKitScope({
       topicPrompt: body.topicPrompt,
       depth: body.depth,
@@ -257,12 +255,7 @@ router.post(
       scope,
       model: body.model,
     });
-
-    const stagedSources: StagedSourceSummary[] = loaded.map(
-      ({ text: _t, stagedFilePath: _fp, stagedDir: _d, ...summary }) => summary,
-    );
-
-    res.json({ calibration, stagedSources });
+    res.json({ calibration, stagedSources: toSummaries(loaded) });
   }),
 );
 
@@ -270,20 +263,8 @@ router.post(
   "/compile",
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
-    const parsed = CompileBodySchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      throw new ValidationError(
-        parsed.error.issues.map((i) => i.message).join("; "),
-      );
-    }
-    const body = parsed.data;
-
-    const loaded = await resolveInlineAndStagedSources(scope, {
-      stagedSourceIds: body.stagedSourceIds,
-      urls: body.urls,
-      pastedText: body.pastedText,
-      pastedTitle: body.pastedTitle,
-    });
+    const body = parseBody(CompileBodySchema, req.body);
+    const loaded = await resolveInlineAndStagedSources(scope, body);
 
     const calibrationContext = [
       body.calibrationAnswers
@@ -320,16 +301,12 @@ router.post(
       model: body.model,
     });
 
-    const stagedSources: StagedSourceSummary[] = loaded.map(
-      ({ text: _t, stagedFilePath: _fp, stagedDir: _d, ...summary }) => summary,
-    );
-
     res.json({
       skeleton: compiled.skeleton,
       pool,
       citedSourceIds: compiled.citedSourceIds,
       dagRepair: compiled.dagRepair,
-      stagedSources,
+      stagedSources: toSummaries(loaded),
     });
   }),
 );
@@ -338,26 +315,16 @@ router.post(
   "/refine",
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
-    const parsed = RefineBodySchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      throw new ValidationError(
-        parsed.error.issues.map((i) => i.message).join("; "),
-      );
-    }
-    const body = parsed.data;
+    const body = parseBody(RefineBodySchema, req.body);
 
-    let pool: VerifiedSourcePool;
-    if (body.pool) {
-      pool = body.pool;
-    } else {
-      const loaded = loadStagedSources(scope, body.stagedSourceIds);
-      pool = await buildVerifiedSourcePool({
+    const pool: VerifiedSourcePool =
+      body.pool ??
+      (await buildVerifiedSourcePool({
         topicPrompt: "",
-        stagedSources: loaded,
+        stagedSources: loadStagedSources(scope, body.stagedSourceIds),
         enableWebResearch: false,
         scope,
-      });
-    }
+      }));
 
     const refined = await refineBlueprint({
       draftSkeleton: body.skeleton as unknown as KitSkeletonV1,
@@ -379,13 +346,7 @@ router.post(
   "/commit",
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
-    const parsed = CommitBodySchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      throw new ValidationError(
-        parsed.error.issues.map((i) => i.message).join("; "),
-      );
-    }
-    const body = parsed.data;
+    const body = parseBody(CommitBodySchema, req.body);
     const stagedSources = loadStagedSources(scope, body.stagedSourceIds);
 
     const committed = await commitCompiledKit(db, scope, {
@@ -400,28 +361,15 @@ router.post(
 
 router.get("/kits/:id/seed-status", (req, res) => {
   const scope = scopeOf(req);
-  const status = getKitSeedStatus(db, scope, req.params.id);
-  res.json(status);
+  res.json(getKitSeedStatus(db, scope, req.params.id));
 });
 
 router.post(
   "/kits/:id/expand",
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
-    const parsed = ExpandBodySchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      throw new ValidationError(
-        parsed.error.issues.map((i) => i.message).join("; "),
-      );
-    }
-    const body = parsed.data;
-
-    const stagedSources = await resolveInlineAndStagedSources(scope, {
-      stagedSourceIds: body.stagedSourceIds,
-      urls: body.urls,
-      pastedText: body.pastedText,
-      pastedTitle: body.pastedTitle,
-    });
+    const body = parseBody(ExpandBodySchema, req.body);
+    const stagedSources = await resolveInlineAndStagedSources(scope, body);
 
     const expanded = await expandLivingKit(db, scope, {
       slugOrId: String(req.params.id),

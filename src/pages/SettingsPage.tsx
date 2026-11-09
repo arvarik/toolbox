@@ -122,6 +122,13 @@ const ENDPOINT_PRESETS: EndpointPreset[] = [
   { label: 'Groq', name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1' },
 ]
 
+const errMsg = (err: unknown, fallback: string) =>
+  err instanceof Error && err.message ? err.message : fallback
+
+const SectionRule = () => (
+  <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+)
+
 interface ProviderKeySectionProps {
   providerId: string
   providerDef: ProviderDef
@@ -169,10 +176,7 @@ function ProviderKeySection({
       onKeyStatusChange(providerId, 'error')
       addToast({
         type: 'error',
-        message:
-          err instanceof Error && err.message
-            ? err.message
-            : `Failed to verify ${providerDef.shortName} API key`,
+        message: errMsg(err, `Failed to verify ${providerDef.shortName} API key`),
       })
     } finally {
       setIsTesting(false)
@@ -188,10 +192,7 @@ function ProviderKeySection({
     } catch (err) {
       addToast({
         type: 'error',
-        message:
-          err instanceof Error && err.message
-            ? err.message
-            : `Failed to remove ${providerDef.shortName} API key`,
+        message: errMsg(err, `Failed to remove ${providerDef.shortName} API key`),
       })
     }
   }
@@ -351,10 +352,7 @@ function CustomEndpointsSection() {
         message: `Endpoint reachable — ${result.modelCount ?? 0} models found`,
       })
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Could not reach the endpoint',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Could not reach the endpoint') })
     } finally {
       setTestingId(null)
     }
@@ -379,10 +377,7 @@ function CustomEndpointsSection() {
       loadEndpoints()
       void fetchAvailableModels()
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to save endpoint',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to save endpoint') })
     } finally {
       setIsSaving(false)
     }
@@ -399,10 +394,7 @@ function CustomEndpointsSection() {
       loadEndpoints()
       void fetchAvailableModels()
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : `Could not reach "${ep.name}"`,
-      })
+      addToast({ type: 'error', message: errMsg(err, `Could not reach "${ep.name}"`) })
     } finally {
       setTestingId(null)
     }
@@ -417,10 +409,7 @@ function CustomEndpointsSection() {
       loadEndpoints()
       void fetchAvailableModels()
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to remove endpoint',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to remove endpoint') })
     }
   }
 
@@ -592,18 +581,29 @@ export default function SettingsPage() {
   const [isImporting, setIsImporting] = useState(false)
   const importInputRef = useRef<HTMLInputElement | null>(null)
 
+  const loadSystemStats = useCallback(() => {
+    systemApi
+      .stats()
+      .then((stats) => setSystemStats(stats as SystemStatsSummary))
+      .catch(console.error)
+  }, [])
+
+  const syncConfiguredMap = useCallback((statuses: Record<string, KeyConnectionStatus>) => {
+    useAppStore.getState().setApiKeysConfigured(
+      Object.fromEntries(Object.entries(statuses).map(([id, s]) => [id, s === 'connected']))
+    )
+  }, [])
+
   const handleKeyStatusChange = useCallback(
     (providerId: string, status: KeyConnectionStatus) => {
-      setKeyStatuses((prev) => ({ ...prev, [providerId]: status }))
+      setKeyStatuses((prev) => {
+        const updated = { ...prev, [providerId]: status }
+        syncConfiguredMap(updated)
+        return updated
+      })
       void fetchAvailableModels()
-      const newConfigured: Record<string, boolean> = {}
-      const updated = { ...keyStatuses, [providerId]: status }
-      for (const [id, s] of Object.entries(updated)) {
-        newConfigured[id] = s === 'connected'
-      }
-      useAppStore.getState().setApiKeysConfigured(newConfigured)
     },
-    [keyStatuses, fetchAvailableModels]
+    [fetchAvailableModels, syncConfiguredMap]
   )
 
   useEffect(() => {
@@ -611,9 +611,7 @@ export default function SettingsPage() {
       .getAvailableModels()
       .then((data) => {
         const res = data as { providers?: ProviderDef[] } | null
-        if (res?.providers && res.providers.length > 0) {
-          setProviderDefs(res.providers)
-        }
+        if (res?.providers && res.providers.length > 0) setProviderDefs(res.providers)
       })
       .catch(() => {})
 
@@ -636,39 +634,26 @@ export default function SettingsPage() {
         }
         setMaskedKeys(masked)
         setKeyStatuses(statuses)
-        const configuredMap: Record<string, boolean> = {}
-        for (const [id, s] of Object.entries(statuses)) {
-          configuredMap[id] = s === 'connected'
-        }
-        useAppStore.getState().setApiKeysConfigured(configuredMap)
+        syncConfiguredMap(statuses)
       })
       .catch(() => {})
 
     void fetchAvailableModels()
-    systemApi
-      .stats()
-      .then((stats) => setSystemStats(stats as SystemStatsSummary))
-      .catch(console.error)
+    loadSystemStats()
     profileApi
       .get()
       .then((res) => setProfileText((res as { profileText?: string } | null)?.profileText || ''))
       .catch(console.error)
-  }, [fetchAvailableModels])
+  }, [fetchAvailableModels, loadSystemStats, syncConfiguredMap])
 
   const handleSaveProfile = async () => {
     setIsSavingProfile(true)
     try {
       await profileApi.update(profileText)
       addToast({ type: 'success', message: 'Shadow memory updated' })
-      systemApi
-        .stats()
-        .then((stats) => setSystemStats(stats as SystemStatsSummary))
-        .catch(console.error)
+      loadSystemStats()
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to update shadow memory',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to update shadow memory') })
     } finally {
       setIsSavingProfile(false)
     }
@@ -692,10 +677,7 @@ export default function SettingsPage() {
         addToast({ type: 'success', message: `Model catalog refreshed — ${total} models available` })
       }
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to refresh models',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to refresh models') })
     } finally {
       setIsRefreshingModels(false)
     }
@@ -705,15 +687,9 @@ export default function SettingsPage() {
     try {
       await systemApi.clearCache()
       addToast({ type: 'success', message: 'AI starter cache cleared successfully' })
-      systemApi
-        .stats()
-        .then((stats) => setSystemStats(stats as SystemStatsSummary))
-        .catch(console.error)
+      loadSystemStats()
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to clear cache',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to clear cache') })
     }
   }
 
@@ -825,13 +801,10 @@ export default function SettingsPage() {
               ))}
             </div>
 
-            <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
-
+              <SectionRule />
             {/* Custom Endpoints (BYOM) */}
             <CustomEndpointsSection />
-
-            <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
-
+            <SectionRule />
             <AiSettingsSection />
           </>
         )}
@@ -865,7 +838,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+        <SectionRule />
 
         {/* Model Selection */}
         <div className="settings-section">
@@ -925,7 +898,7 @@ export default function SettingsPage() {
           )}
         </div>
 
-        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+        <SectionRule />
 
         {/* Appearance */}
         <div className="settings-section">
@@ -951,7 +924,7 @@ export default function SettingsPage() {
           </p>
         </div>
 
-        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+        <SectionRule />
 
         {/* System Diagnostics */}
         <div className="settings-section">
@@ -962,22 +935,19 @@ export default function SettingsPage() {
 
           {systemStats && (
             <div className="settings-stats-grid">
-              <div className="stat-card">
-                <div className="stat-card-label">Guide Sections</div>
-                <div className="stat-card-value">{systemStats.guideCount}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-card-label">Flashcards</div>
-                <div className="stat-card-value">{systemStats.flashcardsCount}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-card-label">Whiteboards</div>
-                <div className="stat-card-value">{systemStats.boardsCount}</div>
-              </div>
-              <div className="stat-card">
-                <div className="stat-card-label">Cached AI Starters</div>
-                <div className="stat-card-value">{systemStats.cachedStartersCount}</div>
-              </div>
+              {(
+                [
+                  ['Guide Sections', systemStats.guideCount],
+                  ['Flashcards', systemStats.flashcardsCount],
+                  ['Whiteboards', systemStats.boardsCount],
+                  ['Cached AI Starters', systemStats.cachedStartersCount],
+                ] as const
+              ).map(([label, val]) => (
+                <div key={label} className="stat-card">
+                  <div className="stat-card-label">{label}</div>
+                  <div className="stat-card-value">{val}</div>
+                </div>
+              ))}
             </div>
           )}
 
@@ -989,7 +959,7 @@ export default function SettingsPage() {
           </button>
         </div>
 
-        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+        <SectionRule />
 
         {/* Data Management */}
         <div className="settings-section">
@@ -1038,7 +1008,7 @@ export default function SettingsPage() {
           </p>
         </div>
 
-        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+        <SectionRule />
 
         {/* Keyboard Shortcuts */}
         <div className="settings-section">
@@ -1069,7 +1039,7 @@ export default function SettingsPage() {
           </div>
         </div>
 
-        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+        <SectionRule />
 
         {/* About */}
         <div className="settings-section">

@@ -9,11 +9,7 @@ import {
   extractZipArchive,
   type ZipCreateEntry,
 } from "../platform/archive/zip.ts";
-import {
-  AppError,
-  NotFoundError,
-  ValidationError,
-} from "../platform/net/errors.ts";
+import { AppError, ValidationError } from "../platform/net/errors.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
 import { deleteRagChunksForKit } from "../search/hybridSearch.ts";
@@ -22,6 +18,7 @@ import {
   kitsUploadsBaseDir,
   kitUploadsDir,
   mintUniqueKitSlug,
+  requireRawOwnedKit,
   seedKitStarterContent,
   snapshotSkeletonFromOwnedKit,
   validateAndVerifySkeleton,
@@ -51,6 +48,88 @@ function throwSlugConflict(existingKitId: string, slug: string): never {
   });
 }
 
+export interface Mode1ImportResult {
+  kit: OwnedKitDetail;
+  mode: "created" | "copied" | "replaced" | "updated";
+  syncStats?: Omit<KitSyncResult, "kit">;
+}
+
+function resolveImportCollision(
+  db: Database.Database,
+  scope: Scope,
+  verified: KitSkeletonV1,
+  onCollision: ImportCollisionPolicy,
+):
+  | { synced: Mode1ImportResult }
+  | {
+      synced?: undefined;
+      existingId: string | null;
+      targetSlug: string;
+      mode: Mode1ImportResult["mode"];
+      storedSkeleton: KitSkeletonV1;
+      newKitId: string;
+    } {
+  const baseSlug = verified.identity.slug;
+  const existing = db
+    .prepare("SELECT id, slug FROM kits WHERE ownerId = ? AND slug = ?")
+    .get(scope.ownerId, baseSlug) as { id: string; slug: string } | undefined;
+
+  if (existing) {
+    if (onCollision === "error") throwSlugConflict(existing.id, baseSlug);
+    if (onCollision === "update") {
+      const { kit, ...syncStats } = syncKitStructure(db, scope, existing.id, verified);
+      return { synced: { kit, mode: "updated", syncStats } };
+    }
+  }
+
+  const targetSlug =
+    existing && onCollision === "copy" ? mintUniqueKitSlug(db, scope, baseSlug) : baseSlug;
+  const mode: Mode1ImportResult["mode"] = !existing
+    ? "created"
+    : onCollision === "copy"
+      ? "copied"
+      : "replaced";
+
+  return {
+    existingId: existing ? existing.id : null,
+    targetSlug,
+    mode,
+    storedSkeleton: { ...verified, identity: { ...verified.identity, slug: targetSlug } },
+    newKitId: crypto.randomUUID(),
+  };
+}
+
+function replaceAndInsertKitRow(
+  db: Database.Database,
+  scope: Scope,
+  newKitId: string,
+  targetSlug: string,
+  storedSkeleton: KitSkeletonV1,
+  replaceKitId: string | null,
+): void {
+  if (replaceKitId) {
+    deleteRagChunksForKit(db, scope, replaceKitId);
+    db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(scope.ownerId, replaceKitId);
+  }
+  db.prepare(
+    `INSERT INTO kits (
+       id, ownerId, slug, name, description, icon, color, status,
+       skeleton_json, forked_from_shared_id, forked_version,
+       created_at, updated_at, last_opened_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, NULL, ?, datetime('now'), datetime('now'), datetime('now'))`,
+  ).run(
+    newKitId,
+    scope.ownerId,
+    targetSlug,
+    storedSkeleton.identity.name,
+    storedSkeleton.identity.description,
+    storedSkeleton.identity.icon,
+    storedSkeleton.identity.color,
+    JSON.stringify(storedSkeleton),
+    storedSkeleton.identity.version,
+  );
+}
+
 /* ════════════════════════════════════════════════════════════════
    Mode 1: Portable Skeleton (.toolbox-kit.json)
    ════════════════════════════════════════════════════════════════ */
@@ -61,32 +140,11 @@ export function exportKitMode1(
   slugOrId: string,
   opts: { includeGuideNotes?: boolean } = {},
 ): { filename: string; skeleton: KitSkeletonV1 } {
-  const row = db
-    .prepare(
-      "SELECT * FROM kits WHERE ownerId = ? AND (id = ? OR slug = ?) LIMIT 1",
-    )
-    .get(scope.ownerId, slugOrId, slugOrId) as
-    | Parameters<typeof snapshotSkeletonFromOwnedKit>[2]
-    | undefined;
-
-  if (!row) {
-    throw new NotFoundError("Kit", slugOrId);
-  }
-
+  const row = requireRawOwnedKit(db, scope, slugOrId);
   const skeleton = snapshotSkeletonFromOwnedKit(db, scope, row, {
     includeGuideNotes: Boolean(opts.includeGuideNotes),
   });
-
-  return {
-    filename: `${skeleton.identity.slug}.toolbox-kit.json`,
-    skeleton,
-  };
-}
-
-export interface Mode1ImportResult {
-  kit: OwnedKitDetail;
-  mode: "created" | "copied" | "replaced" | "updated";
-  syncStats?: Omit<KitSyncResult, "kit">;
+  return { filename: `${skeleton.identity.slug}.toolbox-kit.json`, skeleton };
 }
 
 export function importKitMode1(
@@ -97,77 +155,20 @@ export function importKitMode1(
 ): Mode1ImportResult {
   const verified = validateAndVerifySkeleton(rawSkeleton);
   const onCollision = opts.onCollision ?? "error";
-  const baseSlug = verified.identity.slug;
+  const resolved = resolveImportCollision(db, scope, verified, onCollision);
+  if (resolved.synced) return resolved.synced;
 
-  const existing = db
-    .prepare("SELECT id, slug FROM kits WHERE ownerId = ? AND slug = ?")
-    .get(scope.ownerId, baseSlug) as { id: string; slug: string } | undefined;
+  const { existingId, targetSlug, mode, storedSkeleton, newKitId } = resolved;
+  const replaceKitId = existingId && onCollision === "replace" ? existingId : null;
 
-  if (existing) {
-    if (onCollision === "error") {
-      throwSlugConflict(existing.id, baseSlug);
-    }
-    if (onCollision === "update") {
-      const synced = syncKitStructure(db, scope, existing.id, verified);
-      const { kit, ...syncStats } = synced;
-      return { kit, mode: "updated", syncStats };
-    }
-  }
-
-  let targetSlug = baseSlug;
-  let mode: Mode1ImportResult["mode"] = "created";
-  if (existing && onCollision === "copy") {
-    targetSlug = mintUniqueKitSlug(db, scope, baseSlug);
-    mode = "copied";
-  } else if (existing && onCollision === "replace") {
-    mode = "replaced";
-  }
-
-  const newKitId = crypto.randomUUID();
-  const storedSkeleton: KitSkeletonV1 = {
-    ...verified,
-    identity: { ...verified.identity, slug: targetSlug },
-  };
-
-  const runTx = db.transaction(() => {
-    if (existing && onCollision === "replace") {
-      deleteRagChunksForKit(db, scope, existing.id);
-      db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(
-        scope.ownerId,
-        existing.id,
-      );
-    }
-
-    db.prepare(
-      `INSERT INTO kits (
-         id, ownerId, slug, name, description, icon, color, status,
-         skeleton_json, forked_from_shared_id, forked_version,
-         created_at, updated_at, last_opened_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, NULL, ?, datetime('now'), datetime('now'), datetime('now'))`,
-    ).run(
-      newKitId,
-      scope.ownerId,
-      targetSlug,
-      storedSkeleton.identity.name,
-      storedSkeleton.identity.description,
-      storedSkeleton.identity.icon,
-      storedSkeleton.identity.color,
-      JSON.stringify(storedSkeleton),
-      storedSkeleton.identity.version,
-    );
-
+  db.transaction(() => {
+    replaceAndInsertKitRow(db, scope, newKitId, targetSlug, storedSkeleton, replaceKitId);
     seedKitStarterContent(db, scope, newKitId, storedSkeleton);
-  });
+  })();
 
-  runTx();
-
-  if (existing && onCollision === "replace") {
-    fs.rmSync(kitUploadsDir(scope.ownerId, existing.id), {
-      recursive: true,
-      force: true,
-    });
+  if (replaceKitId) {
+    fs.rmSync(kitUploadsDir(scope.ownerId, replaceKitId), { recursive: true, force: true });
   }
-
   return { kit: getOwnedKit(db, scope, newKitId), mode };
 }
 
@@ -175,142 +176,146 @@ export function importKitMode1(
    Mode 2: Full Personal Backup (.toolbox-backup.zip)
    ════════════════════════════════════════════════════════════════ */
 
+const idStr = z.string().min(1);
+const nullStr = z.string().nullable().default(null);
+const tsStr = z.string().nullable();
+
 export const KitBackupUserdataV1Schema = z.object({
   format: z.literal("toolbox-kit-userdata"),
   schemaVersion: z.literal(1),
   exportedAt: z.iso.datetime(),
-  originalKitId: z.string().min(1),
+  originalKitId: idStr,
   guideContent: z
     .array(
       z.object({
-        pillarId: z.string().min(1),
-        topicId: z.string().min(1),
-        sectionId: z.string().min(1),
+        pillarId: idStr,
+        topicId: idStr,
+        sectionId: idStr,
         content: z.string(),
-        committedAt: z.string().nullable(),
+        committedAt: tsStr,
       }),
     )
     .default([]),
   chatStarters: z
     .array(
       z.object({
-        pillarId: z.string().min(1),
-        topicId: z.string().min(1),
+        pillarId: idStr,
+        topicId: idStr,
         suggestions: z.string(),
         contentHash: z.string(),
-        updatedAt: z.string().nullable(),
+        updatedAt: tsStr,
       }),
     )
     .default([]),
   decks: z
     .array(
       z.object({
-        id: z.string().min(1),
-        name: z.string().min(1),
+        id: idStr,
+        name: idStr,
         description: z.string().default(""),
         colorIndex: z.number().int().default(0),
         tags: z.string().default(""),
         settings: z.string().default("{}"),
-        createdAt: z.string().nullable(),
-        updatedAt: z.string().nullable(),
+        createdAt: tsStr,
+        updatedAt: tsStr,
       }),
     )
     .default([]),
   flashcards: z
     .array(
       z.object({
-        id: z.string().min(1),
-        deckId: z.string().min(1),
-        nodeId: z.string().nullable().default(null),
+        id: idStr,
+        deckId: idStr,
+        nodeId: nullStr,
         front: z.string(),
         back: z.string(),
         position: z.number().int().default(0),
         easeFactor: z.number().default(2.5),
         interval: z.number().int().default(0),
         repetitions: z.number().int().default(0),
-        nextReview: z.string().nullable().default(null),
-        lastReviewed: z.string().nullable().default(null),
+        nextReview: nullStr,
+        lastReviewed: nullStr,
         state: z.number().int().default(0),
         learningStep: z.number().int().default(0),
-        prerequisiteId: z.string().nullable().default(null),
-        sourcePillarId: z.string().nullable().default(null),
-        sourceTopicId: z.string().nullable().default(null),
-        sourceSectionId: z.string().nullable().default(null),
+        prerequisiteId: nullStr,
+        sourcePillarId: nullStr,
+        sourceTopicId: nullStr,
+        sourceSectionId: nullStr,
         isReverse: z.number().int().default(0),
-        reverseOfId: z.string().nullable().default(null),
-        seedKey: z.string().nullable().default(null),
+        reverseOfId: nullStr,
+        seedKey: nullStr,
         stability: z.number().nullable().default(null),
         difficulty: z.number().nullable().default(null),
         lapses: z.number().int().default(0),
-        createdAt: z.string().nullable(),
-        updatedAt: z.string().nullable(),
+        createdAt: tsStr,
+        updatedAt: tsStr,
       }),
     )
     .default([]),
   remediationQueue: z
     .array(
       z.object({
-        cardId: z.string().min(1),
+        cardId: idStr,
         sourceCardId: z.string(),
-        nodeId: z.string().nullable().default(null),
-        nodeName: z.string().nullable().default(null),
+        nodeId: nullStr,
+        nodeName: nullStr,
         reason: z.string().default(""),
-        createdAt: z.string().nullable(),
-        resolvedAt: z.string().nullable().default(null),
+        createdAt: tsStr,
+        resolvedAt: nullStr,
       }),
     )
     .default([]),
   drills: z
     .array(
       z.object({
-        id: z.string().min(1),
-        nodeId: z.string().min(1),
+        id: idStr,
+        nodeId: idStr,
         difficulty: z.number().int(),
-        prompt: z.string().min(1),
+        prompt: idStr,
         hintsJson: z.string().default("[]"),
         workedSolution: z.string().default(""),
         rubricJson: z.string().default("[]"),
-        seedKey: z.string().nullable().default(null),
-        createdAt: z.string().nullable(),
+        seedKey: nullStr,
+        createdAt: tsStr,
       }),
     )
     .default([]),
   drillAttempts: z
     .array(
       z.object({
-        id: z.string().min(1),
-        drillId: z.string().min(1),
+        id: idStr,
+        drillId: idStr,
         submission: z.string(),
         score: z.number().nullable().default(null),
         feedbackJson: z.string().default("{}"),
-        createdAt: z.string().nullable(),
+        createdAt: tsStr,
       }),
     )
     .default([]),
   boards: z
     .array(
       z.object({
-        id: z.string().min(1),
-        name: z.string().min(1),
+        id: idStr,
+        name: idStr,
         data: z.string().default("{}"),
         position: z.number().int().default(0),
-        createdAt: z.string().nullable(),
-        updatedAt: z.string().nullable(),
+        createdAt: tsStr,
+        updatedAt: tsStr,
       }),
     )
     .default([]),
   chatSessions: z
     .array(
       z.object({
-        id: z.string().min(1),
-        name: z.string().min(1),
+        id: idStr,
+        name: idStr,
         persona: z.string().default("socratic"),
         messages: z.string().default("[]"),
-        pillarId: z.string().nullable().default(null),
-        topicId: z.string().nullable().default(null),
-        topicName: z.string().nullable().default(null),
-        createdAt: z.string().nullable(),
-        updatedAt: z.string().nullable(),
+        pillarId: nullStr,
+        topicId: nullStr,
+        topicName: nullStr,
+        createdAt: tsStr,
+        updatedAt: tsStr,
       }),
     )
     .default([]),
@@ -319,30 +324,30 @@ export const KitBackupUserdataV1Schema = z.object({
       z.object({
         memoryText: z.string(),
         importanceScore: z.number().int().default(0),
-        createdAt: z.string().nullable(),
+        createdAt: tsStr,
       }),
     )
     .default([]),
   sources: z
     .array(
       z.object({
-        id: z.string().min(1),
-        kind: z.string().min(1),
-        title: z.string().min(1),
-        url: z.string().nullable().default(null),
-        archiveEntryPath: z.string().nullable().default(null),
-        safeBasename: z.string().nullable().default(null),
-        mimeType: z.string().nullable().default(null),
+        id: idStr,
+        kind: idStr,
+        title: idStr,
+        url: nullStr,
+        archiveEntryPath: nullStr,
+        safeBasename: nullStr,
+        mimeType: nullStr,
         sizeBytes: z.number().int().nonnegative().default(0),
-        createdAt: z.string().nullable(),
+        createdAt: tsStr,
       }),
     )
     .default([]),
   sourceChunks: z
     .array(
       z.object({
-        id: z.string().min(1),
-        sourceId: z.string().min(1),
+        id: idStr,
+        sourceId: idStr,
         chunkIndex: z.number().int(),
         text: z.string(),
       }),
@@ -357,113 +362,71 @@ export async function exportKitBackupZip(
   scope: Scope,
   slugOrId: string,
 ): Promise<{ filename: string; buffer: Buffer }> {
-  const { skeleton } = exportKitMode1(db, scope, slugOrId, {
-    includeGuideNotes: false,
-  });
+  const { skeleton } = exportKitMode1(db, scope, slugOrId, { includeGuideNotes: false });
   const kit = getOwnedKit(db, scope, slugOrId);
 
-  const guideRows = db
-    .prepare(
-      `SELECT pillar_id, topic_id, section_id, content, committed_at
-       FROM guide_content
-       WHERE ownerId = ? AND kit_id = ?`,
-    )
-    .all(scope.ownerId, kit.id) as Array<{
-    pillar_id: string;
-    topic_id: string;
-    section_id: string;
-    content: string;
-    committed_at: string | null;
-  }>;
+  const allKitRows = (sql: string) =>
+    db.prepare(sql).all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
 
-  const starterRows = db
-    .prepare(
-      `SELECT pillar_id, topic_id, suggestions, content_hash, updated_at
-       FROM chat_starters
-       WHERE ownerId = ? AND kit_id = ?`,
-    )
-    .all(scope.ownerId, kit.id) as Array<{
-    pillar_id: string;
-    topic_id: string;
-    suggestions: string;
-    content_hash: string;
-    updated_at: string | null;
-  }>;
+  const guideRows = allKitRows(
+    "SELECT pillar_id, topic_id, section_id, content, committed_at FROM guide_content WHERE ownerId = ? AND kit_id = ?",
+  );
+  const starterRows = allKitRows(
+    "SELECT pillar_id, topic_id, suggestions, content_hash, updated_at FROM chat_starters WHERE ownerId = ? AND kit_id = ?",
+  );
+  const deckRows = allKitRows(
+    "SELECT * FROM decks WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC",
+  );
+  const cardRows = allKitRows(
+    `SELECT f.* FROM flashcards f
+     JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+     WHERE f.ownerId = ? AND d.kit_id = ?
+     ORDER BY f.position ASC, f.created_at ASC`,
+  );
+  const remediationRows = allKitRows(
+    `SELECT card_id, source_card_id, node_id, node_name, reason, created_at, resolved_at
+     FROM remediation_queue WHERE ownerId = ? AND kit_id = ? ORDER BY id ASC`,
+  );
+  const drillRows = allKitRows(
+    "SELECT * FROM drills WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC",
+  );
+  const attemptRows = allKitRows(
+    `SELECT da.* FROM drill_attempts da
+     JOIN drills dr ON dr.ownerId = da.ownerId AND dr.id = da.drill_id
+     WHERE da.ownerId = ? AND dr.kit_id = ? ORDER BY da.created_at ASC`,
+  );
+  const boardRows = allKitRows(
+    "SELECT * FROM boards WHERE ownerId = ? AND kit_id = ? ORDER BY position ASC",
+  );
+  const sessionRows = allKitRows(
+    "SELECT * FROM chat_sessions WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC",
+  );
+  const memoryRows = allKitRows(
+    "SELECT memory_text, importance_score, created_at FROM episodic_memory WHERE ownerId = ? AND kit_id = ? ORDER BY id ASC",
+  );
+  const sourceRows = allKitRows(
+    "SELECT * FROM kit_sources WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC",
+  );
+  const chunkRows = allKitRows(
+    "SELECT id, source_id, chunk_index, text FROM kit_source_chunks WHERE ownerId = ? AND kit_id = ? ORDER BY source_id ASC, chunk_index ASC",
+  );
 
-  const deckRows = db
-    .prepare("SELECT * FROM decks WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC")
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const cardRows = db
-    .prepare(
-      `SELECT f.*
-       FROM flashcards f
-       JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
-       WHERE f.ownerId = ? AND d.kit_id = ?
-       ORDER BY f.position ASC, f.created_at ASC`,
-    )
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const remediationRows = db
-    .prepare(
-      `SELECT card_id, source_card_id, node_id, node_name, reason, created_at, resolved_at
-       FROM remediation_queue
-       WHERE ownerId = ? AND kit_id = ?
-       ORDER BY id ASC`,
-    )
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const drillRows = db
-    .prepare("SELECT * FROM drills WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC")
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const attemptRows = db
-    .prepare(
-      `SELECT da.*
-       FROM drill_attempts da
-       JOIN drills dr ON dr.ownerId = da.ownerId AND dr.id = da.drill_id
-       WHERE da.ownerId = ? AND dr.kit_id = ?
-       ORDER BY da.created_at ASC`,
-    )
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const boardRows = db
-    .prepare("SELECT * FROM boards WHERE ownerId = ? AND kit_id = ? ORDER BY position ASC")
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const sessionRows = db
-    .prepare("SELECT * FROM chat_sessions WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC")
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const memoryRows = db
-    .prepare(
-      "SELECT memory_text, importance_score, created_at FROM episodic_memory WHERE ownerId = ? AND kit_id = ? ORDER BY id ASC",
-    )
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const sourceRows = db
-    .prepare("SELECT * FROM kit_sources WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC")
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
-
-  const chunkRows = db
-    .prepare(
-      "SELECT id, source_id, chunk_index, text FROM kit_source_chunks WHERE ownerId = ? AND kit_id = ? ORDER BY source_id ASC, chunk_index ASC",
-    )
-    .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
+  const s = (v: unknown, fb = "") => String(v ?? fb);
+  const n = (v: unknown, fb = 0) => Number(v ?? fb);
+  const ns = (v: unknown) => (v as string | null) ?? null;
+  const nn = (v: unknown) => (v !== null && v !== undefined ? Number(v) : null);
 
   const kitRoot = kitUploadsDir(scope.ownerId, kit.id);
   const fileEntries: ZipCreateEntry[] = [];
   const exportedSources: KitBackupUserdataV1["sources"] = [];
 
-  for (const s of sourceRows) {
-    const sourceId = String(s.id);
+  for (const row of sourceRows) {
+    const sourceId = s(row.id);
     const rawFilePath =
-      typeof s.file_path === "string" && s.file_path.trim()
-        ? s.file_path.trim()
-        : null;
+      typeof row.file_path === "string" && row.file_path.trim() ? row.file_path.trim() : null;
     let archiveEntryPath: string | null = null;
     let safeBase: string | null = null;
-    let sizeBytes = Number(s.size_bytes ?? 0);
+    let sizeBytes = n(row.size_bytes);
 
     if (rawFilePath && SAFE_ID_RE.test(sourceId)) {
       const resolved = path.resolve(kitRoot, rawFilePath);
@@ -474,24 +437,21 @@ export async function exportKitBackupZip(
           archiveEntryPath = `files/${sourceId}/${safeBase}`;
           const buf = fs.readFileSync(resolved);
           sizeBytes = buf.byteLength;
-          fileEntries.push({
-            name: archiveEntryPath,
-            data: buf,
-          });
+          fileEntries.push({ name: archiveEntryPath, data: buf });
         }
       }
     }
 
     exportedSources.push({
       id: sourceId,
-      kind: String(s.kind ?? "file"),
-      title: String(s.title ?? "Untitled Source"),
-      url: (s.url as string | null) ?? null,
+      kind: s(row.kind, "file"),
+      title: s(row.title, "Untitled Source"),
+      url: ns(row.url),
       archiveEntryPath,
       safeBasename: safeBase,
-      mimeType: (s.mime_type as string | null) ?? null,
+      mimeType: ns(row.mime_type),
       sizeBytes,
-      createdAt: (s.created_at as string | null) ?? null,
+      createdAt: ns(row.created_at),
     });
   }
 
@@ -501,124 +461,118 @@ export async function exportKitBackupZip(
     exportedAt: new Date().toISOString(),
     originalKitId: kit.id,
     guideContent: guideRows.map((r) => ({
-      pillarId: r.pillar_id,
-      topicId: r.topic_id,
-      sectionId: r.section_id,
-      content: r.content ?? "",
-      committedAt: r.committed_at ?? null,
+      pillarId: s(r.pillar_id),
+      topicId: s(r.topic_id),
+      sectionId: s(r.section_id),
+      content: s(r.content),
+      committedAt: ns(r.committed_at),
     })),
     chatStarters: starterRows.map((r) => ({
-      pillarId: r.pillar_id,
-      topicId: r.topic_id,
-      suggestions: r.suggestions ?? "[]",
-      contentHash: r.content_hash ?? "",
-      updatedAt: r.updated_at ?? null,
+      pillarId: s(r.pillar_id),
+      topicId: s(r.topic_id),
+      suggestions: s(r.suggestions, "[]"),
+      contentHash: s(r.content_hash),
+      updatedAt: ns(r.updated_at),
     })),
     decks: deckRows.map((d) => ({
-      id: String(d.id),
-      name: String(d.name ?? "Untitled Deck"),
-      description: String(d.description ?? ""),
-      colorIndex: Number(d.color_index ?? 0),
-      tags: String(d.tags ?? ""),
-      settings: String(d.settings ?? "{}"),
-      createdAt: (d.created_at as string | null) ?? null,
-      updatedAt: (d.updated_at as string | null) ?? null,
+      id: s(d.id),
+      name: s(d.name, "Untitled Deck"),
+      description: s(d.description),
+      colorIndex: n(d.color_index),
+      tags: s(d.tags),
+      settings: s(d.settings, "{}"),
+      createdAt: ns(d.created_at),
+      updatedAt: ns(d.updated_at),
     })),
     flashcards: cardRows.map((c) => ({
-      id: String(c.id),
-      deckId: String(c.deck_id),
-      nodeId: (c.node_id as string | null) ?? null,
-      front: String(c.front ?? ""),
-      back: String(c.back ?? ""),
-      position: Number(c.position ?? 0),
-      easeFactor: c.ease_factor !== null && c.ease_factor !== undefined ? Number(c.ease_factor) : 2.5,
-      interval: Number(c.interval ?? 0),
-      repetitions: Number(c.repetitions ?? 0),
-      nextReview: (c.next_review as string | null) ?? null,
-      lastReviewed: (c.last_reviewed as string | null) ?? null,
-      state: Number(c.state ?? 0),
-      learningStep: Number(c.learning_step ?? 0),
-      prerequisiteId: (c.prerequisite_id as string | null) ?? null,
-      sourcePillarId: (c.source_pillar_id as string | null) ?? null,
-      sourceTopicId: (c.source_topic_id as string | null) ?? null,
-      sourceSectionId: (c.source_section_id as string | null) ?? null,
-      isReverse: Number(c.is_reverse ?? 0),
-      reverseOfId: (c.reverse_of_id as string | null) ?? null,
-      seedKey: (c.seed_key as string | null) ?? null,
-      stability:
-        c.stability !== null && c.stability !== undefined
-          ? Number(c.stability)
-          : null,
-      difficulty:
-        c.difficulty !== null && c.difficulty !== undefined
-          ? Number(c.difficulty)
-          : null,
-      lapses: Number(c.lapses ?? 0),
-      createdAt: (c.created_at as string | null) ?? null,
-      updatedAt: (c.updated_at as string | null) ?? null,
+      id: s(c.id),
+      deckId: s(c.deck_id),
+      nodeId: ns(c.node_id),
+      front: s(c.front),
+      back: s(c.back),
+      position: n(c.position),
+      easeFactor: nn(c.ease_factor) ?? 2.5,
+      interval: n(c.interval),
+      repetitions: n(c.repetitions),
+      nextReview: ns(c.next_review),
+      lastReviewed: ns(c.last_reviewed),
+      state: n(c.state),
+      learningStep: n(c.learning_step),
+      prerequisiteId: ns(c.prerequisite_id),
+      sourcePillarId: ns(c.source_pillar_id),
+      sourceTopicId: ns(c.source_topic_id),
+      sourceSectionId: ns(c.source_section_id),
+      isReverse: n(c.is_reverse),
+      reverseOfId: ns(c.reverse_of_id),
+      seedKey: ns(c.seed_key),
+      stability: nn(c.stability),
+      difficulty: nn(c.difficulty),
+      lapses: n(c.lapses),
+      createdAt: ns(c.created_at),
+      updatedAt: ns(c.updated_at),
     })),
     remediationQueue: remediationRows.map((r) => ({
-      cardId: String(r.card_id),
-      sourceCardId: String(r.source_card_id ?? ""),
-      nodeId: (r.node_id as string | null) ?? null,
-      nodeName: (r.node_name as string | null) ?? null,
-      reason: String(r.reason ?? ""),
-      createdAt: (r.created_at as string | null) ?? null,
-      resolvedAt: (r.resolved_at as string | null) ?? null,
+      cardId: s(r.card_id),
+      sourceCardId: s(r.source_card_id),
+      nodeId: ns(r.node_id),
+      nodeName: ns(r.node_name),
+      reason: s(r.reason),
+      createdAt: ns(r.created_at),
+      resolvedAt: ns(r.resolved_at),
     })),
     drills: drillRows.map((d) => ({
-      id: String(d.id),
-      nodeId: String(d.node_id),
-      difficulty: Number(d.difficulty ?? 1),
-      prompt: String(d.prompt ?? ""),
-      hintsJson: String(d.hints_json ?? "[]"),
-      workedSolution: String(d.worked_solution ?? ""),
-      rubricJson: String(d.rubric_json ?? "[]"),
-      seedKey: (d.seed_key as string | null) ?? null,
-      createdAt: (d.created_at as string | null) ?? null,
+      id: s(d.id),
+      nodeId: s(d.node_id),
+      difficulty: n(d.difficulty, 1),
+      prompt: s(d.prompt),
+      hintsJson: s(d.hints_json, "[]"),
+      workedSolution: s(d.worked_solution),
+      rubricJson: s(d.rubric_json, "[]"),
+      seedKey: ns(d.seed_key),
+      createdAt: ns(d.created_at),
     })),
     drillAttempts: attemptRows.map((a) => ({
-      id: String(a.id),
-      drillId: String(a.drill_id),
-      submission: String(a.submission ?? ""),
-      score: a.score !== null && a.score !== undefined ? Number(a.score) : null,
-      feedbackJson: String(a.feedback_json ?? "{}"),
-      createdAt: (a.created_at as string | null) ?? null,
+      id: s(a.id),
+      drillId: s(a.drill_id),
+      submission: s(a.submission),
+      score: nn(a.score),
+      feedbackJson: s(a.feedback_json, "{}"),
+      createdAt: ns(a.created_at),
     })),
     boards: boardRows.map((b) => ({
-      id: String(b.id),
-      name: String(b.name ?? "Untitled Board"),
-      data: String(b.data ?? "{}"),
-      position: Number(b.position ?? 0),
-      createdAt: (b.created_at as string | null) ?? null,
-      updatedAt: (b.updated_at as string | null) ?? null,
+      id: s(b.id),
+      name: s(b.name, "Untitled Board"),
+      data: s(b.data, "{}"),
+      position: n(b.position),
+      createdAt: ns(b.created_at),
+      updatedAt: ns(b.updated_at),
     })),
-    chatSessions: sessionRows.map((s) => ({
-      id: String(s.id),
-      name: String(s.name ?? "Session"),
-      persona: String(s.persona ?? "socratic"),
-      messages: String(s.messages ?? "[]"),
-      pillarId: (s.pillar_id as string | null) ?? null,
-      topicId: (s.topic_id as string | null) ?? null,
-      topicName: (s.topic_name as string | null) ?? null,
-      createdAt: (s.created_at as string | null) ?? null,
-      updatedAt: (s.updated_at as string | null) ?? null,
+    chatSessions: sessionRows.map((cs) => ({
+      id: s(cs.id),
+      name: s(cs.name, "Session"),
+      persona: s(cs.persona, "socratic"),
+      messages: s(cs.messages, "[]"),
+      pillarId: ns(cs.pillar_id),
+      topicId: ns(cs.topic_id),
+      topicName: ns(cs.topic_name),
+      createdAt: ns(cs.created_at),
+      updatedAt: ns(cs.updated_at),
     })),
     episodicMemories: memoryRows.map((m) => ({
-      memoryText: String(m.memory_text ?? ""),
-      importanceScore: Number(m.importance_score ?? 0),
-      createdAt: (m.created_at as string | null) ?? null,
+      memoryText: s(m.memory_text),
+      importanceScore: n(m.importance_score),
+      createdAt: ns(m.created_at),
     })),
     sources: exportedSources,
     sourceChunks: chunkRows.map((ch) => ({
-      id: String(ch.id),
-      sourceId: String(ch.source_id),
-      chunkIndex: Number(ch.chunk_index ?? 0),
-      text: String(ch.text ?? ""),
+      id: s(ch.id),
+      sourceId: s(ch.source_id),
+      chunkIndex: n(ch.chunk_index),
+      text: s(ch.text),
     })),
   });
 
-  const zipBuffer = await createZipArchive([
+  const buffer = await createZipArchive([
     {
       name: "kit.json",
       data: Buffer.from(JSON.stringify(skeleton, null, 2), "utf8"),
@@ -632,17 +586,13 @@ export async function exportKitBackupZip(
     ...fileEntries,
   ]);
 
-  return {
-    filename: `${kit.slug}.toolbox-backup.zip`,
-    buffer: zipBuffer,
-  };
+  return { filename: `${kit.slug}.toolbox-backup.zip`, buffer };
 }
 
 function isAllowedBackupEntryPath(name: string): boolean {
   if (name === "kit.json" || name === "userdata.json") return true;
   const parts = name.split("/");
-  if (parts.length !== 3 || parts[0] !== "files") return false;
-  return SAFE_ID_RE.test(parts[1]) && SAFE_BASENAME_RE.test(parts[2]);
+  return parts.length === 3 && parts[0] === "files" && SAFE_ID_RE.test(parts[1]) && SAFE_BASENAME_RE.test(parts[2]);
 }
 
 export async function importKitBackupZip(
@@ -662,9 +612,7 @@ export async function importKitBackupZip(
   const kitRawBuf = entries.get("kit.json");
   const userdataRawBuf = entries.get("userdata.json");
   if (!kitRawBuf || !userdataRawBuf) {
-    throw new BadRequestError(
-      "Backup archive must contain both kit.json and userdata.json",
-    );
+    throw new BadRequestError("Backup archive must contain both kit.json and userdata.json");
   }
 
   let parsedKitJson: unknown;
@@ -687,100 +635,49 @@ export async function importKitBackupZip(
   const userdata = userdataParse.data;
 
   // Verify closed allowlist: every binary file entry must match a declared source in userdata.sources
-  const declaredEntries = new Map<
-    string,
-    { oldSourceId: string; safeBasename: string }
-  >();
+  const declaredEntries = new Map<string, { oldSourceId: string; safeBasename: string }>();
   for (const s of userdata.sources) {
     if (!SAFE_ID_RE.test(s.id)) {
       throw new BadRequestError(`Invalid source ID in userdata.json: ${s.id}`);
     }
     if (s.archiveEntryPath !== null) {
       const base = s.safeBasename ?? "";
-      if (
-        !SAFE_BASENAME_RE.test(base) ||
-        s.archiveEntryPath !== `files/${s.id}/${base}`
-      ) {
-        throw new BadRequestError(
-          `Invalid archiveEntryPath in userdata.json: ${s.archiveEntryPath}`,
-        );
+      if (!SAFE_BASENAME_RE.test(base) || s.archiveEntryPath !== `files/${s.id}/${base}`) {
+        throw new BadRequestError(`Invalid archiveEntryPath in userdata.json: ${s.archiveEntryPath}`);
       }
       if (!entries.has(s.archiveEntryPath)) {
-        throw new BadRequestError(
-          `Declared source file missing from archive: ${s.archiveEntryPath}`,
-        );
+        throw new BadRequestError(`Declared source file missing from archive: ${s.archiveEntryPath}`);
       }
-      declaredEntries.set(s.archiveEntryPath, {
-        oldSourceId: s.id,
-        safeBasename: base,
-      });
+      declaredEntries.set(s.archiveEntryPath, { oldSourceId: s.id, safeBasename: base });
     }
   }
 
   for (const entryName of entries.keys()) {
-    if (entryName === "kit.json" || entryName === "userdata.json") continue;
-    if (!declaredEntries.has(entryName)) {
-      throw new BadRequestError(
-        `Undeclared file entry in backup archive: ${entryName}`,
-      );
+    if (entryName !== "kit.json" && entryName !== "userdata.json" && !declaredEntries.has(entryName)) {
+      throw new BadRequestError(`Undeclared file entry in backup archive: ${entryName}`);
     }
   }
 
   const onCollision = opts.onCollision ?? "error";
-  const baseSlug = verifiedSkeleton.identity.slug;
-  const existing = db
-    .prepare("SELECT id, slug FROM kits WHERE ownerId = ? AND slug = ?")
-    .get(scope.ownerId, baseSlug) as { id: string; slug: string } | undefined;
+  const resolved = resolveImportCollision(db, scope, verifiedSkeleton, onCollision);
+  if (resolved.synced) return resolved.synced;
 
-  if (existing) {
-    if (onCollision === "error") {
-      throwSlugConflict(existing.id, baseSlug);
-    }
-    if (onCollision === "update") {
-      const synced = syncKitStructure(db, scope, existing.id, verifiedSkeleton);
-      const { kit, ...syncStats } = synced;
-      return { kit, mode: "updated", syncStats };
-    }
-  }
-
-  let targetSlug = baseSlug;
-  let mode: Mode1ImportResult["mode"] = "created";
-  if (existing && onCollision === "copy") {
-    targetSlug = mintUniqueKitSlug(db, scope, baseSlug);
-    mode = "copied";
-  } else if (existing && onCollision === "replace") {
-    mode = "replaced";
-  }
+  const { existingId, targetSlug, mode, storedSkeleton, newKitId } = resolved;
+  const replaceKitId = existingId && onCollision === "replace" ? existingId : null;
 
   // Mint fresh UUIDs for 100% of entities and internal FKs
-  const newKitId = crypto.randomUUID();
-  const deckIdMap = new Map<string, string>();
-  for (const d of userdata.decks) deckIdMap.set(d.id, crypto.randomUUID());
+  const mintIdMap = <T extends { id: string }>(items: T[]) =>
+    new Map(items.map((x) => [x.id, crypto.randomUUID()]));
 
-  const cardIdMap = new Map<string, string>();
-  for (const c of userdata.flashcards) {
-    if (deckIdMap.has(c.deckId)) {
-      cardIdMap.set(c.id, crypto.randomUUID());
-    }
-  }
+  const deckIdMap = mintIdMap(userdata.decks);
+  const cardIdMap = mintIdMap(userdata.flashcards.filter((c) => deckIdMap.has(c.deckId)));
+  const drillIdMap = mintIdMap(userdata.drills);
+  const boardIdMap = mintIdMap(userdata.boards);
+  const sessionIdMap = mintIdMap(userdata.chatSessions);
+  const sourceIdMap = mintIdMap(userdata.sources);
 
-  const drillIdMap = new Map<string, string>();
-  for (const dr of userdata.drills) drillIdMap.set(dr.id, crypto.randomUUID());
-
-  const boardIdMap = new Map<string, string>();
-  for (const b of userdata.boards) boardIdMap.set(b.id, crypto.randomUUID());
-
-  const sessionIdMap = new Map<string, string>();
-  for (const s of userdata.chatSessions) {
-    sessionIdMap.set(s.id, crypto.randomUUID());
-  }
-
-  const sourceIdMap = new Map<string, string>();
-  for (const s of userdata.sources) sourceIdMap.set(s.id, crypto.randomUUID());
-
-  const ownerKitsBase = kitsUploadsBaseDir(scope.ownerId);
   const stagingDir = path.resolve(
-    ownerKitsBase,
+    kitsUploadsBaseDir(scope.ownerId),
     `.staging-${crypto.randomUUID()}`,
   );
   const finalKitDir = kitUploadsDir(scope.ownerId, newKitId);
@@ -801,56 +698,18 @@ export async function importKitBackupZip(
       }
     }
 
-    const storedSkeleton: KitSkeletonV1 = {
-      ...verifiedSkeleton,
-      identity: { ...verifiedSkeleton.identity, slug: targetSlug },
-    };
-
-    const runImportTx = db.transaction(() => {
-      if (existing && onCollision === "replace") {
-        deleteRagChunksForKit(db, scope, existing.id);
-        db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(
-          scope.ownerId,
-          existing.id,
-        );
-      }
-
-      db.prepare(
-        `INSERT INTO kits (
-           id, ownerId, slug, name, description, icon, color, status,
-           skeleton_json, forked_from_shared_id, forked_version,
-           created_at, updated_at, last_opened_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, NULL, ?, datetime('now'), datetime('now'), datetime('now'))`,
-      ).run(
-        newKitId,
-        scope.ownerId,
-        targetSlug,
-        storedSkeleton.identity.name,
-        storedSkeleton.identity.description,
-        storedSkeleton.identity.icon,
-        storedSkeleton.identity.color,
-        JSON.stringify(storedSkeleton),
-        storedSkeleton.identity.version,
-      );
+    db.transaction(() => {
+      replaceAndInsertKitRow(db, scope, newKitId, targetSlug, storedSkeleton, replaceKitId);
 
       const insGuide = db.prepare(
         `INSERT INTO guide_content (
            ownerId, kit_id, pillar_id, topic_id, section_id, content, committed_at
          ) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
          ON CONFLICT(ownerId, kit_id, pillar_id, topic_id, section_id) DO UPDATE SET
-           content = excluded.content,
-           committed_at = excluded.committed_at`,
+           content = excluded.content, committed_at = excluded.committed_at`,
       );
       for (const g of userdata.guideContent) {
-        insGuide.run(
-          scope.ownerId,
-          newKitId,
-          g.pillarId,
-          g.topicId,
-          g.sectionId,
-          g.content,
-          g.committedAt,
-        );
+        insGuide.run(scope.ownerId, newKitId, g.pillarId, g.topicId, g.sectionId, g.content, g.committedAt);
       }
 
       const insStarter = db.prepare(
@@ -858,20 +717,10 @@ export async function importKitBackupZip(
            ownerId, kit_id, pillar_id, topic_id, suggestions, content_hash, updated_at
          ) VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
          ON CONFLICT(ownerId, kit_id, pillar_id, topic_id) DO UPDATE SET
-           suggestions = excluded.suggestions,
-           content_hash = excluded.content_hash,
-           updated_at = excluded.updated_at`,
+           suggestions = excluded.suggestions, content_hash = excluded.content_hash, updated_at = excluded.updated_at`,
       );
       for (const cs of userdata.chatStarters) {
-        insStarter.run(
-          scope.ownerId,
-          newKitId,
-          cs.pillarId,
-          cs.topicId,
-          cs.suggestions,
-          cs.contentHash,
-          cs.updatedAt,
-        );
+        insStarter.run(scope.ownerId, newKitId, cs.pillarId, cs.topicId, cs.suggestions, cs.contentHash, cs.updatedAt);
       }
 
       const insDeck = db.prepare(
@@ -904,12 +753,10 @@ export async function importKitBackupZip(
            created_at, updated_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
       );
-
       for (const c of userdata.flashcards) {
         const newCardId = cardIdMap.get(c.id);
         const newDeckId = deckIdMap.get(c.deckId);
         if (!newCardId || !newDeckId) continue;
-
         insCard.run(
           newCardId,
           scope.ownerId,
@@ -945,12 +792,8 @@ export async function importKitBackupZip(
       for (const c of userdata.flashcards) {
         const newCardId = cardIdMap.get(c.id);
         if (!newCardId) continue;
-        const mappedPrereq = c.prerequisiteId
-          ? (cardIdMap.get(c.prerequisiteId) ?? null)
-          : null;
-        const mappedReverse = c.reverseOfId
-          ? (cardIdMap.get(c.reverseOfId) ?? null)
-          : null;
+        const mappedPrereq = c.prerequisiteId ? (cardIdMap.get(c.prerequisiteId) ?? null) : null;
+        const mappedReverse = c.reverseOfId ? (cardIdMap.get(c.reverseOfId) ?? null) : null;
         const safePrereq = mappedPrereq !== newCardId ? mappedPrereq : null;
         const safeReverse = mappedReverse !== newCardId ? mappedReverse : null;
         if (safePrereq || safeReverse) {
@@ -1068,13 +911,7 @@ export async function importKitBackupZip(
          ) VALUES (?, ?, ?, ?, COALESCE(?, datetime('now')))`,
       );
       for (const m of userdata.episodicMemories) {
-        insMemory.run(
-          scope.ownerId,
-          newKitId,
-          m.memoryText,
-          m.importanceScore,
-          m.createdAt,
-        );
+        insMemory.run(scope.ownerId, newKitId, m.memoryText, m.importanceScore, m.createdAt);
       }
 
       const insSource = db.prepare(
@@ -1087,14 +924,11 @@ export async function importKitBackupZip(
         const hasStagedFile =
           s.archiveEntryPath !== null && declaredEntries.has(s.archiveEntryPath);
         const relFilePath =
-          hasStagedFile && s.safeBasename
-            ? `${newSourceId}/${s.safeBasename}`
-            : null;
+          hasStagedFile && s.safeBasename ? `${newSourceId}/${s.safeBasename}` : null;
         const actualSize =
           hasStagedFile && s.archiveEntryPath
             ? (entries.get(s.archiveEntryPath)?.byteLength ?? s.sizeBytes)
             : s.sizeBytes;
-
         insSource.run(
           newSourceId,
           scope.ownerId,
@@ -1110,9 +944,8 @@ export async function importKitBackupZip(
       }
 
       const insChunk = db.prepare(
-        `INSERT INTO kit_source_chunks (
-           id, ownerId, kit_id, source_id, chunk_index, text
-         ) VALUES (?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO kit_source_chunks (id, ownerId, kit_id, source_id, chunk_index, text)
+         VALUES (?, ?, ?, ?, ?, ?)`,
       );
       for (const ch of userdata.sourceChunks) {
         const newSourceId = sourceIdMap.get(ch.sourceId);
@@ -1126,20 +959,15 @@ export async function importKitBackupZip(
           ch.text,
         );
       }
-    });
-
-    runImportTx();
+    })();
 
     if (hasBinaryFiles) {
       fs.mkdirSync(path.dirname(finalKitDir), { recursive: true });
       fs.renameSync(stagingDir, finalKitDir);
     }
 
-    if (existing && onCollision === "replace") {
-      fs.rmSync(kitUploadsDir(scope.ownerId, existing.id), {
-        recursive: true,
-        force: true,
-      });
+    if (replaceKitId) {
+      fs.rmSync(kitUploadsDir(scope.ownerId, replaceKitId), { recursive: true, force: true });
     }
   } catch (err) {
     fs.rmSync(stagingDir, { recursive: true, force: true });
