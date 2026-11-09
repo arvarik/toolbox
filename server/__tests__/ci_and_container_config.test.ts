@@ -98,7 +98,7 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
     }
   });
 
-  it("aligns .nvmrc Node major version with package.json engines.node and Dockerfile", () => {
+  it("aligns .nvmrc Node major with package.json engines.node and the digest-pinned Dockerfile base", () => {
     const nvmrc = fs.readFileSync(path.join(ROOT, ".nvmrc"), "utf8").trim();
     const nvmrcMajor = Number.parseInt(nvmrc, 10);
     expect(Number.isInteger(nvmrcMajor) && nvmrcMajor >= 24).toBe(true);
@@ -111,12 +111,12 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
     expect(nvmrcMajor).toBeGreaterThanOrEqual(Number(minEngineMatch?.[1]));
 
     const dockerfile = fs.readFileSync(path.join(ROOT, "Dockerfile"), "utf8");
-    const fromNodeMajors = [...dockerfile.matchAll(/^FROM\s+node:(\d+)/gm)].map((m) =>
-      Number(m[1]),
-    );
-    expect(fromNodeMajors.length).toBeGreaterThan(0);
-    for (const major of fromNodeMajors) {
-      expect(major).toBe(nvmrcMajor);
+    const fromRefs = [...dockerfile.matchAll(/^FROM\s+(\S+)/gm)].map((m) => m[1] ?? "");
+    expect(fromRefs.length).toBeGreaterThan(0);
+    for (const ref of fromRefs) {
+      expect(ref, "Dockerfile FROM must be node:<.nvmrc major>-<variant>@sha256:<digest>").toMatch(
+        new RegExp(`^node:${nvmrcMajor}-[a-z-]+@sha256:[0-9a-f]{64}$`),
+      );
     }
   });
 
