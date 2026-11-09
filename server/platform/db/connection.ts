@@ -8,11 +8,6 @@ import {
   primaryAdminId as primaryAdminIdOnDb,
 } from "./platformSchema.ts";
 
-const dbDir = path.dirname(DB_PATH);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
-
 export function applySqlitePragmas(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
   db.pragma("synchronous = NORMAL");
@@ -24,8 +19,25 @@ export function applySqlitePragmas(db: Database.Database): void {
   db.pragma("mmap_size = 134217728");
 }
 
-export const sqlite: Database.Database = new Database(DB_PATH);
-applySqlitePragmas(sqlite);
+/** Opens the database, or fails startup with an error that names the file and the fix. */
+export function openDatabase(dbPath: string): Database.Database {
+  try {
+    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const db = new Database(dbPath);
+    applySqlitePragmas(db);
+    return db;
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    throw new Error(
+      `Cannot open the database at ${path.resolve(dbPath)}: ${err instanceof Error ? err.message : String(err)}` +
+        `${code ? ` (${code})` : ""}. DATA_DIR must be a directory this user can write, and the file must be ` +
+        "a Toolbox SQLite database. If the file is corrupt, restore a snapshot from DATA_DIR/backups.",
+      { cause: err },
+    );
+  }
+}
+
+export const sqlite: Database.Database = openDatabase(DB_PATH);
 
 initPlatformSchema(sqlite);
 

@@ -1,11 +1,23 @@
 // @vitest-environment node
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
+import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import zlib from "node:zlib";
+import type Database from "better-sqlite3";
 import express, { type Express } from "express";
 import request from "supertest";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
+import {
+  __getStructuredModeFor,
+  __setStreamIdleTimeoutMs,
+  runStructured,
+} from "../ai/engine.ts";
+import { BACKUPS_DIR } from "../appConfig.ts";
 import { createApp } from "../app.ts";
 import {
   ORPHANED_JOB_RESTART_ERROR,
@@ -21,8 +33,15 @@ import {
   shutdownServer,
 } from "../index.ts";
 import { listOwnedKits } from "../kits/kitService.ts";
-import { kitTokFor, ownerTokFor } from "../kits/kitsSchema.ts";
-import { sqlite } from "../platform/db/connection.ts";
+import { initKitsSchema, kitTokFor, ownerTokFor } from "../kits/kitsSchema.ts";
+import {
+  listBackups,
+  runBackup,
+  runScheduledBackup,
+  startBackupScheduler,
+} from "../platform/auth/adminAndBackup.ts";
+import { openDatabase, sqlite } from "../platform/db/connection.ts";
+import { initPlatformSchema } from "../platform/db/platformSchema.ts";
 import { gzipCompression } from "../platform/net/compression.ts";
 import { __resetHostGuard } from "../platform/net/hostGuard.ts";
 import { createRateLimiter, MAX_BUCKETS } from "../platform/net/rateLimit.ts";
@@ -194,11 +213,44 @@ function rawHttpGet(
   });
 }
 
+async function withEnv<T>(name: string, value: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[name];
+  process.env[name] = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
+
+/** One SHA-256 per ordinary table (FTS5 and vec0 shadow tables included), order-independent. */
+function tableDigests(handle: Database.Database): Record<string, string> {
+  const tables = handle
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
+    )
+    .pluck()
+    .all() as string[];
+  return Object.fromEntries(
+    tables.map((name) => {
+      const rows = handle
+        .prepare(`SELECT * FROM "${name}"`)
+        .raw()
+        .all()
+        .map((row) => JSON.stringify(row))
+        .sort();
+      return [name, crypto.createHash("sha256").update(rows.join("\n")).digest("hex")];
+    }),
+  );
+}
+
 describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
   let app: Express;
   let agent: ReturnType<typeof request.agent>;
   let ownerId = "";
   let scope: Scope;
+  let sessionCookie = "";
 
   beforeAll(async () => {
     __resetAuthRateLimits();
@@ -217,6 +269,9 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       .expect(201);
     ownerId = setupRes.body.user.id as string;
     scope = scopeForOwnerId(ownerId);
+    sessionCookie = (setupRes.headers["set-cookie"] as unknown as string[])
+      .map((cookie) => cookie.split(";")[0])
+      .join("; ");
   });
 
   it("1. applies SQLite performance pragmas, sets 65s/66s reverse-proxy timeouts, and shuts down cleanly without double-signal hangs", async () => {
@@ -308,6 +363,7 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       const firstShutdown = shutdownServer(server, {
         signal: "SIGTERM",
         db: mockDb,
+        stopTimers: () => ops.push("timers:stop"),
         stopWorker: async () => {
           ops.push("worker:stop");
         },
@@ -331,6 +387,7 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       expect(server.listening).toBe(false);
       expect(exitCodes).toEqual([0]);
       expect(ops).toEqual([
+        "timers:stop",
         "worker:stop",
         "pragma:optimize",
         "pragma:wal_checkpoint(PASSIVE)",
@@ -787,5 +844,197 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
     };
     expect(kitRow.status).toBe("ready");
     expect(kitRow.status_detail).toBe(ORPHANED_JOB_RESTART_ERROR);
+  });
+
+  it("6. refuses a corrupt database file or a DATA_DIR that is a file with an error naming the path, and leaves the file untouched", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toolbox-open-"));
+    try {
+      const corrupt = path.join(dir, "toolbox.db");
+      const garbage = Buffer.alloc(8192, 0x41);
+      fs.writeFileSync(corrupt, garbage);
+      expect(() => openDatabase(corrupt)).toThrow(
+        `Cannot open the database at ${corrupt}: file is not a database (SQLITE_NOTADB)`,
+      );
+      expect(fs.readFileSync(corrupt).equals(garbage)).toBe(true);
+
+      const fileNotDir = path.join(dir, "data-is-a-file");
+      fs.writeFileSync(fileNotDir, "");
+      expect(() => openDatabase(path.join(fileNotDir, "toolbox.db"))).toThrow(
+        `Cannot open the database at ${path.join(fileNotDir, "toolbox.db")}`,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("7. schedules online backups (logs and retries a failed check, joins an in-flight run during concurrent writes, skips while fresh or disabled, rotates to BACKUP_KEEP, stops on demand) and restores to an identical database", async () => {
+    fs.rmSync(BACKUPS_DIR, { recursive: true, force: true });
+    fs.writeFileSync(BACKUPS_DIR, "not a directory");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const stop = startBackupScheduler(60_000);
+      expect(vi.getTimerCount()).toBe(1);
+
+      // Check 1 fails (BACKUPS_DIR is a file): logged, no unhandled rejection, timer keeps running.
+      vi.advanceTimersByTime(60_000);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(vi.getTimerCount()).toBe(1);
+      fs.rmSync(BACKUPS_DIR);
+
+      // Check 2 finds no snapshot and starts one; runBackup() joins it instead of overlapping.
+      const writes = Array.from({ length: 30 }, (_, i) =>
+        agent
+          .put(`/api/guide-content/backup-p/backup-t/s${i}`)
+          .set("X-Toolbox-Kit", "system-design")
+          .send({ content: `Note ${i} written while the backup runs.` })
+          .expect(200),
+      );
+      vi.advanceTimersByTime(60_000);
+      const [scheduled] = await Promise.all([runBackup(), ...writes]);
+      expect(scheduled.verification?.ok).toBe(true);
+      expect(listBackups().map((b) => b.filename)).toEqual([scheduled.filename]);
+
+      expect(await runScheduledBackup()).toBeNull();
+      const stale = Date.now() + 48 * 3_600_000;
+      expect(await withEnv("BACKUP_INTERVAL_HOURS", "0", () => runScheduledBackup(stale))).toBeNull();
+
+      stop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const quiet = await withEnv("BACKUP_KEEP", "1", () => runBackup());
+    expect(listBackups().map((b) => b.filename)).toEqual([quiet.filename]);
+    const restoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolbox-restore-"));
+    const restoredPath = path.join(restoreDir, "toolbox.db");
+    fs.copyFileSync(path.join(BACKUPS_DIR, quiet.filename), restoredPath);
+    const restored = openDatabase(restoredPath);
+    try {
+      initPlatformSchema(restored);
+      initKitsSchema(restored);
+      expect(tableDigests(restored)).toEqual(tableDigests(sqlite));
+    } finally {
+      restored.close();
+      initKitsSchema(sqlite);
+      fs.rmSync(restoreDir, { recursive: true, force: true });
+    }
+  });
+
+  it("8. answers provider 429/5xx with 503 + Retry-After/502, ends dropped and stalled chat streams with an error, aborts the upstream when the client leaves, and caps the structured-mode cache", async () => {
+    let mode: "429" | "500" | "drop" | "stall" | "json" = "429";
+    let upstreamClosed: Promise<void> = Promise.resolve();
+    const delta = (text: string) =>
+      `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "m", choices: [{ index: 0, delta: { content: text }, finish_reason: null }] })}\n\n`;
+    const upstream = http.createServer((req, res) => {
+      req.resume();
+      if (req.method === "GET") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ object: "list", data: [{ id: "mock-model", object: "model" }] }));
+        return;
+      }
+      upstreamClosed = new Promise((resolve) => res.on("close", () => resolve()));
+      if (mode === "429" || mode === "500") {
+        res.writeHead(Number(mode), {
+          "Content-Type": "application/json",
+          "retry-after-ms": "1",
+          "retry-after": "7",
+        });
+        res.end(JSON.stringify({ error: { message: `upstream ${mode}` } }));
+      } else if (mode === "json") {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            id: "c2",
+            object: "chat.completion",
+            created: 1,
+            model: "m",
+            choices: [{ index: 0, message: { role: "assistant", content: '{"ok":true}' }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+        );
+      } else {
+        res.writeHead(200, { "Content-Type": "text/event-stream" });
+        res.write(delta("Quorums "));
+        res.write(delta("intersect"));
+        if (mode === "drop") setTimeout(() => res.socket?.destroy(), 20);
+      }
+    });
+    await new Promise<void>((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+    const appServer = http.createServer(app);
+    await new Promise<void>((resolve) => appServer.listen(0, "127.0.0.1", resolve));
+
+    try {
+      const { port: upstreamPort } = upstream.address() as AddressInfo;
+      const epId = (
+        await agent
+          .post("/api/endpoints")
+          .send({ name: "Flaky AI", baseUrl: `http://127.0.0.1:${upstreamPort}/v1` })
+          .expect(201)
+      ).body.id as string;
+      const model = `custom:${epId}:mock-model`;
+      const evaluate = () =>
+        agent
+          .post("/api/feynman/evaluate")
+          .set("X-Toolbox-Kit", "system-design")
+          .send({ conceptName: "Quorum", explanation: "Any two majorities overlap.", model });
+
+      mode = "429";
+      const limited = await evaluate().expect(503);
+      expect(limited.body.error.code).toBe("AI_PROVIDER_RATE_LIMITED");
+      expect(limited.headers["retry-after"]).toBe("7");
+      mode = "500";
+      expect((await evaluate().expect(502)).body.error.code).toBe("AI_PROVIDER_ERROR");
+
+      mode = "drop";
+      const dropped = await agent.post("/api/chat/stream").send({ message: "Explain quorums", model }).expect(200);
+      expect(dropped.text).toContain('data: {"text":"Quorums "}');
+      expect(dropped.text).toMatch(/data: \{"error":/);
+
+      mode = "stall";
+      __setStreamIdleTimeoutMs(150);
+      const stalled = await agent.post("/api/chat/stream").send({ message: "Explain quorums", model }).expect(200);
+      expect(stalled.text).toContain('data: {"text":"intersect"}');
+      expect(stalled.text).toContain("The AI provider stopped responding");
+      expect(stalled.text).not.toContain("[DONE]");
+
+      __setStreamIdleTimeoutMs(60_000);
+      const { port } = appServer.address() as AddressInfo;
+      const upstreamGone = await new Promise<Promise<void>>((resolve) => {
+        const req = http.request(
+          {
+            host: "127.0.0.1",
+            port,
+            path: "/api/chat/stream",
+            method: "POST",
+            headers: { "Content-Type": "application/json", Cookie: sessionCookie },
+          },
+          (res) =>
+            res.once("data", () => {
+              resolve(upstreamClosed);
+              req.destroy();
+            }),
+        );
+        req.on("error", () => undefined);
+        req.end(JSON.stringify({ message: "Explain quorums", model }));
+      });
+      await upstreamGone;
+
+      mode = "json";
+      const schema = z.object({ ok: z.boolean() });
+      for (let i = 0; i <= 256; i++) {
+        await runStructured({ model: `custom:${epId}:distinct-${i}`, prompt: "ok?", schema });
+      }
+      expect(__getStructuredModeFor(`instance:${epId}`, "distinct-0")).toBeUndefined();
+      expect(__getStructuredModeFor(`instance:${epId}`, "distinct-256")).toBe("json_schema");
+    } finally {
+      __setStreamIdleTimeoutMs(120_000);
+      appServer.closeAllConnections();
+      upstream.closeAllConnections();
+      await Promise.all([
+        new Promise((resolve) => appServer.close(resolve)),
+        new Promise((resolve) => upstream.close(resolve)),
+      ]);
+    }
   });
 });

@@ -28,6 +28,15 @@ const CALL_TIMEOUT_MS = 120_000;
 const STREAM_TIMEOUT_MS = 600_000;
 const MAX_TOOL_STEPS = 8;
 const MAX_RETRY_TOKENS = 32_768;
+const MAX_STRUCTURED_MODES = 256;
+
+// A stream that starts and then goes silent this long is cut off, instead of
+// holding the request until STREAM_TIMEOUT_MS.
+let streamIdleTimeoutMs = 120_000;
+
+export function __setStreamIdleTimeoutMs(ms: number): void {
+  streamIdleTimeoutMs = ms;
+}
 
 // Suppress AI SDK console warning when Rung 2 intentionally pairs json_object mode with Output.object
 (globalThis as { AI_SDK_LOG_WARNINGS?: boolean }).AI_SDK_LOG_WARNINGS = false;
@@ -43,7 +52,17 @@ const MODEL_FACTORIES: Record<
 
 export type StructuredRung = "json_schema" | "json_object" | "prompt";
 
+// Keys include the caller-supplied upstream model id, so the oldest entry is
+// evicted past MAX_STRUCTURED_MODES instead of growing per distinct id.
 const structuredModeCache = new Map<string, StructuredRung>();
+
+function rememberStructuredMode(key: string, rung: StructuredRung): void {
+  structuredModeCache.delete(key);
+  structuredModeCache.set(key, rung);
+  if (structuredModeCache.size > MAX_STRUCTURED_MODES) {
+    structuredModeCache.delete(structuredModeCache.keys().next().value!);
+  }
+}
 
 export function __resetStructuredModeCache(): void {
   structuredModeCache.clear();
@@ -316,7 +335,7 @@ async function runOpenAiCompatibleStructured<T>({
             "Retry with a shorter input or a higher output limit.",
         );
       }
-      structuredModeCache.set(cacheKey, "json_schema");
+      rememberStructuredMode(cacheKey, "json_schema");
       return result.output as T;
     } catch (err) {
       if (!shouldDowngradeStructuredRung(err)) throw err;
@@ -324,7 +343,7 @@ async function runOpenAiCompatibleStructured<T>({
         `[ai] ${feature} downgrading ${desc.modelId} from json_schema -> json_object`,
       );
       rung = "json_object";
-      structuredModeCache.set(cacheKey, rung);
+      rememberStructuredMode(cacheKey, rung);
     }
   }
 
@@ -354,7 +373,7 @@ async function runOpenAiCompatibleStructured<T>({
             "Retry with a shorter input or a higher output limit.",
         );
       }
-      structuredModeCache.set(cacheKey, "json_object");
+      rememberStructuredMode(cacheKey, "json_object");
       return result.output as T;
     } catch (err) {
       if (!shouldDowngradeStructuredRung(err)) throw err;
@@ -362,7 +381,7 @@ async function runOpenAiCompatibleStructured<T>({
         `[ai] ${feature} downgrading ${desc.modelId} from json_object -> prompt JSON`,
       );
       rung = "prompt";
-      structuredModeCache.set(cacheKey, rung);
+      rememberStructuredMode(cacheKey, rung);
     }
   }
 
@@ -534,6 +553,7 @@ export function chatStream({
     stopWhen: stepCountIs(MAX_TOOL_STEPS),
     maxOutputTokens,
     abortSignal: AbortSignal.any(signals),
+    timeout: { chunkMs: streamIdleTimeoutMs },
     onError: ({ error }) => {
       const msg = error instanceof Error ? error.message : String(error);
       logger.error(`[ai] chat stream error (model=${modelId}): ${msg}`);
