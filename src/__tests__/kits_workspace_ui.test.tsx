@@ -53,7 +53,7 @@ vi.mock('../utils/api', async (importOriginal) => {
     ...actual,
     configApi: {
       ...actual.configApi,
-      get: vi.fn(() => Promise.resolve({ api_key_configured: true })),
+      get: vi.fn(() => Promise.resolve({ api_keys_configured: { gemini: true } })),
       getAvailableModels: vi.fn(() => Promise.resolve({ groups: [], providers: [] })),
     },
     studySessionsApi: {

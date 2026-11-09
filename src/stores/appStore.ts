@@ -67,7 +67,6 @@ export interface AppStoreState {
   toggleChat: (page: string) => void
 
   apiKeyConfigured: boolean
-  setApiKeyConfigured: (status: boolean) => void
   setApiKeysConfigured: (status: Record<string, boolean>) => void
 
   availableModels: ModelGroup[]
@@ -162,7 +161,6 @@ const useAppStore = create<AppStoreState>((set, get) => ({
     })),
 
   apiKeyConfigured: false,
-  setApiKeyConfigured: (status) => set({ apiKeyConfigured: status }),
   setApiKeysConfigured: (status) =>
     set({ apiKeyConfigured: Object.values(status).some(Boolean) }),
 

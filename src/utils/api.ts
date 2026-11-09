@@ -39,7 +39,6 @@ export interface AvailableModelsResponse {
 }
 
 interface ConfigResponse {
-  api_key_configured?: boolean
   api_keys_configured?: Record<string, boolean>
   gemini_api_key?: string
   claude_api_key?: string

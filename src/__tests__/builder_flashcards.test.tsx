@@ -48,7 +48,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../utils/api', () => ({
   configApi: {
-    get: vi.fn(() => Promise.resolve({ api_key_configured: true })),
+    get: vi.fn(() => Promise.resolve({ api_keys_configured: { gemini: true } })),
     update: vi.fn(() => Promise.resolve({ success: true })),
     testApiKey: vi.fn(() => Promise.resolve({ valid: true })),
   },

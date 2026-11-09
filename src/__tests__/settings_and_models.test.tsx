@@ -100,7 +100,7 @@ beforeEach(() => {
   useAppStore.getState().applyModelGroups([])
   resetKitStore()
 
-  mocks.configGet.mockResolvedValue({ api_key_configured: false, api_keys_configured: { gemini: false, claude: false, openai: false } })
+  mocks.configGet.mockResolvedValue({ api_keys_configured: { gemini: false, claude: false, openai: false } })
   mocks.configUpdate.mockResolvedValue({ success: true })
   mocks.getAvailableModels.mockResolvedValue({ groups: [], providers: [] })
   mocks.testApiKey.mockResolvedValue({ valid: true, modelsDiscovered: 3 })
@@ -209,7 +209,7 @@ describe('Settings, Guide Fallbacks, Model Catalog & MCP Snippets', () => {
     expect(openSpy).toHaveBeenCalledWith('/api/guide/export?kit=distributed-rust', '_blank')
     unmount()
 
-    mocks.configGet.mockResolvedValue({ api_key_configured: true, api_keys_configured: { gemini: true, claude: false, openai: false } })
+    mocks.configGet.mockResolvedValue({ api_keys_configured: { gemini: true, claude: false, openai: false } })
     useAppStore.setState({ apiKeyConfigured: true })
     await renderSettled(
       <MemoryRouter>
