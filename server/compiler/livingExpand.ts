@@ -19,7 +19,13 @@ import {
   toSlugId,
   type DagRepairReport,
 } from "./dagCompiler.ts";
-import { enqueueKitSeedJob, kickSeedJobRunner } from "./seedHydrator.ts";
+import {
+  enqueueKitSeedJob,
+  kickSeedJobRunner,
+  recoverOrphanedRunningJobs,
+} from "./seedHydrator.ts";
+
+export { recoverOrphanedRunningJobs };
 import {
   commitStagedSourcesToKit,
   type LoadedStagedSource,
@@ -594,6 +600,11 @@ export async function expandLivingKit(
        SET status = 'seeding', status_detail = ?, updated_at = datetime('now')
        WHERE ownerId = ? AND id = ?`,
     ).run(banner, scope.ownerId, existingKit.id);
+
+    recoverOrphanedRunningJobs(db, {
+      ownerId: scope.ownerId,
+      kitId: existingKit.id,
+    });
 
     const enqueued = enqueueKitSeedJob(db, scope, {
       kitId: existingKit.id,

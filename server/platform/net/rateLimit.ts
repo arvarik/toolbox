@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from "express";
 import { RateLimitedError, trimTrailingSlashes } from "./errors.ts";
 
+export const MAX_BUCKETS = 10_000;
+
 interface WindowState {
   count: number;
   resetAt: number;
@@ -9,6 +11,7 @@ interface WindowState {
 export interface RateLimiter {
   (req: Request, res: Response, next: NextFunction): void;
   reset(): void;
+  size(): number;
 }
 
 export function createRateLimiter(options: {
@@ -16,8 +19,10 @@ export function createRateLimiter(options: {
   max: number;
   name: string;
   keyBy?: (req: Request) => string | null;
+  maxBuckets?: number;
 }): RateLimiter {
-  const { windowMs, max, name, keyBy } = options;
+  const { windowMs, max, name, keyBy, maxBuckets = MAX_BUCKETS } = options;
+  const bucketCap = Math.max(1, maxBuckets);
   const windows = new Map<string, WindowState>();
 
   const middleware = (
@@ -31,12 +36,18 @@ export function createRateLimiter(options: {
 
     const state = windows.get(key);
     if (!state || state.resetAt <= now) {
-      windows.set(key, { count: 1, resetAt: now + windowMs });
-      if (windows.size > 1000) {
-        for (const [k, v] of windows) {
-          if (v.resetAt <= now) windows.delete(k);
-        }
+      if (state) windows.delete(key);
+      // Map insertion order is monotonic by resetAt: sweep expired front entries in O(expired)
+      for (const [k, v] of windows) {
+        if (v.resetAt <= now) windows.delete(k);
+        else break;
       }
+      while (windows.size >= bucketCap) {
+        const oldest = windows.keys().next().value;
+        if (oldest === undefined) break;
+        windows.delete(oldest);
+      }
+      windows.set(key, { count: 1, resetAt: now + windowMs });
       return next();
     }
 
@@ -57,6 +68,7 @@ export function createRateLimiter(options: {
   };
 
   middleware.reset = () => windows.clear();
+  middleware.size = () => windows.size;
   return middleware;
 }
 
