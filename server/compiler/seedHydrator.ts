@@ -888,6 +888,102 @@ export async function runSeedKitJob(
   }
 }
 
+export const ORPHANED_JOB_RESTART_ERROR = "Interrupted by server restart";
+
+export interface RecoverOrphanedJobsResult {
+  recoveredCount: number;
+  recoveredJobIds: string[];
+}
+
+/**
+ * Idempotent startup recovery: marks any orphaned `status = 'running'` rows
+ * left behind in `jobs` by a crashed or restarted server process as `'failed'`
+ * (`lastError = 'Interrupted by server restart'`), leaving `'queued'` and
+ * completed (`'done'` / `'completed'`) rows untouched.
+ */
+export function recoverOrphanedRunningJobs(
+  db: Database.Database,
+  opts: { ownerId?: string; kitId?: string } = {},
+): RecoverOrphanedJobsResult {
+  const tx = db.transaction((): RecoverOrphanedJobsResult => {
+    const runningRows = (
+      opts.ownerId
+        ? db
+            .prepare(
+              `SELECT id, kind, ownerId, payload
+               FROM jobs
+               WHERE ownerId = ? AND status = 'running'`,
+            )
+            .all(opts.ownerId)
+        : db
+            .prepare(
+              `SELECT id, kind, ownerId, payload
+               FROM jobs
+               WHERE status = 'running'`,
+            )
+            .all()
+    ) as Array<{
+      id: string;
+      kind: string;
+      ownerId: string | null;
+      payload: string;
+    }>;
+
+    const orphaned = runningRows.filter((row) => {
+      if (activeJobRunners.has(row.id)) return false;
+      if (opts.kitId) {
+        const parsed = parseJsonOr<{ kitId?: string }>(row.payload, {});
+        return parsed.kitId === opts.kitId;
+      }
+      return true;
+    });
+
+    if (orphaned.length === 0) {
+      return { recoveredCount: 0, recoveredJobIds: [] };
+    }
+
+    const markJobFailed = db.prepare(
+      `UPDATE jobs
+       SET status = 'failed',
+           lastError = ?,
+           finishedAt = COALESCE(finishedAt, CURRENT_TIMESTAMP)
+       WHERE id = ? AND status = 'running'`,
+    );
+    const resetKitSeedingBanner = db.prepare(
+      `UPDATE kits
+       SET status = 'ready',
+           status_detail = ?,
+           updated_at = datetime('now')
+       WHERE ownerId = ? AND id = ? AND status = 'seeding'`,
+    );
+
+    const recoveredJobIds: string[] = [];
+    for (const row of orphaned) {
+      const res = markJobFailed.run(ORPHANED_JOB_RESTART_ERROR, row.id);
+      if (res.changes > 0) {
+        recoveredJobIds.push(row.id);
+        if (row.ownerId && row.kind === SEED_KIT_JOB_KIND) {
+          const parsed = parseJsonOr<{ kitId?: string }>(row.payload, {});
+          if (parsed.kitId) {
+            resetKitSeedingBanner.run(
+              ORPHANED_JOB_RESTART_ERROR,
+              row.ownerId,
+              parsed.kitId,
+            );
+          }
+        }
+      }
+    }
+
+    return {
+      recoveredCount: recoveredJobIds.length,
+      recoveredJobIds,
+    };
+  });
+
+  return tx();
+}
+
 /**
  * Resumes any `queued` or `running` `seed_kit_pillars` jobs after server restart.
  */

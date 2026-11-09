@@ -13,11 +13,19 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
+export function applySqlitePragmas(db: Database.Database): void {
+  db.pragma("journal_mode = WAL");
+  db.pragma("synchronous = NORMAL");
+  db.pragma("foreign_keys = ON");
+  db.pragma("busy_timeout = 5000");
+  db.pragma("cache_size = -32000");
+  db.pragma("temp_store = MEMORY");
+  db.pragma("journal_size_limit = 67108864");
+  db.pragma("mmap_size = 134217728");
+}
+
 export const sqlite: Database.Database = new Database(DB_PATH);
-sqlite.pragma("journal_mode = WAL");
-sqlite.pragma("synchronous = NORMAL");
-sqlite.pragma("foreign_keys = ON");
-sqlite.pragma("busy_timeout = 5000");
+applySqlitePragmas(sqlite);
 
 initPlatformSchema(sqlite);
 
