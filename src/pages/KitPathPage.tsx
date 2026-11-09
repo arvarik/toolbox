@@ -46,30 +46,17 @@ interface GraphNodeEntry {
   strength: number;
   counts: {
     total: number;
-    new: number;
     learning: number;
     lapsed: number;
     due: number;
-    maturing: number;
     mastered: number;
   };
-  ready: boolean;
   locked: boolean;
 }
 
 interface GraphPayload {
   nodes: GraphNodeEntry[];
   edges: Array<{ from: string; to: string }>;
-  tracks: Array<{
-    id: string;
-    name: string;
-    emoji: string;
-    description: string;
-    nodeIds: string[];
-    nodeCount: number;
-    masteredCount: number;
-  }>;
-  stats: { mastered: number; due: number; decayed: number; unseen: number };
   remediationCount: number;
 }
 
@@ -197,14 +184,11 @@ export default function KitPathPage() {
       strength: 0,
       counts: {
         total: 0,
-        new: 0,
         learning: 0,
         lapsed: 0,
         due: 0,
-        maturing: 0,
         mastered: 0,
       },
-      ready: true,
       locked: false,
     }));
   }, [graphData, pillars, skeleton.graph.nodes]);

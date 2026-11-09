@@ -150,9 +150,7 @@ export default function StudyPage() {
     const seq = ++fetchSeqRef.current
     if (!isRefresh) setIsLoading(true)
     try {
-      const fetchStudySessions = studySessionsApi
-        ? studySessionsApi.list()
-        : Promise.resolve([])
+      const fetchStudySessions = studySessionsApi.list()
       const [list, sessions] = await Promise.all([
         decksApi.list(),
         fetchStudySessions,

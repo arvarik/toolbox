@@ -40,16 +40,6 @@ interface CustomEndpointRecord {
   models: Array<{ id: string; name?: string }>
 }
 
-interface ModelGroupEntry {
-  provider: { id?: string; name: string; color: string }
-  models: Array<{
-    id: string
-    name: string
-    family?: string
-    description?: string
-  }>
-}
-
 interface SystemStatsSummary {
   guideCount: number
   flashcardsCount: number
@@ -650,10 +640,7 @@ export default function SettingsPage() {
   const handleRefreshModels = async () => {
     setIsRefreshingModels(true)
     try {
-      const data = (await useAppStore.getState().refreshModels()) as {
-        errors?: Record<string, string>
-        groups?: ModelGroupEntry[]
-      }
+      const data = await useAppStore.getState().refreshModels()
       const errorEntries = Object.entries(data.errors || {})
       if (errorEntries.length > 0) {
         addToast({
@@ -738,8 +725,7 @@ export default function SettingsPage() {
     }
   }
 
-  const modelGroups = availableModels as ModelGroupEntry[]
-  const allModels = modelGroups.flatMap((group) =>
+  const allModels = availableModels.flatMap((group) =>
     group.models.map((m) => ({
       ...m,
       providerColor: group.provider.color,
