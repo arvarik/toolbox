@@ -1,1017 +1,277 @@
-# Toolbox — REST API Reference
+# Toolbox v2 — API & MCP Reference
 
-All endpoints are mounted under `/api/`. The server listens on `PORT` (default `3100`).
-
-All request bodies are JSON (`Content-Type: application/json`) unless noted. All responses are JSON unless noted.
+Complete reference for Toolbox v2's HTTP REST API (`/api/*`) and Stateless Streamable HTTP Model Context Protocol server (`POST /api/mcp`).
 
 ---
 
-## Table of Contents
+## Conventions, Auth & Tenancy
 
-- [Health](#health)
-- [Chat & AI](#chat--ai)
-- [Flashcard Decks](#flashcard-decks)
-- [Flashcards](#flashcards)
-- [Knowledge Graph](#knowledge-graph)
-- [BotE Calculator](#bote-calculator)
-- [Whiteboard Boards](#whiteboard-boards)
-- [Guide Content](#guide-content)
-- [User Profile (Shadow Memory)](#user-profile-shadow-memory)
-- [Configuration](#configuration)
-- [Search](#search)
-- [Study Sessions](#study-sessions)
-- [System](#system)
-- [Error Responses](#error-responses)
-- [SRS Quality Ratings](#srs-quality-ratings)
+- **Base URL**: `http://localhost:3100/api`
+- **Content-Type**: `application/json` (`10mb` body limit), except multipart source/archive uploads and binary `.zip` / `.db` downloads.
+- **Authentication Modes**:
+  1. **Local Owner Mode (`AUTH_REQUIRED=false`, no password accounts created yet)**: Requests authenticate implicitly as `local@toolbox.local` (admin role).
+  2. **Session Cookie (`toolbox_session`)**: `HttpOnly`, `SameSite=Lax` cookie issued by `/api/auth/login`, `/api/auth/setup`, Passkey verify, Magic Link, or OIDC callback. Cross-site write requests (`Origin` mismatch) are rejected (`refuseCrossSiteWrites`).
+  3. **Personal Bearer Token (`Authorization: Bearer tbk_<secret>`)**: Created in **Settings → API & MCP Tokens** (`/api/auth/tokens`). Tokens created with `readOnly: true` cannot execute mutating HTTP verbs (`guardReadOnlyToken`) or mutating MCP tools.
+- **Kit Context Selection**: Kit-scoped workspace endpoints (`/api/decks`, `/api/boards`, `/api/guide-content`, `/api/chat`, `/api/graph`, `/api/drills`, `/api/feynman`, `/api/calculator`) resolve the target Kit from `X-Toolbox-Kit: <kitId-or-slug>` (or `?kitId=`), defaulting to the caller's System Design Starter Kit. Passing `?scope=all` on `/api/decks/all/cards/due` or `/api/search` queries across every Kit owned by the caller.
+- **Standard Error Shape**: `{ "error": { "code": "...", "message": "..." }, "requestId": "..." }` (or `{ "error": "..." }` on legacy routes).
 
 ---
 
-## Health
+## 1. Health
 
-### `GET /api/health`
-
-Liveness check. Used by Docker health checks.
-
-**Response `200`**
-```json
-{ "status": "ok" }
-```
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/api/health` | Public | Returns `{ "status": "ok", "timestamp": "<ISO-8601>" }`. Used by Docker healthcheck. |
 
 ---
 
-## Chat & AI
+## 2. Authentication & Account (`/api/auth`)
 
-### `POST /api/chat`
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| `GET` | `/api/auth/status` | Public | Instance auth state (`authRequired`, `needsSetup`, `allowRegistration`, `oidc`, `passkeysAvailable`, current `user`). |
+| `POST` | `/api/auth/setup` | Public (once) | Bootstrap initial admin account (`{ email, password, displayName? }`) and enable multi-tenant auth. |
+| `POST` | `/api/auth/register` | Public (if enabled) | Self-register account when open registration is enabled. |
+| `POST` | `/api/auth/login` | Public | Email + password login (`{ email, password }`); sets `toolbox_session`. |
+| `POST` | `/api/auth/logout` | Session | Revoke current session and clear cookie. |
+| `POST` | `/api/auth/invitations/check` | Public | Inspect invitation token metadata before acceptance. |
+| `POST` | `/api/auth/accept-invitation` | Public | Claim an admin-issued invitation (`{ token, password, displayName? }`). |
+| `POST` | `/api/auth/password-reset/request` | Public | Send password-reset email link (requires SMTP). |
+| `POST` | `/api/auth/password-reset/complete` | Public | Complete password reset (`{ token, newPassword }`). |
+| `POST` | `/api/auth/magic-link/request` | Public | Request passwordless sign-in link via email. |
+| `POST` | `/api/auth/magic-link/complete` | Public | Redeem magic-link token and establish session. |
+| `GET` | `/api/auth/me` | Session | Current user profile, role, and security flags. |
+| `PATCH` | `/api/auth/me` | Session | Update `displayName` or initiate email change. |
+| `DELETE` | `/api/auth/email-change` | Session | Cancel pending email change. |
+| `POST` | `/api/auth/email-change/complete` | Public | Confirm email change token. |
+| `POST` | `/api/auth/change-password` | Session | Rotate password (`{ currentPassword, newPassword }`) and revoke other sessions. |
+| `GET` | `/api/auth/sessions` | Session | List active browser sessions for current user. |
+| `DELETE` | `/api/auth/sessions` | Session | Revoke all other sessions (or `?id=<sessionId>`). |
+| `GET` | `/api/auth/tokens` | Session | List personal `tbk_` API/MCP tokens (metadata only; plaintext shown once on creation). |
+| `POST` | `/api/auth/tokens` | Session | Mint `tbk_` token (`{ name, readOnly?: boolean, expiresInDays?: number }`). |
+| `DELETE` | `/api/auth/tokens/:id` | Session | Revoke a personal `tbk_` token. |
+| `POST` | `/api/auth/passkeys/register/options` | Session | Generate WebAuthn registration challenge (`PUBLIC_URL` sets RP ID behind proxies). |
+| `POST` | `/api/auth/passkeys/register/verify` | Session | Verify attestation and store Passkey credential. |
+| `GET` | `/api/auth/passkeys` | Session | List registered Passkeys. |
+| `PATCH` | `/api/auth/passkeys/:id` | Session | Rename a Passkey (`{ name }`). |
+| `DELETE` | `/api/auth/passkeys/:id` | Session | Remove a Passkey. |
+| `POST` | `/api/auth/passkeys/login/options` | Public | Generate WebAuthn authentication challenge. |
+| `POST` | `/api/auth/passkeys/login/verify` | Public | Verify assertion and issue `toolbox_session`. |
+| `POST` | `/api/auth/passkey-nudge/dismiss` | Session | Dismiss Passkey enrollment prompt. |
+| `GET` | `/api/auth/oidc/start` | Public | Redirect to OIDC Identity Provider (PKCE + state). |
+| `POST` | `/api/auth/oidc/link` | Session | Initiate OIDC account-linking flow for signed-in user. |
+| `GET` | `/api/auth/oidc/callback` | Public | Complete OIDC authorization code exchange. |
+| `GET` | `/api/auth/identities` | Session | List linked external OIDC identities. |
+| `DELETE` | `/api/auth/identities/:id` | Session | Unlink an external OIDC identity. |
 
-Send a single message and receive a complete (non-streaming) AI response. Useful for one-shot requests that don't need real-time streaming.
+---
 
-**Request Body**
+## 3. Instance Administration (`/api/admin`)
+
+Requires `role === "admin"`.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/admin/users` | List all instance users. |
+| `POST` | `/api/admin/users` | Create user directly (`{ email, password, role, displayName? }`). |
+| `GET` | `/api/admin/users/:id` | Inspect user details. |
+| `PATCH` | `/api/admin/users/:id` | Update user role or profile fields. |
+| `POST` | `/api/admin/users/:id/reset-password` | Set temporary password (`mustChangePassword = 1`). |
+| `POST` | `/api/admin/users/:id/reset-link` | Generate one-time password-reset URL. |
+| `POST` | `/api/admin/users/:id/disable` | Disable user login & revoke active sessions. |
+| `POST` | `/api/admin/users/:id/enable` | Re-enable disabled user. |
+| `DELETE` | `/api/admin/users/:id` | Delete user and cascade-remove owned tenant rows. |
+| `GET` | `/api/admin/invitations` | List pending/claimed invitations. |
+| `POST` | `/api/admin/invitations` | Create invitation (`{ email, role? }`, optionally emailed via SMTP). |
+| `DELETE` | `/api/admin/invitations/:id` | Revoke invitation. |
+| `GET` / `PUT` | `/api/admin/settings` | Read/update instance policies (open registration, session TTL, backup schedule). |
+| `GET` / `PUT` | `/api/admin/integrations` | Read/update OIDC SSO configuration (`secretBox`-encrypted client secret). |
+| `GET` / `PUT` / `DELETE` | `/api/admin/mail` | Read/configure/clear SMTP mail transport. |
+| `POST` | `/api/admin/mail/test` | Send test email using configured SMTP settings. |
+| `GET` | `/api/admin/backups` | List online SQLite backup snapshots in `${DATA_DIR}/backups`. |
+| `POST` | `/api/admin/backups` | Trigger immediate online SQLite `VACUUM INTO` / backup snapshot. |
+| `GET` | `/api/admin/backups/:filename` | Download backup SQLite file. |
+| `GET` | `/api/admin/audit` | Query security & admin `audit_log` entries. |
+
+---
+
+## 4. Kits & Shared Library (`/api/kits`, `/api/shared-kits`)
+
+### Personal Kits (`/api/kits`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/kits` | List caller's Kits with node counts, mastery stats, and upstream update status. |
+| `GET` | `/api/kits/:id` | Fetch full Kit metadata, `KitSkeleton`, and capabilities (`id` or `slug`). |
+| `PATCH` / `PUT` | `/api/kits/:id` | Update Kit metadata, capabilities, or skeleton (non-destructively soft-archives orphaned `guide_content`). |
+| `DELETE` | `/api/kits/:id` | Delete Kit and cascade-delete its decks, drills, boards, sessions, and RAG chunks. |
+| `POST` | `/api/kits/:id/touch` | Update `lastOpenedAt` timestamp for Library sorting. |
+| `GET` | `/api/kits/:id/export-kit` | **Mode 1 Export**: Download clean `<slug>.toolbox-kit.json` curriculum skeleton (zero personal progress/files; alias `GET /:id/export?mode=kit`). |
+| `GET` | `/api/kits/:id/export-backup` | **Mode 2 Export**: Stream `<slug>.toolbox-backup.zip` containing `kit.json`, `userdata.json` (decks, FSRS state, notes, drills, boards, chats), and `files/<sourceId>/<name>` (`GET /:id/export?mode=backup`). |
+| `POST` | `/api/kits/import-kit` | Import `.toolbox-kit.json` (`onCollision`: `"error" \| "copy" \| "replace" \| "update"`). |
+| `POST` | `/api/kits/import-backup` | Upload & verify `.toolbox-backup.zip` (`multipart/form-data` field `file` or raw `application/zip`, up to 100 MB; fresh UUID remapping; alias `POST /api/kits/import`). |
+| `GET` | `/api/kits/:id/archived-notes` | List `guide_content` notes soft-archived during a skeleton update. |
+| `POST` | `/api/kits/:id/archived-notes/refile` | Re-attach an archived note to a current `(pillarId, topicId, sectionId)`. |
+| `DELETE` | `/api/kits/:id/archived-notes` | Permanently delete archived notes. |
+| `POST` | `/api/kits/:id/publish` | Publish or push a new version of this Kit to the instance Shared Library. |
+| `POST` | `/api/kits/:id/sync` | Pull upstream skeleton updates from `shared_kits` while preserving personal SRS & notes (alias `POST /:id/sync-upstream`). |
+| `GET` | `/api/kits/:id/sources/:sourceId/file` | Download an uploaded source document attached to the Kit. |
+
+### Shared Library (`/api/shared-kits`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/shared-kits` | List Kits published to the instance Shared Library. |
+| `GET` | `/api/shared-kits/:slug` | Inspect published Kit skeleton and version history. |
+| `POST` | `/api/shared-kits/:slug/fork` | Clone a Shared Kit into the caller's personal Library. |
+
+---
+
+## 5. 4-Stage Deep Research Kit Compiler & Living Kits (`/api/compiler`)
+
+| Method | Endpoint | Stage & Description |
+|--------|----------|---------------------|
+| `POST` | `/api/compiler/sources` | **Stage 1 (Ingest)**: Multipart upload of PDFs (`unpdf` worker), Markdown/text files, or `{ urls: [...] }` (SSRF-guarded fetch). Returns `stagedId` chunks (alias `POST /ingest`). |
+| `DELETE` | `/api/compiler/sources/:stagedId` | Discard a staged source before compilation. |
+| `POST` | `/api/compiler/calibrate` | **Stage 2 (Calibrate)**: `{ topic, goal?, background?, stagedSourceIds? }` → generates 3–5 diagnostic calibration questions and capability recommendations (`canvas`: `'architecture' \| 'concept' \| 'none'`, `calculator`: `boolean`). |
+| `POST` | `/api/compiler/compile` | **Stage 3 (Synthesize)**: SSE stream (`Accept: text/event-stream`) or JSON response running optional SearXNG web grounding + `deep`/`research` synthesis into a validated acyclic `KitSkeleton` DAG. |
+| `POST` | `/api/compiler/refine` | **Stage 4a (Refine)**: Apply natural-language edits (`{ skeleton, instruction }`) while re-validating DAG acyclicity and schema constraints. |
+| `POST` | `/api/compiler/commit` | **Stage 4b (Commit)**: Persist the compiled `KitSkeleton` as a new Kit, attach staged sources, index Hybrid RAG chunks, and kick off initial flashcard/starter seeding. |
+| `GET` | `/api/compiler/kits/:id/seed-status` | Poll background card/guide seeding progress for a newly committed Kit. |
+| `POST` | `/api/compiler/kits/:id/expand` | **Living Kit Expansion**: `{ prompt, anchorNodeId? }` — researches and splices 1–6 new sub-DAG nodes + edges into an existing Kit without disturbing existing notes or FSRS state. |
+
+---
+
+## 6. AI Capability Router, BYOK & Provider Endpoints
+
+### Per-User AI & BYOK (`/api/ai-settings`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/ai-settings` | Effective capability routing (`quick`, `deep`, `research`), configured instance/BYOK providers, custom endpoints, and available model catalog. |
+| `PUT` | `/api/ai-settings` | Save per-user `secretBox`-encrypted BYOK API keys (`gemini`, `openai`, `claude`), capability tier model overrides, or web-research toggle. |
+| `POST` | `/api/ai-settings/test-key` | Validate a provider API key without persisting it. |
+| `POST` | `/api/ai-settings/endpoints/test` | Test an OpenAI-compatible BYOM base URL (SSRF-checked in multi-tenant mode). |
+| `POST` / `PUT` / `DELETE` | `/api/ai-settings/endpoints` (`/:id`) | Manage user-scoped OpenAI-compatible endpoints (Ollama, vLLM, OpenRouter, etc.). |
+
+### Instance AI Router & Embeddings (`/api/admin/ai-settings`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` / `PUT` | `/api/admin/ai-settings` | Configure instance-wide provider keys, default `quick`/`deep`/`research` models, `embeddings` backend (`local` ONNX vs remote OpenAI-compatible), and `searxngUrl`. |
+| `POST` | `/api/admin/ai-settings/test-searxng` | Probe SearXNG JSON search connectivity (`{ url }`). |
+| `POST` | `/api/admin/ai-settings/reindex-embeddings` | Rebuild `rag_chunks`, `rag_chunks_fts`, and `rag_chunks_vec` across the instance (e.g. after switching embedding model dimensions). |
+
+*(Legacy instance compatibility routes `/api/config` and `/api/endpoints` remain mounted for existing UI workflows.)*
+
+---
+
+## 7. Hybrid Search (`/api/search`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/search?q=<query>&kitId=<id>&scope=kit\|all&limit=20` | Executes Reciprocal Rank Fusion (`RRF_K = 15`) across `FTS5` BM25 (weight `1.0`) and `sqlite-vec` cosine KNN (weight `1.2`) over guide notes, flashcards, boards, Kit sources, and episodic memory within the caller's `Scope`. |
+
+---
+
+## 8. Pedagogy: Drills, Challenge Node, Feynman & FSRS-6 Decks
+
+### Guided Drills & `⚡ Challenge Node` (`/api/drills`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/drills?nodeId=<id>` | List generated drills and attempt summaries for the active Kit (optionally filtered by `nodeId`). |
+| `POST` | `/api/drills/generate` | Generate an attempt-gated drill (`{ nodeId, kind?: "recall" \| "apply" \| "synthesize" \| "critique", difficulty?: 1 \| 2 \| 3 }`) with rubric items, 3 progressive hints, and a worked solution (withheld until attempt). |
+| `GET` | `/api/drills/:id` | Fetch drill prompt and past attempts (`workedSolution` hidden until first submission or explicit reveal; `?revealHint=1..3` / `?revealSolution=1`). |
+| `POST` | `/api/drills/:id/submit` | Grade learner `{ response, hintsUsed, solutionViewed }` with errors-first anti-sycophancy guardrails. Unassisted passes propagate FIRe upward credit; failures (`score < 0.6`) queue downward prerequisite remediation. |
+| `GET` | `/api/drills/challenge/:nodeId` | Fetch or generate a difficulty-3 `⚡ Challenge Node` diagnostic + Feynman first-principles prompt. |
+| `POST` | `/api/drills/challenge/:nodeId` | Submit `{ drillId, response, explanation }`. Unassisted `score >= 0.85` with zero errors commits the explanation into `guide_content`, graduates node flashcards (`S = 21`, `interval = 21d`), and propagates FIRe upward credit. |
+
+### Feynman Evaluator (`/api/feynman`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/feynman/evaluate` | Structured anti-sycophancy evaluation of a learner's plain-language concept explanation (`{ topic, nodeId?, explanation }`), returning extracted claims, errors, jargon flags, Socratic follow-up, and score. |
+
+### Flashcard Decks & FSRS-6 Reviews (`/api/decks`)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/decks` | List decks in active Kit (`?scope=all` lists across all Kits) with `card_count` and `due_count`. |
+| `GET` | `/api/decks/all/cards/due` | Interleaved due queue (`?scope=all` for global `/review` across every Kit), prioritizing `remediation_queue` cards first. |
+| `POST` / `GET` / `PUT` / `DELETE` | `/api/decks` (`/:id`) | Create, inspect, update, or delete a deck. |
+| `PUT` | `/api/decks/:deckId/settings` | Update per-deck FSRS-6 settings (`desired_retention`, `new_cards_per_day`, `reviews_per_day`, `learning_steps`, `relearning_steps`, `maximum_interval`). |
+| `GET` / `POST` | `/api/decks/:deckId/cards` | List cards or create a card (`{ front, back, node_id?, prerequisite_id? }`). |
+| `GET` | `/api/decks/:deckId/cards/due` | Due cards for a single deck (remediation cards prioritized). |
+| `POST` | `/api/decks/:deckId/cards/check-duplicates` | Semantic + lexical duplicate detection before adding cards. |
+| `PUT` / `DELETE` | `/api/decks/:deckId/cards/:cardId` | Edit card content/links or delete card. |
+| `PUT` / `POST` | `/api/decks/:deckId/cards/:cardId/review` | Submit FSRS-6 review `{ quality: 0..5 \| grade: 1..4, confidence?: "guessed" \| "normal" \| "high" }`. Returns updated DSR card fields (`stability`, `difficulty`, `reps`, `lapses`, `interval`, `next_review`), downward `remediation` summary, and upward FIRe credit count. |
+
+---
+
+## 9. Workspace: Canvas, Guide, Chat, Graph, Calculator & System
+
+- **Dual-Mode Canvas (`/api/boards`)**:
+  - `GET /`, `GET /:id`, `POST /`, `PUT /:id`, `PATCH /reorder`, `PATCH /:id/rename`, `DELETE /:id`
+  - `POST /api/boards/:id/critique`: Structured AI rubric critique tailored to board mode — **Architecture mode** checks single points of failure, bottlenecks, data flow consistency, and trade-offs; **Novakian Concept mode** checks proposition accuracy (`[Concept A] —linking phrase→ [Concept B]`), missing linking phrases, hierarchy, and cross-links.
+- **Knowledge Guide (`/api/guide-content`)**:
+  - `GET /progress`, `GET /export` (Markdown bundle), `GET /:pillarId/:topicId`, `GET|PUT|DELETE /:pillarId/:topicId/:sectionId` (automatically re-indexes `rag_chunks`).
+- **AI Tutor Chat (`/api/chat`)**:
+  - `POST /stream` (SSE token + citation events, optional `webSearch: true` via SearXNG + Hybrid RAG grounding), `POST /` (non-streaming), `GET /starters`
+  - `POST /commit` & `POST /commit/save` (extract & commit chat insights into Guide blueprint sections)
+  - `POST /generate-flashcards`, `POST /generate-reverse-cards`, `POST /summarize`, `POST /evaluate-interceptor`, `POST /concept-map`
+  - `GET /sessions`, `POST /sessions`, `POST /sessions/bulk`, `DELETE /sessions/:id`
+- **Knowledge Graph (`/api/graph`)**:
+  - `GET /` (Kit DAG nodes, edges, learning tracks, and live FSRS-6 retrievability health), `GET /nodes/:id`, `POST /nodes/:id/session`, `POST /tracks/:id/session`
+- **BotE Calculator (`/api/calculator`)**:
+  - `POST /audit` — Structured AI math & bottleneck audit for capacity estimations.
+- **Learner Profile & Telemetry (`/api/profile`, `/api/study_sessions`, `/api/system`)**:
+  - `GET|PUT|DELETE /api/profile` (Shadow Memory profile), `GET /api/study_sessions` (365-day review heatmap), `GET /api/system/stats`, `POST /api/system/clear-cache`, `GET /api/system/export-db` (admin-only raw SQLite snapshot).
+
+---
+
+## 10. Stateless Streamable HTTP MCP Server (`POST /api/mcp`)
+
+External AI clients (Claude Desktop, Cursor, Claude Code, custom MCP hosts) connect directly to `POST /api/mcp` using a personal `tbk_` bearer token:
+
 ```json
 {
-  "message": "Explain consistent hashing",
-  "context": "Optional system context string prepended to the system instruction",
-  "history": [
-    { "role": "user", "content": "Hi" },
-    { "role": "ai",   "content": "Hello! How can I help?" }
-  ],
-  "model": "gemini-3.5-flash"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `message` | string | ✅ | The user's message |
-| `context` | string | ❌ | Prepended to system instruction |
-| `history` | array | ❌ | Prior turns. `role` is `"user"` or `"ai"` |
-| `model` | string | ❌ | Gemini model ID. Defaults to `gemini-3.5-flash` |
-
-**Response `200`**
-```json
-{ "response": "Consistent hashing is a technique..." }
-```
-
----
-
-### `POST /api/chat/stream`
-
-Send a message and receive a streaming AI response via **Server-Sent Events (SSE)**. This is the primary AI endpoint used by the chat UI.
-
-The model runs as an **agentic harness loop** with three built-in tools: `search_flashcards`, `search_guide`, and `submit_draft` (a critic–actor pattern). The full flashcard and guide databases are injected as context. Episodic memory is retrieved via semantic similarity.
-
-**Request Body** — same shape as `POST /api/chat`.
-
-**Response Headers**
-```
-Content-Type: text/event-stream
-Cache-Control: no-cache
-Connection: keep-alive
-X-Accel-Buffering: no
-```
-
-**Event Stream Format**
-
-Each event is a line starting with `data: `, followed by a JSON object, followed by `\n\n`.
-
-| Event | Description |
-|-------|-------------|
-| `data: {"text": "partial text"}\n\n` | Accumulated text chunk so far |
-| `data: {"tool": "Running search_flashcards..."}\n\n` | Tool use notification |
-| `data: [DONE]\n\n` | Stream complete |
-| `data: {"error": "message"}\n\n` | Error during streaming |
-
-**Client-side example**
-```javascript
-const res = await fetch('/api/chat/stream', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ message, history, model }),
-  signal: abortController.signal
-})
-const reader = res.body.getReader()
-// Read chunks and parse data: lines
-```
-
-> **Reverse proxy note**: Requires `proxy_buffering off` (Nginx) or `flush_interval -1` (Caddy) for correct streaming.
-
-> **After-response**: A background job extracts episodic memories from the exchange using the Antigravity agent and stores them in the `episodic_memory` table.
-
----
-
-### `GET /api/chat/starters`
-
-Generate (or retrieve cached) topic-specific starter prompts for the study plan. Returns 6 randomly selected prompts from a pool of 12–15, tuned to the user's current guide progress and shadow memory.
-
-**Query Parameters**
-
-| Param | Required | Description |
-|-------|----------|-------------|
-| `pillarId` | ✅ | e.g. `compute`, `storage` |
-| `topicId` | ✅ | e.g. `load-balancers` |
-| `topicName` | ❌ | Human-readable fallback if topic not in constants |
-| `model` | ❌ | Gemini model ID for generation |
-
-**Response `200`**
-```json
-{
-  "suggestions": [
-    "Can you quiz me on consistent hashing?",
-    "How does a load balancer handle sticky sessions?",
-    "..."
-  ]
-}
-```
-
-Results are **cached** in the `chat_starters` table keyed by `(pillarId, topicId)` with a content-hash. Cache is invalidated when guide content or the user profile changes.
-
----
-
-### `POST /api/chat/summarize`
-
-Summarize selected chat message excerpts into clean Markdown guide notes for a specific blueprint section. Used by the Commit to Guide flow.
-
-**Request Body**
-```json
-{
-  "excerpts": ["AI response text 1", "AI response text 2"],
-  "sectionId": "scale",
-  "sectionName": "Scale Considerations",
-  "topicName": "Load Balancers",
-  "model": "gemini-3.5-flash"
-}
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `excerpts` | ✅ | Array of strings (AI message bodies) |
-| `sectionId` | ✅ | Blueprint section ID (e.g. `scale`, `tradeoffs`) |
-| `sectionName` | ❌ | Human-readable section name for prompt context |
-| `topicName` | ❌ | Topic name for prompt context |
-| `model` | ❌ | Gemini model ID |
-
-**Response `200`**
-```json
-{ "content": "## Scale Considerations\n\nLoad balancers can be..." }
-```
-
----
-
-### `POST /api/chat/concept-map`
-
-Generate a Mermaid diagram from a full chat session history. Returns a markdown code block containing `graph TD` syntax.
-
-**Request Body**
-```json
-{
-  "history": [
-    { "role": "user", "content": "Explain CDN" },
-    { "role": "ai",   "content": "A CDN is..." }
-  ],
-  "model": "gemini-3.5-flash"
-}
-```
-
-**Response `200`**
-```json
-{
-  "response": "```mermaid\ngraph TD\n  CDN --> EdgeNode\n  EdgeNode --> User\n```"
-}
-```
-
-Requires at least 1 message in `history`.
-
----
-
-### `POST /api/chat/evaluate-interceptor`
-
-Evaluate a user's explanation of *why* a flashcard answer is correct (the "Why?" interceptor feature). Returns structured JSON with a pass/fail verdict and feedback.
-
-**Request Body**
-```json
-{
-  "explanation": "Because consistent hashing minimizes re-mapping when nodes are added...",
-  "front": "Why do we use consistent hashing in distributed caches?",
-  "back": "To minimize key remapping when nodes join or leave",
-  "model": "gemini-3.5-flash"
-}
-```
-
-**Response `200`**
-```json
-{
-  "pass": true,
-  "feedback": "Correct. You correctly identified the core benefit: O(K/N) remapping instead of O(K)."
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `pass` | boolean | `true` if explanation demonstrates understanding |
-| `feedback` | string | 1–2 sentence evaluator feedback |
-
----
-
-## Flashcard Decks
-
-### `GET /api/decks`
-
-List all decks with card counts, SRS state counts, and computed progress.
-
-**Response `200`** — Array of deck objects:
-```json
-[
-  {
-    "id": "uuid",
-    "name": "Distributed Systems",
-    "description": "CAP theorem, consensus, ...",
-    "color_index": 2,
-    "tags": "systems,distributed",
-    "settings": {
-      "new_limit": 20,
-      "review_limit": 200,
-      "steps": "1m 10m",
-      "lapse_steps": "10m",
-      "easy_bonus": 1.3
-    },
-    "card_count": 42,
-    "new_count": 10,
-    "learn_count": 5,
-    "due_count": 7,
-    "progress": 64,
-    "last_studied": "Yesterday",
-    "created_at": "2024-01-15T10:30:00.000Z",
-    "updated_at": "2024-01-16T09:00:00.000Z"
-  }
-]
-```
-
----
-
-### `POST /api/decks`
-
-Create a new deck.
-
-**Request Body**
-```json
-{
-  "name": "Distributed Systems",
-  "description": "CAP theorem, consensus, replication",
-  "color_index": 2,
-  "tags": "systems,distributed"
-}
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | ✅ | Deck display name |
-| `description` | ❌ | Optional deck description |
-| `color_index` | ❌ | Integer 0–7, maps to a preset color |
-| `tags` | ❌ | Comma-separated tag strings |
-
-**Response `201`** — The created deck object (same shape as list item, without computed counts).
-
----
-
-### `GET /api/decks/:id`
-
-Get a single deck with all its cards (plus per-card SRS previews).
-
-**Response `200`**
-```json
-{
-  "id": "uuid",
-  "name": "Distributed Systems",
-  "settings": { ... },
-  "cards": [
-    {
-      "id": "card-uuid",
-      "deck_id": "uuid",
-      "front": "What is the CAP theorem?",
-      "back": "A distributed system can only guarantee 2 of: Consistency, Availability, Partition Tolerance",
-      "state": 2,
-      "ease_factor": 2.5,
-      "interval": 4,
-      "repetitions": 3,
-      "next_review": "2024-01-20T10:00:00.000Z",
-      "last_reviewed": "2024-01-16T09:00:00.000Z",
-      "learning_step": 0,
-      "position": 1,
-      "srs_previews": {
-        "again": "10m",
-        "hard": "15m",
-        "good": "4d",
-        "easy": "6d"
+  "mcpServers": {
+    "toolbox": {
+      "type": "http",
+      "url": "https://toolbox.example.com/api/mcp",
+      "headers": {
+        "Authorization": "Bearer tbk_your_personal_token_here"
       }
     }
-  ],
-  "new_count": 10,
-  "learn_count": 5,
-  "due_count": 7,
-  "progress": 64,
-  "last_studied": "Yesterday"
-}
-```
-
-**Response `404`** if deck not found.
-
----
-
-### `PUT /api/decks/:id`
-
-Update deck metadata (name, description, color, tags). All fields are optional — omitted fields are not changed.
-
-**Request Body**
-```json
-{
-  "name": "Updated Name",
-  "description": "New description",
-  "color_index": 3,
-  "tags": "systems,updated"
-}
-```
-
-**Response `200`** — Updated deck object.
-
----
-
-### `PUT /api/decks/:id/settings`
-
-Update per-deck SRS scheduler settings.
-
-**Request Body**
-```json
-{
-  "new_limit": 20,
-  "review_limit": 200,
-  "steps": "1m 10m",
-  "lapse_steps": "10m",
-  "easy_bonus": 1.3
-}
-```
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `new_limit` | integer | `20` | Max new cards introduced per day |
-| `review_limit` | integer | `200` | Max review cards per day |
-| `steps` | string | `"1m 10m"` | Space-separated learning step intervals. Suffix `m` = minutes, `h` = hours |
-| `lapse_steps` | string | `"10m"` | Re-learning step intervals after a lapse |
-| `easy_bonus` | float | `1.3` | Multiplier applied to the interval for "Easy" ratings |
-
-**Response `200`**
-```json
-{ "id": "uuid", "settings": { ... } }
-```
-
----
-
-### `DELETE /api/decks/:id`
-
-Delete a deck and all its cards (cascade delete).
-
-**Response `204`** — No content.
-
----
-
-## Flashcards
-
-### `GET /api/decks/all/cards/due`
-
-Get all due cards across every deck, shuffled (Fisher-Yates). Respects per-deck `new_limit` and `review_limit` settings. Used by the Interleaved Review page.
-
-Card ordering priority within each deck: learning/relearning → review → new.
-
-**Response `200`** — Array of card objects, each with:
-- All standard card fields
-- `deckName` — the parent deck's name
-- `srs_previews` — interval previews for all 4 ratings
-
----
-
-### `GET /api/decks/:deckId/cards`
-
-Get all cards for a deck (no SRS filtering, no limit). Ordered by `position`.
-
-**Response `200`** — Array of card objects.
-
----
-
-### `GET /api/decks/:deckId/cards/due`
-
-Get due cards for a single deck, respecting daily limits. Card ordering: learning/relearning → review → new.
-
-**Response `200`** — Array of card objects, each with `deckName` and `srs_previews`.
-
----
-
-### `POST /api/decks/:deckId/cards`
-
-Create a new card in a deck.
-
-**Request Body**
-```json
-{
-  "front": "What is eventual consistency?",
-  "back": "Nodes may return stale data but will converge given enough time",
-  "prerequisite_id": null
-}
-```
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `front` | ✅ | Card front/question text |
-| `back` | ✅ | Card back/answer text |
-| `prerequisite_id` | ❌ | Card UUID that must be mastered (state=2, ease≥2.5) before this card appears |
-
-**Response `201`** — The created card object.
-
----
-
-### `PUT /api/decks/:deckId/cards/:cardId`
-
-Update card content or ordering.
-
-**Request Body**
-```json
-{
-  "front": "Updated question",
-  "back": "Updated answer",
-  "position": 5,
-  "prerequisite_id": null
-}
-```
-
-All fields are optional. SRS state fields (`ease_factor`, `interval`, etc.) are not modified by this endpoint — use the review endpoint for that.
-
-**Response `200`** — Updated card object.
-
----
-
-### `PUT /api/decks/:deckId/cards/:cardId/review`
-
-Submit a review rating for a card. Runs the SM-2 SRS algorithm and persists the next state. Also increments the study session heatmap counter for today. (`POST` is accepted as an alias for older clients and queued offline mutations.)
-
-**Request Body**
-```json
-{
-  "quality": 4,
-  "confidence": "medium"
-}
-```
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `quality` | integer 0–5 | ✅ | See [SRS Quality Ratings](#srs-quality-ratings) |
-| `confidence` | string | ❌ | `"low"`, `"medium"`, or `"high"`. Used for Hypercorrection Penalty on failure. Defaults to `"medium"` |
-
-**Response `200`** — Updated card object with recalculated SRS fields and fresh `srs_previews`.
-
-Side effects tied to the Knowledge Graph remediation engine:
-
-- Reviewing a card resolves its open `remediation_queue` rows.
-- On failure (`quality < 3`), the engine finds the card's graph nodes, checks their direct prerequisite nodes for shaky cards (new, learning, lapsed, overdue, or low ease), and queues up to 3 of them for the next session. The response includes the plan:
-
-```json
-{
-  "...": "updated card fields",
-  "remediation": [
-    {
-      "cardId": "uuid",
-      "front": "What is replication lag?",
-      "nodeName": "Replication (Leader / Follower)",
-      "reason": "Foundation for CAP & PACELC"
-    }
-  ]
-}
-```
-
-Queued cards lead the next due-card session (single-deck and interleaved) tagged with `is_remediation: 1`, `remediation_node`, and `remediation_reason`.
-
----
-
-### `DELETE /api/decks/:deckId/cards/:cardId`
-
-Delete a single card.
-
-**Response `204`** — No content.
-
----
-
-## Knowledge Graph
-
-The graph itself (nodes, prerequisite edges, learning tracks) is defined in `src/utils/knowledgeGraph.js` and validated (unique ids, no dangling edges, acyclic) at server boot. These endpoints combine it with live flashcard SRS state.
-
-### `GET /api/graph`
-
-The full graph with live memory health per node.
-
-**Response `200`**
-```json
-{
-  "nodes": [
-    {
-      "id": "consistent-hashing",
-      "name": "Consistent Hashing",
-      "pillarId": "distributed-mechanics",
-      "pillarName": "Distributed Data Mechanics",
-      "pillarColor": "#a78bfa",
-      "topicId": "partitioning-sharding",
-      "summary": "The hash ring: adding a node only remaps the arc it owns.",
-      "health": "decayed",
-      "strength": 0.35,
-      "counts": { "total": 2, "new": 1, "learning": 0, "lapsed": 1, "due": 0, "maturing": 0, "mastered": 0 },
-      "ready": false,
-      "locked": false
-    }
-  ],
-  "edges": [{ "from": "partitioning", "to": "consistent-hashing" }],
-  "tracks": [
-    { "id": "senior-distributed", "name": "Senior Distributed Systems", "emoji": "🧠", "description": "...", "nodeIds": ["..."], "nodeCount": 23, "masteredCount": 2 }
-  ],
-  "stats": { "mastered": 4, "due": 20, "decayed": 2, "unseen": 33 },
-  "remediationCount": 1
-}
-```
-
-Health buckets: `mastered` (every graded card at ease ≥ 2.5 and interval > 21 d), `due` (learning, new, or scheduled within 48 h), `decayed` (a lapse, a queued remediation, or crushed ease), `unseen` (no linked cards). Cards link to nodes by keyword phrases, with the card's source guide topic as the fallback.
-
----
-
-### `GET /api/graph/nodes/:id`
-
-Detail payload for the slide-over panel: linked cards with SRS state, prerequisite/dependent nodes with health, the linked Guide topic (with filled-section count), and whiteboards containing the node's builder components.
-
-**Response `200`** — `{ node, cards, prereqs, dependents, guide, boards }`.
-
----
-
-### `POST /api/graph/nodes/:id/session`
-
-Build a study session from one node's studyable cards (due, learning, or new), capped at 20.
-
-**Response `200`** — `{ cards, nodeName }`. Cards carry `deckName`, `nodeName`, and `srs_previews`.
-
----
-
-### `POST /api/graph/tracks/:id/session`
-
-Build a study session for a curated learning track. Cards are ordered by the track's topological (prerequisite-first) node order, due cards before new within each node, capped at 30.
-
-**Response `200`** — `{ cards, trackName, nodeOrder }`.
-
----
-
-## BotE Calculator
-
-All sizing math runs client-side in `src/utils/bote.js`. The server's only calculator endpoint is the AI sanity check.
-
-### `POST /api/calculator/audit`
-
-"Audit My Math" — sends the current assumptions and computed results to the AI and returns a structured critique.
-
-**Request Body**
-```json
-{
-  "scenario": { "id": "url-shortener", "name": "URL Shortener", "description": "..." },
-  "inputs": { "dau": 10000000, "readRatio": 100, "...": "..." },
-  "results": { "peakTotalQps": "463", "retainedWithReplication": "1.08 TB", "...": "..." },
-  "model": "gemini-3.5-flash"
-}
-```
-
-**Response `200`**
-```json
-{
-  "verdict": "revisit",
-  "summary": "Two or three sentences on the estimate's quality.",
-  "findings": [
-    { "severity": "warning", "area": "Storage", "finding": "...", "suggestion": "..." }
-  ],
-  "omittedFactors": ["Database index overhead", "CDN offload of media egress"]
-}
-```
-
-`verdict` is `"sound"` or `"revisit"`. `severity` is `"critical"`, `"warning"`, or `"info"`.
-
----
-
-## Whiteboard Boards
-
-### `GET /api/boards`
-
-List all boards (metadata only, no canvas data).
-
-**Response `200`**
-```json
-[
-  {
-    "id": "uuid",
-    "name": "URL Shortener Design",
-    "created_at": "2024-01-15T10:30:00.000Z",
-    "updated_at": "2024-01-16T09:00:00.000Z"
-  }
-]
-```
-
----
-
-### `POST /api/boards`
-
-Create a new board.
-
-**Request Body**
-```json
-{
-  "name": "URL Shortener Design",
-  "data": { "nodes": [], "edges": [] }
-}
-```
-
-**Response `201`** — Created board with parsed `data` object.
-
----
-
-### `GET /api/boards/:id`
-
-Get a board with full canvas data.
-
-**Response `200`**
-```json
-{
-  "id": "uuid",
-  "name": "URL Shortener Design",
-  "data": {
-    "nodes": [
-      { "id": "n1", "type": "load_balancer", "x": 100, "y": 200, "label": "Load Ba..." }
-    ],
-    "edges": [
-      { "id": "e1", "from": "n1", "to": "n2" }
-    ]
-  },
-  "created_at": "...",
-  "updated_at": "..."
-}
-```
-
-**Response `404`** if board not found.
-
----
-
-### `PUT /api/boards/:id`
-
-Update a board. Supports partial updates (omit `name` or `data` to leave them unchanged).
-
-**Request Body**
-```json
-{
-  "name": "Renamed Board",
-  "data": { "nodes": [...], "edges": [...] }
-}
-```
-
-**Response `200`** — Updated board.
-
----
-
-### `DELETE /api/boards/:id`
-
-Delete a board.
-
-**Response `204`** — No content.
-
----
-
-## Guide Content
-
-### `GET /api/guide-content/progress`
-
-Returns a flat map of all filled guide sections. Used by the Study Plan sidebar to compute per-pillar progress percentages.
-
-**Response `200`**
-```json
-{
-  "compute__load-balancers__scale": true,
-  "compute__load-balancers__tradeoffs": true,
-  "storage__sql__primitives": true
-}
-```
-
-Keys are formatted as `{pillarId}__{topicId}__{sectionId}`.
-
----
-
-### `GET /api/guide-content/export`
-
-Export all committed guide content as a single Markdown file download.
-
-**Response `200`**
-- `Content-Type: text/markdown`
-- `Content-Disposition: attachment; filename="system_design_guide.md"`
-- Body: Markdown document organized by Pillar → Topic → Section
-
----
-
-### `GET /api/guide-content/:pillarId/:topicId`
-
-Get all section content for a topic. Returns only sections that have content in the database.
-
-**Response `200`**
-```json
-{
-  "scale": {
-    "content": "## Scale Considerations\n\n...",
-    "committedAt": "2024-01-15T10:30:00.000Z"
-  },
-  "tradeoffs": {
-    "content": "## Trade-offs\n\n...",
-    "committedAt": "2024-01-15T11:00:00.000Z"
   }
 }
 ```
 
----
-
-### `GET /api/guide-content/:pillarId/:topicId/:sectionId`
-
-Get content for a single section. Returns `{ content: "", committedAt: null }` if the section has never been committed.
-
-**Response `200`**
-```json
-{
-  "content": "## Scale Considerations\n\n...",
-  "committedAt": "2024-01-15T10:30:00.000Z"
-}
-```
-
----
-
-### `PUT /api/guide-content/:pillarId/:topicId/:sectionId`
-
-Upsert (create or replace) the content for a guide section.
-
-**Request Body**
-```json
-{ "content": "## Scale Considerations\n\nA load balancer..." }
-```
-
-**Response `200`**
-```json
-{ "ok": true }
-```
-
----
-
-### `DELETE /api/guide-content/:pillarId/:topicId/:sectionId`
-
-Clear a guide section's content (sets it back to empty).
-
-**Response `200`**
-```json
-{ "ok": true }
-```
-
----
-
-## User Profile (Shadow Memory)
-
-### `GET /api/profile`
-
-Get the user's shadow memory profile text.
-
-**Response `200`**
-```json
-{ "profileText": "Interviewing at Google in 6 weeks. Strong in distributed systems, weak in storage..." }
-```
-
----
-
-### `PUT /api/profile`
-
-Overwrite the entire profile text. The profile is injected into every AI system prompt.
-
-**Request Body**
-```json
-{ "profileText": "Updated profile text..." }
-```
-
-**Response `200`**
-```json
-{ "success": true, "profileText": "Updated profile text..." }
-```
-
----
-
-### `DELETE /api/profile`
-
-Clear all shadow memory.
-
-**Response `200`**
-```json
-{ "success": true, "message": "Profile cleared" }
-```
-
----
-
-## Configuration
-
-### `GET /api/config`
-
-Get all config values. The `gemini_api_key` is **masked** (first 8 chars + last 4 chars shown).
-
-**Response `200`**
-```json
-{
-  "gemini_api_key": "AIzaSyAB...Xy1z",
-  "api_key_configured": true
-}
-```
-
----
-
-### `PUT /api/config`
-
-Update one or more config values. Pass any key-value pairs. The `gemini_api_key` key is handled specially (stored as-is, not as a string coercion).
-
-**Request Body**
-```json
-{ "gemini_api_key": "AIzaSy..." }
-```
-
-**Response `200`**
-```json
-{ "success": true }
-```
-
----
-
-### `POST /api/config/test-key`
-
-Validate a Gemini API key by making a minimal live API call. If valid, **also saves the key** to the database.
-
-**Request Body**
-```json
-{ "key": "AIzaSy..." }
-```
-
-**Response `200`**
-```json
-{ "valid": true }
-```
-
-**Response `400`**
-```json
-{ "valid": false, "message": "Invalid API key" }
-```
-
----
-
-## Search
-
-### `GET /api/search?q=:query`
-
-Unified full-text search across all content types. Returns up to 10 results per domain.
-
-**Query Parameters**
-
-| Param | Required | Description |
-|-------|----------|-------------|
-| `q` | ✅ | Search query string (minimum 1 character) |
-
-**Response `200`**
-```json
-{
-  "flashcards": [
-    { "id": "uuid", "deck_id": "uuid", "front": "...", "back": "...", "state": 2 }
-  ],
-  "guideContent": [
-    { "pillar_id": "compute", "topic_id": "load-balancers", "section_id": "scale", "content": "..." }
-  ],
-  "boards": [
-    { "id": "uuid", "name": "URL Shortener Design" }
-  ],
-  "decks": [
-    { "id": "uuid", "name": "Distributed Systems", "description": "...", "tags": "..." }
-  ]
-}
-```
-
-Returns empty arrays for all domains if `q` is blank.
-
----
-
-## Study Sessions
-
-### `GET /api/study_sessions`
-
-Get all study session activity records (used by the activity heatmap). One record per calendar day, incremented each time a card is reviewed.
-
-**Response `200`**
-```json
-[
-  { "date": "2024-01-15", "count": 12 },
-  { "date": "2024-01-16", "count": 7 }
-]
-```
-
-Ordered by date ascending.
-
----
-
-## System
-
-### `GET /api/system/stats`
-
-Get database row counts and profile size for the Settings diagnostics panel.
-
-**Response `200`**
-```json
-{
-  "flashcardsCount": 142,
-  "decksCount": 8,
-  "boardsCount": 3,
-  "guideCount": 24,
-  "cachedStartersCount": 12,
-  "profileSize": 487
-}
-```
-
-| Field | Description |
-|-------|-------------|
-| `flashcardsCount` | Total flashcards across all decks |
-| `decksCount` | Total decks |
-| `boardsCount` | Total whiteboards |
-| `guideCount` | Total committed guide sections |
-| `cachedStartersCount` | Cached topic starter prompt sets |
-| `profileSize` | Character length of the shadow memory profile |
-
----
-
-### `POST /api/system/clear-cache`
-
-Flush all cached AI starter prompts. Forces fresh generation on next topic visit.
-
-**Response `200`**
-```json
-{ "success": true, "message": "AI Starter Cache cleared." }
-```
-
----
-
-### `GET /api/system/export-db`
-
-Download the raw SQLite database file as a binary attachment.
-
-**Response `200`**
-- `Content-Disposition: attachment; filename="toolbox_backup.db"`
-- Body: Binary SQLite file
-
----
-
-## Error Responses
-
-All errors return a JSON body with a `message` field:
-
-```json
-{ "message": "Human-readable error description" }
-```
-
-| Status | Meaning |
-|--------|---------|
-| `400` | Bad request — missing required field or invalid value |
-| `404` | Resource not found |
-| `500` | Internal server error (check server logs) |
-
-A `400` with `"Gemini API key not configured"` means no key is set — go to Settings to add one.
-
----
-
-## SRS Quality Ratings
-
-The review endpoint accepts a `quality` integer from 0–5, mapped to button labels in the UI:
-
-| `quality` | UI Label | Meaning |
-|-----------|----------|---------|
-| `0` or `1` | **Again** | Complete failure — resets card to learning |
-| `2` or `3` | **Hard** | Passed with difficulty — shorter interval, ease penalty |
-| `4` | **Good** | Solid recall — standard interval increase |
-| `5` | **Easy** | Effortless recall — longer interval with easy bonus |
-
-The SM-2 algorithm uses these to update `ease_factor`, `interval`, `state`, and `next_review`. See [SRS Algorithm](./srs-algorithm.md) for the full implementation details.
+### Transport & Security Guarantees
+- **Stateless per request**: Every `POST /api/mcp` instantiates a fresh `McpServer` + `StreamableHTTPServerTransport({ sessionIdGenerator: undefined })` scoped to the token owner's `Scope`. `GET /api/mcp` and `DELETE /api/mcp` return `405 Method Not Allowed` (`Allow: POST`).
+- **Origin & Rate Guards**: Browser `Origin` headers are rejected unless explicitly allowlisted via `CORS_ORIGIN`; non-browser CLI/desktop MCP clients omit `Origin` and pass cleanly. Requests are rate-limited (`120 req/min` per user+IP) and bounded (`256 KB` payload, max JSON depth `12`).
+- **Read-Only Token Enforcement**: Read-only `tbk_` tokens omit mutating tools from `tools/list` and block write calls at execution time. User-authored prose in tool outputs is wrapped in `<untrusted_data>` tags.
+
+### MCP Tools (`7`)
+
+| Tool | Access | Arguments | Description |
+|------|--------|-----------|-------------|
+| `list_kits` | Read | `{}` | List caller's Kits with slugs, capabilities, node counts, and due counts. |
+| `get_kit_path` | Read | `{ kit: string }` | Return a Kit's pillars, prerequisite DAG nodes, and live FSRS-6 retrievability health. |
+| `search_kit` | Read | `{ query: string, kit?: string, limit?: number }` | Hybrid `FTS5` + `sqlite-vec` RRF search across one Kit or the caller's entire Library. |
+| `get_due_cards` | Read | `{ kit?: string, limit?: number }` | Fetch due flashcards (prioritizing `remediation_queue` cards) across one or all Kits. |
+| `create_flashcards` | Write (`add`) | `{ kit: string, deckName?: string, cards: [{ front, back, nodeId? }] }` | Create 1–25 flashcards inside a Kit deck (auto-creates deck if needed). |
+| `review_card` | Write (`add`) | `{ cardId: string, rating: 1\|2\|3\|4, confidence?: "guessed"\|"normal"\|"high" }` | Record an FSRS-6 review, triggering FIRe upward credit or downward remediation. |
+| `commit_guide_note` | Write (`change`, idempotent) | `{ kit: string, pillarId: string, topicId: string, sectionId: string, content: string, mode?: "append"\|"replace" }` | Append or replace Markdown notes in a Kit's Guide section and re-index Hybrid RAG. |
+
+### MCP Resources (`4`) & Prompts (`2`)
+
+- **Resources**:
+  - `toolbox://library/overview` — JSON summary of all Kits and due counts in the caller's Library
+  - `toolbox://kits/{slug}/skeleton` — Canonical `.toolbox-kit.json` skeleton for `{slug}`
+  - `toolbox://kits/{slug}/guide` — Exported Markdown study guide notes for `{slug}`
+  - `toolbox://kits/{slug}/due-cards` — Due FSRS-6 flashcards for `{slug}`
+- **Prompts**:
+  - `study_briefing({ kit })` — Summarizes weak/due nodes and proposes a focused study plan
+  - `socratic_drill({ kit, topic })` — Runs an interactive, anti-sycophancy Socratic drill grounded in the Kit's notes

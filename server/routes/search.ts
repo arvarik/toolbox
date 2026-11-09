@@ -1,5 +1,7 @@
 import { Router } from "express";
 import db from "../db.ts";
+import { resolveKitById } from "../kits/kitContext.ts";
+import { asyncHandler, NotFoundError } from "../platform/net/errors.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
 import {
   hybridSearch,
@@ -17,36 +19,66 @@ const VALID_KINDS = new Set<RagChunkKind>([
   "episodic",
 ]);
 
-router.get("/", async (req, res) => {
-  const scope = scopeOf(req);
-  const { q, kitId: rawKitId, kinds: rawKinds, limit: rawLimit } = req.query;
+router.get(
+  "/",
+  asyncHandler(async (req, res) => {
+    const scope = scopeOf(req);
+    const {
+      q,
+      kitId: rawKitId,
+      kit: rawKitParam,
+      kinds: rawKinds,
+      limit: rawLimit,
+    } = req.query;
 
-  if (!q || typeof q !== "string" || q.trim() === "") {
-    res.json({
-      flashcards: [],
-      guideContent: [],
-      boards: [],
-      decks: [],
-      chunks: [],
-    });
-    return;
-  }
+    if (!q || typeof q !== "string" || q.trim() === "") {
+      res.json({
+        flashcards: [],
+        guideContent: [],
+        boards: [],
+        decks: [],
+        chunks: [],
+      });
+      return;
+    }
 
-  const trimmed = q.trim();
-  const kitId =
-    typeof rawKitId === "string" && rawKitId.trim() ? rawKitId.trim() : undefined;
-  const kinds =
-    typeof rawKinds === "string" && rawKinds.trim()
-      ? rawKinds
-          .split(",")
-          .map((s) => s.trim() as RagChunkKind)
-          .filter((k) => VALID_KINDS.has(k))
-      : undefined;
-  const parsedLimit = Number(rawLimit);
-  const limit =
-    Number.isFinite(parsedLimit) && parsedLimit >= 1
-      ? Math.min(Math.floor(parsedLimit), 50)
-      : 10;
+    const trimmed = q.trim();
+    const headerVal = req.headers["x-toolbox-kit"];
+    const headerSlug = Array.isArray(headerVal) ? headerVal[0] : headerVal;
+    const rawSelector =
+      typeof rawKitId === "string" && rawKitId.trim()
+        ? rawKitId.trim()
+        : typeof rawKitParam === "string" && rawKitParam.trim()
+          ? rawKitParam.trim()
+          : typeof headerSlug === "string" && headerSlug.trim()
+            ? headerSlug.trim()
+            : undefined;
+
+    let kitId: string | undefined;
+    if (
+      rawSelector &&
+      rawSelector.toLowerCase() !== "all" &&
+      rawSelector !== "*"
+    ) {
+      const resolved = resolveKitById(db, scope, rawSelector);
+      if (!resolved) {
+        throw new NotFoundError("Kit", rawSelector);
+      }
+      kitId = resolved.id;
+    }
+
+    const kinds =
+      typeof rawKinds === "string" && rawKinds.trim()
+        ? rawKinds
+            .split(",")
+            .map((s) => s.trim() as RagChunkKind)
+            .filter((k) => VALID_KINDS.has(k))
+        : undefined;
+    const parsedLimit = Number(rawLimit);
+    const limit =
+      Number.isFinite(parsedLimit) && parsedLimit >= 1
+        ? Math.min(Math.floor(parsedLimit), 50)
+        : 10;
 
   try {
     await syncDomainSourcesToRag(db, scope, kitId);
@@ -112,23 +144,22 @@ router.get("/", async (req, res) => {
 
     // Hydrate hybrid guide hits first, then supplement with substring LIKE matches
     const guideMap = new Map<string, Record<string, unknown>>();
+    const getGuideStmt = db.prepare(
+      `SELECT pillar_id, topic_id, section_id, content
+       FROM guide_content
+       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ? AND content != ''`,
+    );
     for (const chunk of chunks) {
       if (chunk.kind !== "guide") continue;
       const [pillar_id, topic_id, section_id] = chunk.sourceRefId.split(":");
       if (!pillar_id || !topic_id || !section_id) continue;
-      const row = db
-        .prepare(
-          `SELECT pillar_id, topic_id, section_id, content
-           FROM guide_content
-           WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
-        )
-        .get(
-          scope.ownerId,
-          chunk.kitId,
-          pillar_id,
-          topic_id,
-          section_id,
-        ) as Record<string, unknown> | undefined;
+      const row = getGuideStmt.get(
+        scope.ownerId,
+        chunk.kitId,
+        pillar_id,
+        topic_id,
+        section_id,
+      ) as Record<string, unknown> | undefined;
       if (row) guideMap.set(`${chunk.kitId}:${chunk.sourceRefId}`, row);
     }
 
@@ -138,7 +169,7 @@ router.get("/", async (req, res) => {
             .prepare(
               `SELECT kit_id, pillar_id, topic_id, section_id, content
                FROM guide_content
-               WHERE ownerId = ? AND kit_id = ? AND (content LIKE ? OR section_id LIKE ? OR topic_id LIKE ?)
+               WHERE ownerId = ? AND kit_id = ? AND content != '' AND (content LIKE ? OR section_id LIKE ? OR topic_id LIKE ?)
                LIMIT 10`,
             )
             .all(scope.ownerId, kitId, likePattern, likePattern, likePattern)
@@ -146,7 +177,7 @@ router.get("/", async (req, res) => {
             .prepare(
               `SELECT kit_id, pillar_id, topic_id, section_id, content
                FROM guide_content
-               WHERE ownerId = ? AND (content LIKE ? OR section_id LIKE ? OR topic_id LIKE ?)
+               WHERE ownerId = ? AND content != '' AND (content LIKE ? OR section_id LIKE ? OR topic_id LIKE ?)
                LIMIT 10`,
             )
             .all(scope.ownerId, likePattern, likePattern, likePattern)
@@ -212,6 +243,7 @@ router.get("/", async (req, res) => {
     logger.error("[search] Error running global search:", msg);
     res.status(500).json({ message: "Failed to run global search" });
   }
-});
+  }),
+);
 
 export default router;

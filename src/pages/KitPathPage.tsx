@@ -110,13 +110,13 @@ function resolveNodeStatus(
 function statusPillClasses(status: NodeDisplayStatus): string {
   switch (status) {
     case "Mastered":
-      return "bg-success/15 text-success border-success/30";
+      return "bg-success/10 text-success border-success/30";
     case "Needs Remediation":
-      return "bg-error/15 text-error border-error/35";
+      return "bg-error/10 text-error border-error/35";
     case "In Progress":
       return "bg-primary/15 text-on-primary-wash border-primary/30";
     case "Ready / Unlocked":
-      return "bg-info/15 text-info border-info/30";
+      return "bg-info/10 text-info border-info/30";
     case "Locked":
       return "bg-surface-container-high text-on-surface-variant border-outline-variant";
   }

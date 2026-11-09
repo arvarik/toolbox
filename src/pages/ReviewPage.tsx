@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import MarkdownRendererRaw from "../components/shared/MarkdownRenderer";
 import useAppStore from "../stores/appStore";
+import { useKitStore } from "../stores/useKitStore";
 import { flashcardsApi } from "../utils/api";
 
 const MarkdownRenderer = MarkdownRendererRaw as unknown as React.ComponentType<{
@@ -111,6 +112,7 @@ export default function ReviewPage() {
   const kitsTouchedRef = useRef<Set<string>>(new Set());
 
   const loadDueQueue = useCallback(async () => {
+    void useKitStore.getState().selectKitBySlug(null);
     setLoading(true);
     try {
       const rows = (await flashcardsApi.dueAll()) as DueReviewCard[] | null;
@@ -575,21 +577,21 @@ export default function ReviewPage() {
                     quality: 1 as const,
                     label: "Again",
                     interval: previews.again,
-                    cls: "border-error/40 bg-error/10 text-error hover:bg-error/20",
+                    cls: "border-error/40 bg-error/8 text-error hover:bg-error/10",
                   },
                   {
                     keyHint: "2",
                     quality: 3 as const,
                     label: "Hard",
                     interval: previews.hard,
-                    cls: "border-warning/40 bg-warning/10 text-warning hover:bg-warning/20",
+                    cls: "border-warning/40 bg-warning/10 text-warning hover:bg-warning/14",
                   },
                   {
                     keyHint: "3",
                     quality: 4 as const,
                     label: "Good",
                     interval: previews.good,
-                    cls: "border-success/40 bg-success/10 text-success hover:bg-success/20",
+                    cls: "border-success/40 bg-success/10 text-success hover:bg-success/14",
                   },
                   {
                     keyHint: "4",

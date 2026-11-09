@@ -35,6 +35,7 @@ import {
   pullUpstreamKitUpdate,
   syncKitStructure,
 } from "../kits/kitSync.ts";
+import { syncDomainSourcesToRag } from "../search/hybridSearch.ts";
 
 const router = Router();
 
@@ -205,17 +206,20 @@ router.get("/:id/archived-notes", (req, res) => {
   res.json({ notes });
 });
 
-router.post("/:id/archived-notes/refile", (req, res) => {
-  const scope = scopeOf(req);
-  const parsed = RefileArchivedSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    throw new ValidationError(
-      parsed.error.issues[0]?.message ?? "Invalid refile payload",
-    );
-  }
-  refileArchivedGuideNote(db, scope, String(req.params.id), parsed.data);
-  res.json({ ok: true });
-});
+router.post(
+  "/:id/archived-notes/refile",
+  asyncHandler(async (req, res) => {
+    const scope = scopeOf(req);
+    const parsed = RefileArchivedSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      throw new ValidationError(
+        parsed.error.issues[0]?.message ?? "Invalid refile payload",
+      );
+    }
+    await refileArchivedGuideNote(db, scope, String(req.params.id), parsed.data);
+    res.json({ ok: true });
+  }),
+);
 
 router.delete("/:id/archived-notes", (req, res) => {
   const scope = scopeOf(req);
@@ -242,7 +246,7 @@ router.delete("/:id/archived-notes", (req, res) => {
   res.json({ ok: true });
 });
 
-function handleSyncKit(req: Request, res: Response): void {
+const handleSyncKit = asyncHandler(async (req, res) => {
   const scope = scopeOf(req);
   const kitId = String(req.params.id);
   const body = req.body as { skeleton?: unknown } | undefined;
@@ -250,8 +254,16 @@ function handleSyncKit(req: Request, res: Response): void {
     body && typeof body === "object" && body.skeleton !== undefined
       ? syncKitStructure(db, scope, kitId, body.skeleton)
       : pullUpstreamKitUpdate(db, scope, kitId);
+  const existingChunks = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM rag_chunks WHERE ownerId = ? AND kit_id = ?")
+      .get(scope.ownerId, result.kit.id) as { c: number }
+  ).c;
+  if (existingChunks > 0) {
+    await syncDomainSourcesToRag(db, scope, result.kit.id, { pruneStale: true });
+  }
   res.json(result);
-}
+});
 
 router.post("/:id/sync", handleSyncKit);
 router.post("/:id/sync-upstream", handleSyncKit);

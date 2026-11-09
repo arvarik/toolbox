@@ -15,7 +15,11 @@ import {
   type KitSkeletonV1,
 } from "../../shared/kits/kitSkeleton.ts";
 import { SYSTEM_DESIGN_KIT_SKELETON } from "../../shared/kits/systemDesignKit.ts";
-import { kitTokFor, ownerTokFor } from "./kitsSchema.ts";
+import {
+  deleteRagChunksBySource,
+  deleteRagChunksForKit,
+  upsertRagChunk,
+} from "../search/hybridSearch.ts";
 
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SAFE_PATH_SEGMENT_RE = /^[A-Za-z0-9._-]+$/;
@@ -374,53 +378,76 @@ export function seedKitStarterContent(
   return run();
 }
 
+interface PreloadedKitAggregates {
+  deckStats: Map<
+    string,
+    {
+      deckCount: number;
+      cardCount: number;
+      dueCount: number;
+      newCount: number;
+      reviewedCount: number;
+    }
+  >;
+  guideRows: Map<
+    string,
+    Array<{ pillar_id: string; topic_id: string; section_id: string }>
+  >;
+  drillCounts: Map<string, number>;
+}
+
 function hydrateKitSummary(
   db: Database.Database,
   scope: Scope,
   row: RawKitRow,
+  preloaded?: PreloadedKitAggregates,
 ): OwnedKitDetail {
   const skeleton = parseStoredSkeleton(row.skeleton_json);
   const validSlots = safeSkeletonSlotSet(skeleton);
   const guideTotalCount = validSlots.size;
 
-  const deckStat = db
-    .prepare(
-      `SELECT
-         COUNT(DISTINCT d.id) as deckCount,
-         COUNT(f.id) as cardCount,
-         COALESCE(SUM(CASE
-           WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
-             AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
-           THEN 1 ELSE 0 END), 0) as dueCount,
-         COALESCE(SUM(CASE
-           WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
-           THEN 1 ELSE 0 END), 0) as newCount,
-         COALESCE(SUM(CASE
-           WHEN f.id IS NOT NULL AND f.repetitions > 0
-           THEN 1 ELSE 0 END), 0) as reviewedCount
-       FROM decks d
-       LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
-       WHERE d.ownerId = ? AND d.kit_id = ?`,
-    )
-    .get(scope.ownerId, row.id) as {
-    deckCount: number;
-    cardCount: number;
-    dueCount: number;
-    newCount: number;
-    reviewedCount: number;
-  };
+  const deckStat = preloaded
+    ? preloaded.deckStats.get(row.id)
+    : (db
+        .prepare(
+          `SELECT
+             COUNT(DISTINCT d.id) as deckCount,
+             COUNT(f.id) as cardCount,
+             COALESCE(SUM(CASE
+               WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
+                 AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
+               THEN 1 ELSE 0 END), 0) as dueCount,
+             COALESCE(SUM(CASE
+               WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
+               THEN 1 ELSE 0 END), 0) as newCount,
+             COALESCE(SUM(CASE
+               WHEN f.id IS NOT NULL AND f.repetitions > 0
+               THEN 1 ELSE 0 END), 0) as reviewedCount
+           FROM decks d
+           LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
+           WHERE d.ownerId = ? AND d.kit_id = ?`,
+        )
+        .get(scope.ownerId, row.id) as {
+        deckCount: number;
+        cardCount: number;
+        dueCount: number;
+        newCount: number;
+        reviewedCount: number;
+      });
 
-  const guideRows = db
-    .prepare(
-      `SELECT pillar_id, topic_id, section_id
-       FROM guide_content
-       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''`,
-    )
-    .all(scope.ownerId, row.id) as Array<{
-    pillar_id: string;
-    topic_id: string;
-    section_id: string;
-  }>;
+  const guideRows = preloaded
+    ? (preloaded.guideRows.get(row.id) ?? [])
+    : (db
+        .prepare(
+          `SELECT pillar_id, topic_id, section_id
+           FROM guide_content
+           WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''`,
+        )
+        .all(scope.ownerId, row.id) as Array<{
+        pillar_id: string;
+        topic_id: string;
+        section_id: string;
+      }>);
 
   let guideFilledCount = 0;
   let archivedNotesCount = 0;
@@ -432,11 +459,13 @@ function hydrateKitSummary(
     }
   }
 
-  const drillCount = (
-    db
-      .prepare("SELECT COUNT(*) as c FROM drills WHERE ownerId = ? AND kit_id = ?")
-      .get(scope.ownerId, row.id) as { c: number }
-  ).c;
+  const drillCount = preloaded
+    ? (preloaded.drillCounts.get(row.id) ?? 0)
+    : (
+        db
+          .prepare("SELECT COUNT(*) as c FROM drills WHERE ownerId = ? AND kit_id = ?")
+          .get(scope.ownerId, row.id) as { c: number }
+      ).c;
 
   const cardCount = deckStat?.cardCount ?? 0;
   const reviewedCount = deckStat?.reviewedCount ?? 0;
@@ -523,8 +552,75 @@ export function listOwnedKits(
     )
     .all(scope.ownerId) as RawKitRow[];
 
+  if (rows.length === 0) return [];
+
+  const deckStatRows = db
+    .prepare(
+      `SELECT
+         d.kit_id,
+         COUNT(DISTINCT d.id) as deckCount,
+         COUNT(f.id) as cardCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND f.state IN (1, 2, 3)
+             AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now'))
+           THEN 1 ELSE 0 END), 0) as dueCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL)
+           THEN 1 ELSE 0 END), 0) as newCount,
+         COALESCE(SUM(CASE
+           WHEN f.id IS NOT NULL AND f.repetitions > 0
+           THEN 1 ELSE 0 END), 0) as reviewedCount
+       FROM decks d
+       LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
+       WHERE d.ownerId = ?
+       GROUP BY d.kit_id`,
+    )
+    .all(scope.ownerId) as Array<{
+    kit_id: string;
+    deckCount: number;
+    cardCount: number;
+    dueCount: number;
+    newCount: number;
+    reviewedCount: number;
+  }>;
+
+  const guideAllRows = db
+    .prepare(
+      `SELECT kit_id, pillar_id, topic_id, section_id
+       FROM guide_content
+       WHERE ownerId = ? AND content IS NOT NULL AND content != ''`,
+    )
+    .all(scope.ownerId) as Array<{
+    kit_id: string;
+    pillar_id: string;
+    topic_id: string;
+    section_id: string;
+  }>;
+
+  const drillCountRows = db
+    .prepare(
+      "SELECT kit_id, COUNT(*) as c FROM drills WHERE ownerId = ? GROUP BY kit_id",
+    )
+    .all(scope.ownerId) as Array<{ kit_id: string; c: number }>;
+
+  const preloaded: PreloadedKitAggregates = {
+    deckStats: new Map(deckStatRows.map((r) => [r.kit_id, r])),
+    guideRows: new Map(),
+    drillCounts: new Map(drillCountRows.map((r) => [r.kit_id, r.c])),
+  };
+  for (const g of guideAllRows) {
+    const arr = preloaded.guideRows.get(g.kit_id);
+    if (arr) arr.push(g);
+    else preloaded.guideRows.set(g.kit_id, [g]);
+  }
+
   return rows.map((row) => {
-    const { skeleton: _skeleton, ...summary } = hydrateKitSummary(db, scope, row);
+    const { skeleton: _skeleton, ...summary } = hydrateKitSummary(
+      db,
+      scope,
+      row,
+      preloaded,
+    );
     return summary;
   });
 }
@@ -643,13 +739,7 @@ export function deleteOwnedKit(
   }
 
   const runDelete = db.transaction(() => {
-    db.prepare(
-      "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND kitTok = ?",
-    ).run(ownerTokFor(scope.ownerId), kitTokFor(current.id));
-    db.prepare("DELETE FROM rag_chunks WHERE ownerId = ? AND kit_id = ?").run(
-      scope.ownerId,
-      current.id,
-    );
+    deleteRagChunksForKit(db, scope, current.id);
     db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(
       scope.ownerId,
       current.id,
@@ -704,7 +794,7 @@ export function getArchivedGuideNotes(
   return archived;
 }
 
-export function refileArchivedGuideNote(
+export async function refileArchivedGuideNote(
   db: Database.Database,
   scope: Scope,
   slugOrId: string,
@@ -716,7 +806,7 @@ export function refileArchivedGuideNote(
     toTopicId: string;
     toSectionId: string;
   },
-): void {
+): Promise<void> {
   const current = findRawOwnedKit(db, scope, slugOrId);
   if (!current) {
     throw new NotFoundError("Kit", slugOrId);
@@ -731,7 +821,7 @@ export function refileArchivedGuideNote(
     throw new ValidationError("Target pillar/topic/section does not exist in this Kit");
   }
 
-  const runRefile = db.transaction(() => {
+  const runRefile = db.transaction((): string => {
     const src = db
       .prepare(
         `SELECT content FROM guide_content
@@ -798,10 +888,25 @@ export function refileArchivedGuideNote(
         params.fromTopicId,
         params.fromSectionId,
       );
+      deleteRagChunksBySource(
+        db,
+        scope,
+        current.id,
+        "guide",
+        `${params.fromPillarId}:${params.fromTopicId}:${params.fromSectionId}`,
+      );
     }
+    return mergedContent;
   });
 
-  runRefile();
+  const mergedContent = runRefile();
+  await upsertRagChunk(db, scope, {
+    kitId: current.id,
+    kind: "guide",
+    sourceRefId: `${params.toPillarId}:${params.toTopicId}:${params.toSectionId}`,
+    title: `${params.toTopicId} — ${params.toSectionId}`,
+    content: mergedContent,
+  });
 }
 
 export function deleteArchivedGuideNote(
@@ -823,6 +928,13 @@ export function deleteArchivedGuideNote(
     params.pillarId,
     params.topicId,
     params.sectionId,
+  );
+  deleteRagChunksBySource(
+    db,
+    scope,
+    current.id,
+    "guide",
+    `${params.pillarId}:${params.topicId}:${params.sectionId}`,
   );
 }
 

@@ -114,3 +114,8 @@
   --color-outline: #6e717a;
   --color-outline-variant: #d4d1cb;
 }
+
+:root[data-theme="light"] .bg-error\/15.text-danger,
+:root[data-theme="light"] .bg-error\/15.text-error {
+  color: #991b1b;
+}

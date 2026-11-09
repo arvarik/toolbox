@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type Database from "better-sqlite3";
+import * as sqliteVec from "sqlite-vec";
 import { LOCAL_OWNER_EMAIL } from "../appConfig.ts";
 import { seal, open } from "../platform/crypto/secretBox.ts";
 import { ensureLocalOwner as ensureLocalOwnerOnDb } from "../platform/db/platformSchema.ts";
@@ -341,6 +342,14 @@ function createV2Tables(db: Database.Database): void {
   `);
 }
 
+const loadedVecDbs = new WeakSet<Database.Database>();
+
+export function ensureVecExtensionLoaded(db: Database.Database): void {
+  if (loadedVecDbs.has(db)) return;
+  sqliteVec.load(db);
+  loadedVecDbs.add(db);
+}
+
 export function ownerTokFor(ownerId: string): string {
   return `o_${ownerId.replace(/[^a-zA-Z0-9]/g, "_")}`;
 }
@@ -367,6 +376,14 @@ function ensureV2ColumnMigrations(db: Database.Database): void {
       ON flashcards(ownerId, deck_id, seed_key) WHERE seed_key IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_drills_seed_key
       ON drills(ownerId, kit_id, seed_key) WHERE seed_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_flashcards_owner_deck_due
+      ON flashcards(ownerId, deck_id, state, next_review);
+    CREATE INDEX IF NOT EXISTS idx_drill_attempts_owner_drill
+      ON drill_attempts(ownerId, drill_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_kit_sources_owner_kit
+      ON kit_sources(ownerId, kit_id);
+    CREATE INDEX IF NOT EXISTS idx_kit_source_chunks_owner_kit_src
+      ON kit_source_chunks(ownerId, kit_id, source_id);
 
     CREATE TABLE IF NOT EXISTS rag_chunks (
       chunk_id TEXT PRIMARY KEY,
@@ -869,6 +886,14 @@ export function initKitsSchema(db: Database.Database): void {
         ownerTokFor(ownerId),
       );
       if (hasTable(db, "rag_chunks_vec")) {
+        ensureVecExtensionLoaded(db);
+        const ids = db
+          .prepare("SELECT chunk_id FROM rag_chunks WHERE ownerId = ?")
+          .all(ownerId) as Array<{ chunk_id: string }>;
+        const delVec = db.prepare(
+          "DELETE FROM rag_chunks_vec WHERE ownerId = ? AND chunk_id = ?",
+        );
+        for (const r of ids) delVec.run(ownerId, r.chunk_id);
         db.prepare("DELETE FROM rag_chunks_vec WHERE ownerId = ?").run(ownerId);
       }
       db.prepare("DELETE FROM rag_chunks WHERE ownerId = ?").run(ownerId);

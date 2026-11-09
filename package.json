@@ -19,6 +19,8 @@
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "audit:contrast": "node scripts/contrast-audit.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -38,7 +40,6 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "idb": "^8.0.3",
     "katex": "^0.19.1",
     "lucide-react": "^1.17.0",
     "mermaid": "^11.15.0",
@@ -60,6 +61,8 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/typography": "^0.5.20",
     "@tailwindcss/vite": "^4.3.5",
     "@testing-library/jest-dom": "^7.0.1",

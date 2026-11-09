@@ -468,7 +468,7 @@ export default function LibraryHomePage() {
                       type="button"
                       className="btn btn-ghost btn-sm"
                       title="Expand Kit with new topics or sources"
-                      aria-label={`Expand ${kit.name}`}
+                      aria-label={`Expand Kit ${kit.name}`}
                       data-testid={`expand-kit-btn-${kit.slug}`}
                       onClick={() => setExpandTarget(kit)}
                     >

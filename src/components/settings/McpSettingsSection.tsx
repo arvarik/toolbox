@@ -50,12 +50,12 @@ const MCP_PROMPTS = [
 
 function effectBadgeClasses(effect: McpToolEffect): string {
   if (effect === "read") {
-    return "bg-info/15 text-info";
+    return "bg-info/10 text-info";
   }
   if (effect === "add") {
-    return "bg-success/15 text-success";
+    return "bg-success/10 text-success";
   }
-  return "bg-warning/15 text-warning";
+  return "bg-warning/10 text-warning";
 }
 
 function effectLabel(effect: McpToolEffect): string {
@@ -346,7 +346,12 @@ export function McpSettingsSection() {
               </span>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-outline-variant bg-surface-container-lowest">
+            <div
+              className="overflow-x-auto rounded-lg border border-outline-variant bg-surface-container-lowest"
+              tabIndex={0}
+              role="region"
+              aria-label="Available MCP tools"
+            >
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
                   <tr className="border-b border-outline-variant bg-surface-container-low text-on-surface-variant">

@@ -1,13 +1,7 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+// @vitest-environment node
 import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Express } from "express";
-
-const tempDir = mkdtempSync(path.join(tmpdir(), "toolbox-wave2f-boards-"));
-process.env.DATA_DIR = tempDir;
-process.env.DB_PATH = path.join(tempDir, "wave2f-boards.db");
 
 const mockRunStructured = vi.fn();
 

@@ -39,7 +39,7 @@
   /* Text */
   --color-text-primary: #f4f4f5;
   --color-text-secondary: #a1a1aa;
-  --color-text-tertiary: #71717a;
+  --color-text-tertiary: #9898a6;
   --color-text-disabled: #52525b;
   --color-text-inverse: #09090b;
 
@@ -155,8 +155,8 @@
 
   --color-text-primary: #111827;
   --color-text-secondary: #4b5563;
-  --color-text-tertiary: #9ca3af;
-  --color-text-disabled: #d1d5db;
+  --color-text-tertiary: #5b6270;
+  --color-text-disabled: #9ca3af;
   --color-text-inverse: #ffffff;
 
   --color-border: rgba(0, 0, 0, 0.08);
@@ -450,7 +450,7 @@
   margin-left: auto;
   font-size: 10px;
   font-family: var(--font-mono);
-  color: var(--color-text-disabled);
+  color: var(--color-text-secondary);
   background: var(--color-bg-hover);
   padding: 1px 5px;
   border-radius: var(--radius-sm);
@@ -537,13 +537,13 @@
 }
 
 .btn-primary {
-  background: var(--color-accent);
-  color: white;
-  box-shadow: var(--shadow-sm), 0 0 0 1px rgba(99, 102, 241, 0.2);
+  background: #4f46e5;
+  color: #ffffff;
+  box-shadow: var(--shadow-sm), 0 0 0 1px rgba(99, 102, 241, 0.25);
 }
 
 .btn-primary:hover {
-  background: var(--color-accent-hover);
+  background: #4338ca;
   box-shadow: var(--shadow-md), var(--shadow-glow);
   transform: translateY(-1px);
 }
@@ -1455,7 +1455,7 @@ textarea.input {
 }
 
 .status-pill.disconnected {
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
   background: var(--color-bg-tertiary);
 }
 

@@ -1,4 +1,5 @@
 import type { Express, RequestHandler } from "express";
+import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import db from "../db.ts";
 import compilerRouter from "../routes/compiler.ts";
 import { resumePendingSeedJobs } from "./seedHydrator.ts";
@@ -16,7 +17,8 @@ export function mountCompilerRoutes(
 
   if (
     !startupResumed &&
-    !(process.env.VITEST || process.env.NODE_ENV === "test")
+    !(process.env.VITEST || process.env.NODE_ENV === "test") &&
+    !isBackgroundJobsDisabled()
   ) {
     startupResumed = true;
     void resumePendingSeedJobs(db);

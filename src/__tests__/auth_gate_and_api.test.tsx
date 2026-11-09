@@ -2,7 +2,7 @@ import React from "react";
 import { render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthGate } from "../components/auth/AuthGate.tsx";
-import { decksApi } from "../utils/api.js";
+import { decksApi } from "../utils/api";
 
 describe("api.js HTTP error vs offline queue + AuthGate", () => {
   afterEach(() => {

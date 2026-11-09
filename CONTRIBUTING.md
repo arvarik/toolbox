@@ -1,132 +1,94 @@
 # Contributing to Toolbox
 
-Thank you for your interest in contributing. Toolbox is a personal-use, self-hosted project. Contributions (bug fixes, quality improvements, documentation) are welcome.
+Contributions (bug fixes, pedagogy improvements, security hardening, and documentation) are welcome.
+
+> **Read [`docs/AGENTS.md`](docs/AGENTS.md) before modifying code.** It documents architectural boundaries and CI invariants enforced on every pull request.
 
 ---
 
-## Getting Started
+## Prerequisites
 
-### Prerequisites
+- **Node.js ≥ 24** (server runs `.ts` directly via native Node type-stripping — no server build step)
+- **npm ≥ 10**
+- Optional: a Gemini, OpenAI, Claude, or local Ollama endpoint for testing live AI generation
 
-- Node.js ≥ 20
-- npm ≥ 10
-- A [Gemini API key](https://aistudio.google.com/apikey) for testing AI features
-
-### Local Development Setup
+## Local Development Setup
 
 ```bash
 git clone https://github.com/arvarik/toolbox.git
 cd toolbox
 cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
 npm install
 npm run dev
 ```
 
-This starts two processes concurrently:
-- **Vite dev server** on `http://localhost:5173` (hot module reload)
-- **Express server** on `http://localhost:3100` (auto-restarts on file changes with `--watch`)
-
-Vite proxies all `/api/*` requests to the Express server, so you only open `localhost:5173` during development.
+`npm run dev` runs two processes concurrently:
+- **Vite dev server** on `http://localhost:5173` (HMR, proxies `/api/*` to `:3100`)
+- **Express server** on `http://localhost:3100` (`node --watch server/index.ts`)
 
 ---
 
-## Project Structure
-
-See [`docs/architecture.md`](architecture.md) for the full directory layout and design rationale. Key entrypoints:
+## Key Entrypoints
 
 | Path | Purpose |
 |------|---------|
-| `server/index.js` | Express app, route registration |
-| `server/db.js` | SQLite init, migrations |
-| `server/routes/` | One file per API domain |
-| `src/App.jsx` | React Router config |
-| `src/pages/` | One file per feature page |
-| `src/stores/` | Zustand global state |
-| `src/utils/api.js` | All fetch calls — single source of truth |
+| `server/index.ts` / `server/app.ts` | HTTP server entrypoint and Express app factory |
+| `server/db.ts` | SQLite initialization (`platformSchema.ts` + `kitsSchema.ts` + hybrid search tables) |
+| `server/platform/` | Reusable self-hosted infrastructure (auth, tenancy, `secretBox`, archive, workers, net) |
+| `server/kits/`, `server/compiler/`, `server/srs/`, `server/graph/`, `server/mcp/`, `server/search/` | Toolbox v2 domain modules |
+| `server/routes/` | Tenant-scoped Express route handlers |
+| `shared/` | Runtime-pure TypeScript + Zod v4 schemas shared by server, client, and MCP |
+| `src/App.jsx` | React Router v7 route definitions (Library, `/k/:slug/*`, `/new`, `/review`, `/settings`) |
+| `src/theme.css` & `src/index.css` | Tailwind v4 semantic `@theme` tokens + legacy CSS component classes |
+| `src/stores/` | Zustand global state (`appStore`, `useKitStore`, `useTimerStore`, `useCalcStore`) |
+| `src/utils/` | API clients (`api.js`, `authApi.ts`, `kitsApi.ts`, `compilerApi.ts`, `pedagogyApi.ts`, `aiSettingsApi.ts`) |
 
 ---
 
-## Coding Standards
+## Architectural & Coding Rules
 
-> **Read [`docs/AGENTS.md`](AGENTS.md) before making any code changes.** It contains all critical rules and patterns for this codebase.
-
-Key rules:
-
-- **CSS only** — No Tailwind. Use existing CSS variables (e.g. `var(--color-primary)`) and utility classes from `src/index.css`.
-- **Icons** — Use `lucide-react` only.
-- **State** — All global state lives in Zustand stores under `src/stores/`. No prop drilling for global data.
-- **API calls** — All `fetch` calls go through `src/utils/api.js`. Do not call `fetch` directly from components.
-- **No new runtime dependencies** — think hard before adding any `npm` package. The dependency footprint should stay minimal.
+1. **One-Way `platform/` Boundary**: `server/platform/*` and `shared/platform/*` must never import Toolbox domain modules (`kits`, `compiler`, `srs`, `graph`, `mcp`). Enforced by `.oxlintrc.json` and `scripts/tenant-lint.mjs`.
+2. **Tenant Isolation (`Scope`)**: Every SQL query against a user-owned table must extract `const scope = scopeOf(req)` and filter by `ownerId = ?` (`scope.ownerId`). `npm run lint:tenant` AST-checks every `db.prepare()` / `db.exec()` call.
+3. **Runtime-Pure `shared/`**: Files in `shared/` must not import `node:*` or `react`. Validate external payloads with Zod v4 schemas.
+4. **Encrypted Secrets**: Never store plaintext API keys, OIDC client secrets, or SMTP credentials in SQLite. Seal them via `secretBox` (`AES-256-GCM`).
+5. **Styling & Contrast**: New `.tsx` views use semantic Tailwind v4 `@theme` tokens (`src/theme.css` synchronized with `src/lib/themePalette.ts`) clearing WCAG 2.1 AA (≥ 4.5:1) in both dark and light modes, verified by `src/__tests__/theme_contrast.test.ts`. Legacy `.jsx` components use CSS variables in `src/index.css`.
+6. **Minimal Dependencies**: Prefer Node 24 built-ins (`node:zlib`, `node:crypto`, `fetch`, `worker_threads`) before adding packages.
 
 ---
 
-## Running Tests
+## Quality Gates & Testing
+
+Run all checks locally before opening a pull request:
 
 ```bash
-npm test            # Run all tests once
-npm run test:watch  # Run in watch mode during development
+npm run lint           # Runs oxlint + tsc --noEmit + scripts/tenant-lint.mjs
+npm test               # Vitest unit + Supertest API/security integration tests
+npm run test:coverage  # Vitest with v8 coverage
+npm run build          # Production Vite frontend build
+npm run test:e2e       # Playwright end-to-end browser suite
 ```
 
-Tests live in `src/__tests__/` and use Vitest + React Testing Library + jsdom.
+---
 
-When adding a feature, add or update the relevant test file.
+## Adding Routes or Schema Columns
+
+### New API Endpoint
+1. Define request/response Zod v4 schemas in `shared/` if shared across client/server.
+2. Implement the handler in the relevant module or `server/routes/*.ts`, scoping all user-owned SQL queries with `scopeOf(req).ownerId`.
+3. Mount the router in `server/app.ts` (or subsystem `*RoutesMount.ts`) behind `authed` (`[requireAuth, requirePasswordCurrent]`) or `requireAdmin`.
+4. Add typed client methods in `src/utils/` and document the endpoint in [`docs/api.md`](docs/api.md).
+
+### Database Migrations
+- Platform tables belong in `server/platform/db/platformSchema.ts` (`initPlatformSchema`).
+- Kit/study tables and additive column migrations belong in `server/kits/kitsSchema.ts` (`initKitsSchema`).
+- Keep migrations idempotent (check `PRAGMA table_info(...)` before `ALTER TABLE`) so existing v1 and v2 SQLite files upgrade cleanly on startup.
+- If you add a new user-owned table, register it in `scripts/tenant-lint.mjs` so tenant scoping is enforced.
 
 ---
 
-## Linting
+## Pull Request Checklist
 
-```bash
-npm run lint
-```
-
-The project uses ESLint with the React Hooks and React Refresh plugins. Fix all lint errors before opening a PR.
-
----
-
-## Making Changes
-
-1. **Branch** from `main` with a descriptive name: `fix/srs-lapse-interval`, `feat/export-csv`
-2. **Make small, focused commits** — one logical change per commit
-3. **Test** — run `npm test` and verify nothing broke
-4. **Lint** — run `npm run lint` with 0 errors
-5. **Update docs** — if you added an endpoint, update `docs/api.md`; if you changed a UI feature, update `docs/user-guide.md`
-
----
-
-## Adding a New API Endpoint
-
-1. Add the route handler in the appropriate file under `server/routes/`
-2. Register it in `server/index.js` if it's a new router
-3. Add a corresponding fetch function in `src/utils/api.js`
-4. Document the endpoint in `docs/api.md`
-
----
-
-## Database Schema Changes
-
-Migrations live inline in `server/db.js` inside the `migrate()` function. The pattern for **additive migrations** (new columns) is:
-
-```javascript
-try {
-  db.exec(`ALTER TABLE my_table ADD COLUMN new_col TEXT DEFAULT NULL`)
-} catch {
-  // Column already exists — ignore
-}
-```
-
-This is idempotent and safe to run on every startup. For destructive schema changes, discuss first.
-
----
-
-## Submitting a PR
-
-- Describe what changed and why in the PR description
-- Include before/after screenshots for UI changes
-- Reference any related issues
-
----
-
-## Questions
-
-Open a GitHub Issue for bugs, feature requests, or questions.
+- Focused branch name (`feat/...`, `fix/...`, `docs/...`)
+- `npm run lint`, `npm test`, and `npm run build` pass with zero errors
+- Relevant tests added or updated (`src/__tests__/`, `server/**/__tests__/`, or `tests/e2e/`)
+- Documentation updated (`docs/api.md`, `docs/architecture.md`, `docs/user-guide.md`) when behavior changes

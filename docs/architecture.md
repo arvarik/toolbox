@@ -1,493 +1,163 @@
-# Toolbox — Architecture
+# Toolbox v2 — Architecture
 
-Technical architecture documentation for contributors and operators.
-
----
-
-## Table of Contents
-
-1. [System Overview](#system-overview)
-2. [Tech Stack](#tech-stack)
-3. [Frontend Architecture](#frontend-architecture)
-4. [Backend Architecture](#backend-architecture)
-5. [Database Schema](#database-schema)
-6. [API Reference](#api-reference)
-7. [AI Integration Layer](#ai-integration-layer)
-8. [Data Flow Diagrams](#data-flow-diagrams)
-9. [Build & Deployment Pipeline](#build--deployment-pipeline)
+Technical architecture reference for contributors and operators.
 
 ---
 
 ## System Overview
 
-Toolbox is a **self-contained, single-binary-deployable** web application with no external services (except the optional Gemini API for AI features). Everything runs in one Docker container.
+Toolbox v2 runs as a single Node.js 24 process serving the compiled React SPA, tenant-scoped REST API, Server-Sent Events (SSE) streams, and a stateless Streamable HTTP MCP endpoint (`/api/mcp`), backed by a single SQLite database (`better-sqlite3` + `sqlite-vec` + `FTS5`) and an isolated CPU worker thread (`worker_threads`).
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  Docker Container                │
-│                                                 │
-│  ┌─────────────────────────────────────────┐   │
-│  │         Express Server (Node.js)         │   │
-│  │   - Serves built React SPA (static)     │   │
-│  │   - REST API on /api/*                  │   │
-│  │   - Server-Sent Events for streaming    │   │
-│  └─────────────────────────────────────────┘   │
-│                    │                           │
-│  ┌─────────────────┴───────────────────────┐   │
-│  │         SQLite (better-sqlite3)          │   │
-│  │   - Single file: /app/data/toolbox.db   │   │
-│  └─────────────────────────────────────────┘   │
-│                                                 │
-└─────────────────────────────────────────────────┘
-                    │
-                    │ HTTPS (Gemini API)
-                    ▼
-         Google Gemini API (external)
+┌───────────────────────────────────────────────────────────────────────────┐
+│                      Docker Container (node:24-trixie-slim)               │
+│                                                                           │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │               Express 5 Server (node server/index.ts)               │  │
+│  │  • Static SPA (dist/)               • Auth, Passkeys, OIDC, Admin   │  │
+│  │  • Tenant-scoped REST (/api/*)      • Stateless MCP (POST /api/mcp) │  │
+│  │  • SSE AI streaming & Kit Compiler  • Zero-dep ZIP archive verifier │  │
+│  └──────────────────┬──────────────────────────────────┬───────────────┘  │
+│                     │ synchronous SQL                  │ IPC              │
+│                     ▼                                  ▼                  │
+│  ┌─────────────────────────────────────┐  ┌────────────────────────────┐  │
+│  │ SQLite (/app/data/toolbox.db, WAL)  │  │ Persistent CPU Worker      │  │
+│  │ • Platform & Kit relational tables  │  │ • ONNX all-MiniLM-L6-v2    │  │
+│  │ • FTS5 lexical index                │  │ • unpdf text extraction    │  │
+│  │ • sqlite-vec 384-d cosine vectors   │  │ • Deterministic fallback   │  │
+│  └─────────────────────────────────────┘  └────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────────────┘
+         │                                               │
+         ▼ HTTPS (optional)                              ▼ HTTP (optional)
+  Gemini / OpenAI / Claude / BYOM                  Self-hosted SearXNG
 ```
-
-### Key Design Principles
-
-1. **No auth, no cloud** — Designed for single-user, self-hosted deployment
-2. **Offline-first state** — Critical state lives in the client (localStorage, Zustand)
-3. **SQLite as the database** — Simple, zero-config, portable, backed up by copying one file
-4. **Streaming AI** — All AI responses stream via Server-Sent Events for a real-time feel
-5. **Graceful degradation** — The app is fully usable without an API key (AI features show prompts)
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology | Version | Role |
-|-------|-----------|---------|------|
-| **Frontend Framework** | React | 19 | UI rendering |
-| **Build Tool** | Vite | 8 | Dev server, bundler |
-| **Routing** | React Router DOM | 7 | Client-side routing |
-| **State Management** | Zustand | 5 | Global state (persisted) |
-| **Diagrams** | React Flow (`@xyflow/react`) + dagre | 12 / 3 | Whiteboard canvas + layered knowledge-graph layout |
-| **Styling** | Vanilla CSS | — | CSS Variables design system |
-| **Icons** | lucide-react | — | SVG icon library |
-| **Markdown** | react-markdown + remark-gfm + KaTeX | — | Rendered AI responses |
-| **Backend** | Node.js + Express | 22+ / 5 | API server |
-| **Database** | better-sqlite3 (SQLite) | 13 | Synchronous SQLite bindings |
-| **AI Client** | Vercel AI SDK | — | Gemini / Claude / OpenAI / BYOM integration |
-| **Container** | Docker (Alpine Linux) | — | Production container |
-| **Testing** | Vitest + React Testing Library | — | Unit and integration tests |
+| Layer | Technology | Role |
+|-------|------------|------|
+| **Server Runtime** | Node.js ≥ 24 + Express 5 | Native `.ts` execution via type-stripping (no server build step) |
+| **Shared Contracts** | TypeScript + Zod v4 (`shared/`) | Runtime-pure schemas shared by server, client, and MCP |
+| **Frontend** | React 19 + Vite 8 + React Router v7 | Lazy-loaded multi-Kit SPA |
+| **State** | Zustand 5 (`src/stores/`) | UI state, active Kit context, Pomodoro timer, calculator |
+| **Styling** | Tailwind CSS v4 (`src/theme.css`) + CSS variables (`src/index.css`) | WCAG 2.1 AA dark/light semantic `@theme` tokens |
+| **Diagrams & Math** | `@xyflow/react` + `dagre`, `mermaid` (strict), `language-svg` sanitizer, `katex` | Knowledge Graph DAG, dual-mode Canvas, inline figures, offline LaTeX |
+| **Database** | `better-sqlite3` + `sqlite-vec` + SQLite `FTS5` | WAL-mode relational store + hybrid lexical/vector search |
+| **Local ML / Docs** | `@huggingface/transformers` (`onnxruntime-node`) + `unpdf` | 384-dim `Xenova/all-MiniLM-L6-v2` embeddings & PDF parsing in worker |
+| **AI & MCP** | Vercel AI SDK (`ai`) + `@modelcontextprotocol/sdk` | Multi-provider routing, structured outputs, Streamable HTTP MCP |
+| **Auth & Security** | `scrypt`, `@simplewebauthn/server`, `openid-client`, `AES-256-GCM` | Passwords, Passkeys, OIDC SSO, encrypted credentials at rest |
+| **Quality Gates** | `oxlint`, `tsc --noEmit`, `scripts/tenant-lint.mjs`, Vitest, Playwright | Lint, typecheck, AST tenant-isolation enforcement, unit/API/E2E tests |
+
+---
+
+## Modularity & Boundary Rules
+
+1. **One-Way `platform/` Boundary**:
+   - `server/platform/*` and `shared/platform/*` hold reusable self-hosted infrastructure: authentication, sessions, Passkeys, OIDC, `tbk_` API tokens, `Scope` tenancy, `secretBox` encryption, audit log, SMTP mail, online SQLite backups, SSRF/DNS-rebinding guards, `node:zlib` ZIP verification, `cpuHost` workers, and AI provider key storage.
+   - Domain directories (`server/kits/`, `server/compiler/`, `server/srs/`, `server/graph/`, `server/mcp/`, `server/search/`, `server/ai/`, `server/routes/`, `shared/kits/`) import from `platform/`, while **`platform/` never imports domain modules** (enforced by `.oxlintrc.json` and `scripts/tenant-lint.mjs`).
+2. **Runtime-Pure `shared/`**:
+   - `shared/` contains zero `node:*` or `react` imports (`no-restricted-imports`), allowing identical Zod v4 validation in browser bundles and server routes.
+3. **AST-Enforced Multi-Tenancy (`Scope`)**:
+   - `attachPrincipal` + `attachRequestContext` resolve the caller (session cookie, `tbk_` bearer token, or implicit `local@toolbox.local` when `AUTH_REQUIRED=false`) into a branded `Scope { ownerId }`.
+   - `scripts/tenant-lint.mjs` parses every `db.prepare()` and `db.exec()` call across `server/**/*.ts` and fails CI if a query against a user-owned table omits `ownerId`.
 
 ---
 
 ## Frontend Architecture
 
-### Directory Structure
+### Route Hierarchy (`src/App.jsx`)
 
-```
-src/
-├── App.jsx                  # Root component + route definitions
-├── main.jsx                 # React DOM entry point
-├── index.css                # Global CSS design system (67KB)
-│
-├── pages/                   # Route-level page components
-│   ├── ChatPage.jsx          # /chat — AI learning hub
-│   ├── GuidePage.jsx         # /guide/* — Knowledge library
-│   ├── BuilderPage.jsx       # /builder — Architecture whiteboard
-│   ├── StudyPage.jsx         # /study — Flashcards hub
-│   ├── FeynmanPage.jsx       # /feynman — Feynman technique
-│   ├── InterleavedPage.jsx   # /interleaved — Cross-deck review
-│   └── SettingsPage.jsx      # /settings — Configuration
-│
-├── components/
-│   ├── layout/              # Global chrome (always visible)
-│   │   ├── Layout.jsx        # Root layout wrapper + keyboard shortcuts
-│   │   ├── Sidebar.jsx       # Navigation sidebar with model selector
-│   │   ├── PomodoroWidget.jsx # Mini timer in sidebar
-│   │   ├── PomodoroModal.jsx  # Full pomodoro timer modal
-│   │   ├── BottomNav.jsx     # Mobile bottom navigation bar
-│   │   ├── MobileHeader.jsx  # Mobile top header
-│   │   └── MobileDrawer.jsx  # Mobile slide-out drawer
-│   │
-│   ├── chat/                # AI Chat page components
-│   │   ├── LearningChat.jsx   # Full-page chat with session management
-│   │   ├── LearningTodo.jsx   # Study plan sidebar (7-pillar progress)
-│   │   └── CommitModal.jsx    # Chat → Guide commit flow
-│   │
-│   ├── guide/               # Guide/library components
-│   │   ├── BlueprintShell.jsx # Content viewer + editor for topic blueprints
-│   │   └── PillarNav.jsx      # Topic navigation within a pillar
-│   │
-│   ├── builder/             # Architecture whiteboard components
-│   │   ├── Canvas.jsx         # React Flow canvas (drag, connect, minimap, controls)
-│   │   ├── boardModel.js      # Persisted board shape ↔ React Flow converters + icon/color maps
-│   │   ├── Toolbox.jsx        # Component palette sidebar
-│   │   ├── BoardList.jsx      # Board tab bar
-│   │   └── TemplateGallery.jsx # Pre-built template picker
-│   │
-│   ├── study/               # Flashcard components
-│   │   ├── FlashcardView.jsx   # Card flip UI + SRS rating buttons
-│   │   ├── DeckCard.jsx        # Deck tile in the grid view
-│   │   ├── DeckEditor.jsx      # Create/edit deck form
-│   │   ├── DeckOptionsModal.jsx # Per-deck SRS settings
-│   │   ├── CardBrowser.jsx     # All-cards list view with inline editing
-│   │   ├── StatsDashboard.jsx  # Per-deck analytics
-│   │   ├── StudyHeatmap.jsx    # GitHub-style activity calendar
-│   │   └── StudySessionSummary.jsx # Post-session results screen
-│   │
-│   └── shared/              # Reusable components
-│       ├── ChatPanel.jsx      # Sliding AI chat panel (used in Guide/Builder/Study)
-│       ├── MarkdownRenderer.jsx # Markdown + KaTeX renderer
-│       ├── Modal.jsx          # Generic modal wrapper
-│       ├── EmptyState.jsx     # Empty state placeholder
-│       ├── AhaMoment.jsx      # "Aha!" micro-interaction overlay
-│       └── Loading.jsx        # Loading spinners
-│
-├── stores/                  # Zustand global state
-│   ├── appStore.js           # Theme, sidebar, chat state, model, API key, nodes/edges
-│   └── useTimerStore.js      # Pomodoro timer state machine (persisted)
-│
-└── utils/
-    ├── api.js                # Typed API client for all backend endpoints
-    ├── constants.js          # PILLARS, BLUEPRINT_SECTIONS data
-    ├── templates.js          # Pre-built architecture templates
-    └── db.js                 # Client-side sync queue for offline handling
-```
+All pages render inside `<Layout />` (collapsible sidebar, Kit switcher, Pomodoro widget, mobile navigation, global `⌘K` search, and keyboard shortcuts):
 
-### Routing
+- **Global Library & Review**:
+  - `/` → `LibraryHomePage` (personal Kits, import `.toolbox-kit.json` / `.toolbox-backup.zip`, starter Kits)
+  - `/shared` → `SharedLibraryPage` (instance-wide published Kits)
+  - `/new` → `NewKitStudioPage` (4-stage Deep Research Kit Compiler)
+  - `/review` → `ReviewPage` (cross-Kit FSRS-6 due queue)
+  - `/settings` → `SettingsPage` (Account, Passkeys, BYOK, Capability Router, `tbk_` MCP tokens, Instance Admin)
+- **Kit-Scoped Workspace (`/k/:slug/*`)** *(also mounted at legacy top-level paths `/chat`, `/guide`, etc. for active/default Kit compatibility)*:
+  - `/k/:slug` → `KitPathPage` (Mastery Path overview, readiness, Living Kit expansion)
+  - `/k/:slug/chat` → `ChatPage` (persona tutor, Hybrid RAG + SearXNG web citations, Commit-to-Guide)
+  - `/k/:slug/guide`, `/k/:slug/guide/:pillarId/:topicId` → `GuidePage` (structured blueprint reader/editor)
+  - `/k/:slug/drills` → `DrillsPage` (attempt-gated drills & `⚡ Challenge Node`)
+  - `/k/:slug/builder` & `/k/:slug/canvas` → `BuilderPage` (`architecture` whiteboard or Novakian `concept` map)
+  - `/k/:slug/study` → `StudyPage` (decks, card browser, FSRS-6 retention settings, stats)
+  - `/k/:slug/interleaved` → `InterleavedPage` (shuffled Kit-wide due session)
+  - `/k/:slug/feynman` → `FeynmanPage` (voice/text first-principles evaluator)
+  - `/k/:slug/graph` → `GraphPage` (React Flow + `dagre` prerequisite DAG with live retrievability heatmap)
+  - `/k/:slug/calculator` → `CalculatorPage` (BotE sizing sandbox, rendered when `kit.capabilities.calculator !== false`)
 
-All routes are nested under the `<Layout />` component which renders the sidebar, mobile nav, modals, and toast notifications.
+### Active Kit Resolution
 
-```
-/           → redirect to /chat
-/chat       → ChatPage (Learning Hub)
-/guide      → GuidePage (Library Landing)
-/guide/:pillarId → GuidePage (Pillar view)
-/guide/:pillarId/:topicId → GuidePage (Blueprint view)
-/builder    → BuilderPage
-/study      → StudyPage (Deck list)
-/feynman    → FeynmanPage
-/interleaved → InterleavedPage
-/settings   → SettingsPage
-```
-
-### State Management
-
-Two Zustand stores manage global state:
-
-**`appStore.js`** — Non-persistent UI state:
-- `theme` — `'dark' | 'light'` (persisted to localStorage)
-- `model` — Active Gemini model (persisted to localStorage)
-- `sidebarCollapsed` — Sidebar toggle state
-- `chatOpen` — Per-page chat panel visibility `{ guide, builder, study }`
-- `apiKeyConfigured` — Whether the Gemini key is valid
-- `toasts` — Toast notification queue
-- `nodes`, `edges` — Active whiteboard canvas state
-- `ahaMomentActive` — Micro-interaction trigger
-
-**`useTimerStore.js`** — Persisted timer state (via `zustand/middleware/persist`):
-- `mode`, `status`, `timeLeft`, `endTime` — Timer state machine
-- `durations` — Configurable Pomodoro/break lengths (persisted)
-- `isStrictMode` — Strict focus mode flag (persisted)
-- `taskName` — Current task label (persisted)
-- `plantState` — 🌱→🌸→🥀 gamification state
-
-### CSS Design System
-
-The entire design system lives in `src/index.css`. It uses **CSS Custom Properties** (variables) for all tokens:
-
-```css
-/* Color palette */
---color-bg-primary
---color-bg-secondary
---color-bg-tertiary
---color-surface
---color-border
---color-accent          /* Indigo #818CF8 */
---color-accent-subtle
---color-text-primary
---color-text-secondary
---color-text-tertiary
---color-success
---color-error
---color-teal
-
-/* Spacing scale */
---space-1 through --space-16
-
-/* Typography */
---text-xs through --text-3xl
---font-sans  (Inter)
---font-mono
-
-/* Elevation */
---shadow-sm, --shadow-md, --shadow-lg
-
-/* Radius */
---radius-sm, --radius-md, --radius-lg, --radius-xl, --radius-full
-
-/* Animation */
---duration-fast, --duration-normal, --duration-slow
-```
-
-Dark/light themes are controlled by `data-theme="dark|light"` on `<html>`.
-
-### AI Streaming
-
-The frontend uses a custom `chatApi.stream()` function that reads **Server-Sent Events** from the backend:
-
-```javascript
-// src/utils/api.js
-stream: async (payload, onChunk, onDone, signal) => {
-  const res = await fetch('/api/chat/stream', { method: 'POST', ... })
-  const reader = res.body.getReader()
-  // Accumulates streamed chunks and calls onChunk on each update
-}
-```
-
----
-
-## Backend Architecture
-
-### Directory Structure
-
-```
-server/
-├── index.js              # Express app setup, middleware, route mounting
-├── db.js                 # SQLite connection, schema creation, migrations
-├── srs/
-│   └── scheduler.js      # SM-2 scheduling (shared by decks + graph routes)
-├── graph/
-│   ├── health.js         # Knowledge-graph node health from SRS state (pure)
-│   └── remediation.js    # Prerequisite remediation planning (pure)
-└── routes/
-    ├── chat.js           # AI chat endpoints (streaming + starters)
-    ├── decks.js          # Flashcard deck + card CRUD + SRS review + remediation queue
-    ├── graph.js          # Knowledge graph: health, node detail, study sessions
-    ├── calculator.js     # BotE Calculator AI audit
-    ├── boards.js         # Whiteboard board CRUD
-    ├── guide_content.js  # Guide section content CRUD
-    ├── config.js         # API key management
-    ├── profile.js        # AI shadow memory
-    ├── search.js         # Global search
-    ├── study_sessions.js # Study session tracking
-    └── system.js         # Health, stats, cache, export/import
-```
-
-### Express Setup
-
-The Express server serves the built React app as static files and exposes a REST API under `/api/`:
-
-```javascript
-// index.js
-app.use(express.static(path.join(__dirname, '../dist')))
-app.use('/api/chat', chatRoutes)
-app.use('/api/decks', deckRoutes)
-// ...
-app.get('*', (req, res) => res.sendFile('dist/index.html'))
-```
-
-### API Endpoints
-
-The full API reference is in **[`docs/api.md`](api.md)**. Quick summary of route files:
-
-| Route file | Prefix | Summary |
-|------------|--------|---------|
-| `chat.js` | `/api/chat` | AI streaming, starters, summarize, concept map, interceptor |
-| `decks.js` | `/api/decks` | Deck + card CRUD, SRS review, due cards, interleaved |
-| `boards.js` | `/api/boards` | Whiteboard board CRUD |
-| `guide_content.js` | `/api/guide-content` | Guide section CRUD + progress + export |
-| `profile.js` | `/api/profile` | Shadow memory read/write/clear |
-| `config.js` | `/api/config` | Settings, API key test |
-| `search.js` | `/api/search` | Cross-domain full-text search |
-| `study_sessions.js` | `/api/study_sessions` | Study heatmap data |
-| `system.js` | `/api/system` | Stats, cache flush, DB download |
-| `graph.js` | `/api/graph` | Knowledge graph with live SRS health, node detail, track/node study sessions |
-| `calculator.js` | `/api/calculator` | "Audit My Math" structured AI critique |
+Client requests send `X-Toolbox-Kit: <kitId-or-slug>` (managed by `useKitStore` + `src/utils/api.js`). On the server, `resolveKitForScope(scope, req)` resolves the header (or `?kitId=`), falling back to the user's System Design Starter Kit (lazily provisioned on first access).
 
 ---
 
 ## Database Schema
 
-All tables are created in `server/db.js` with automatic migrations on startup. The schema is additive — new columns are added via `ALTER TABLE` and guarded with try/catch so they're safe to re-run.
+SQLite runs with `journal_mode = WAL`, `synchronous = NORMAL`, `foreign_keys = ON`, and `busy_timeout = 5000`. Existing v1 databases (`user_profile`, un-scoped `decks`/`flashcards`/`boards`/`guide_content`) are automatically upgraded in place on startup with zero data loss and assigned to the local owner's System Design Kit.
 
-```sql
--- App configuration (API keys, preferences)
-CREATE TABLE config (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL,
-  updated_at TEXT DEFAULT (datetime('now'))
-);
+### Platform Tables (`server/platform/db/platformSchema.ts`)
 
--- Flashcard decks
-CREATE TABLE decks (
-  id TEXT PRIMARY KEY,          -- UUID v4
-  name TEXT NOT NULL,
-  description TEXT DEFAULT '',
-  color_index INTEGER DEFAULT 0,
-  tags TEXT DEFAULT '',         -- Comma-separated; added via migration
-  settings TEXT DEFAULT '{}',  -- JSON: SRS config; added via migration
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
-);
+| Table | Purpose |
+|-------|---------|
+| `users` | Accounts (`email`, `passwordHash`, `role`, `disabledAt`, `mustChangePassword`) |
+| `sessions` | Cookie sessions (`tokenHash`, `userId`, `expiresAt`, IP/UA metadata) |
+| `app_settings` | Instance-wide settings & `secretBox`-encrypted provider/OIDC/SMTP configs |
+| `user_settings` | Per-user preferences JSON |
+| `api_tokens` | Personal `tbk_` bearer tokens (SHA-256 `tokenHash`, `readOnly` flag, expiry) |
+| `invitations` | Admin-issued invite links |
+| `audit_log` | Security & admin event trail |
+| `passkeys` | WebAuthn credentials (`credentialId`, `publicKey`, counter, transports) |
+| `auth_challenges` | Short-lived WebAuthn & OIDC PKCE/state challenges |
+| `auth_links` | Single-use hashed magic-link & password-reset tokens |
+| `user_identities` | Linked external OIDC subject mappings |
+| `jobs` | Background job records |
 
--- Individual flashcards
-CREATE TABLE flashcards (
-  id TEXT PRIMARY KEY,          -- UUID v4
-  deck_id TEXT NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
-  front TEXT NOT NULL,
-  back TEXT NOT NULL,
-  position INTEGER DEFAULT 0,
-  -- SM-2 SRS fields (added via migration)
-  ease_factor REAL DEFAULT 2.5,
-  interval INTEGER DEFAULT 0,
-  repetitions INTEGER DEFAULT 0,
-  next_review TEXT DEFAULT NULL,
-  last_reviewed TEXT DEFAULT NULL,
-  state INTEGER DEFAULT 0,      -- 0=New 1=Learning 2=Review 3=Relearning
-  learning_step INTEGER DEFAULT 0,
-  prerequisite_id TEXT DEFAULT NULL,  -- Optional card dependency
-  embedding TEXT DEFAULT NULL,        -- JSON float array for semantic search
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
-);
+### Domain, Kit & Hybrid Search Tables (`server/kits/kitsSchema.ts`, `server/search/hybridSearch.ts`)
 
--- Whiteboard boards
-CREATE TABLE boards (
-  id TEXT PRIMARY KEY,          -- UUID v4
-  name TEXT NOT NULL,
-  data TEXT DEFAULT '{}',       -- JSON: { nodes: [...], edges: [...] }
-  created_at TEXT DEFAULT (datetime('now')),
-  updated_at TEXT DEFAULT (datetime('now'))
-);
-
--- Study sessions (for activity heatmap) — one row per calendar day
-CREATE TABLE study_sessions (
-  date TEXT PRIMARY KEY,        -- 'YYYY-MM-DD'
-  count INTEGER DEFAULT 0
-);
-
--- Guide section content (committed learning notes)
-CREATE TABLE guide_content (
-  pillar_id   TEXT NOT NULL,
-  topic_id    TEXT NOT NULL,
-  section_id  TEXT NOT NULL,
-  content     TEXT DEFAULT '',
-  committed_at TEXT DEFAULT (datetime('now')),
-  embedding TEXT DEFAULT NULL,  -- JSON float array; added via migration
-  PRIMARY KEY (pillar_id, topic_id, section_id)
-);
-
--- Shadow Memory — single-row user profile (id is always 1)
-CREATE TABLE user_profile (
-  id INTEGER PRIMARY KEY CHECK (id = 1),
-  profile_text TEXT DEFAULT '',
-  updated_at TEXT DEFAULT (datetime('now'))
-);
-
--- Episodic memory stream — important learning events extracted by AI agent
-CREATE TABLE episodic_memory (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  memory_text TEXT NOT NULL,
-  importance_score INTEGER DEFAULT 0,
-  embedding TEXT DEFAULT NULL,  -- JSON float array for semantic retrieval
-  created_at TEXT DEFAULT (datetime('now'))
-);
-
--- Cached AI-generated chat starters, invalidated by content hash
-CREATE TABLE chat_starters (
-  pillar_id TEXT NOT NULL,
-  topic_id TEXT NOT NULL,
-  suggestions TEXT DEFAULT '[]',  -- JSON array of prompt strings
-  content_hash TEXT DEFAULT '',   -- MD5 of guide+profile used to detect staleness
-  updated_at TEXT DEFAULT (datetime('now')),
-  PRIMARY KEY (pillar_id, topic_id)
-);
-```
-
-### SRS Algorithm
-
-The full SM-2 algorithm is documented in **[`docs/srs-algorithm.md`](srs-algorithm.md)**.
-
-Brief summary: cards move through 4 states (New → Learning → Review → Relearning). The `ease_factor` and `interval` are updated on every review using the SM-2 formula with a custom **Hypercorrection Penalty** extension (harsher ease penalty when the user was highly confident but wrong).
+- **Instance / Shared Tables**:
+  - `config`, `model_catalog`, `custom_endpoints` (instance AI configuration & live model discovery cache)
+  - `shared_kits`, `shared_kit_versions` (published Kits visible to authenticated instance users)
+- **Tenant-Owned Tables (`ownerId`-scoped, enforced by `tenant-lint`)**:
+  - `kits` (`slug`, `title`, `skeleton` JSON, `capabilities` JSON, `upstreamSharedKitId`, `upstreamVersion`)
+  - `guide_content` (committed blueprint notes + `archived_at` soft-archive preservation during Kit updates)
+  - `chat_sessions`, `chat_starters`
+  - `decks`, `flashcards` (FSRS-6 `stability`, `difficulty`, `reps`, `lapses`, `state`, `learning_step`, legacy `ease_factor`/`interval`, `node_id` DAG link), `remediation_queue`
+  - `drills`, `drill_attempts` (rubric, progressive hints, attempt history, anti-sycophancy scores)
+  - `boards` (persisted `{ nodes, edges, mode }` for `architecture` and `concept` canvases)
+  - `kit_sources`, `kit_source_chunks` (uploaded PDFs/Markdown/text/URLs for compiler & RAG)
+  - `user_learning_profile`, `episodic_memory`, `study_sessions`, `user_ai_settings` (encrypted BYOK keys & tier overrides)
+  - `rag_chunks` + virtual tables `rag_chunks_fts` (`FTS5` `porter unicode61` with `ownerTok`, `kitTok`, `kindTok`) and `rag_chunks_vec` (`sqlite-vec` `vec0` with `ownerId TEXT PARTITION KEY` and `FLOAT[dim] distance_metric=cosine`)
 
 ---
 
-## AI Integration Layer
+## Persistent CPU Worker & Hybrid Search
 
-All AI calls route through `server/routes/chat.js`. The integration uses the Google Generative AI Node.js SDK.
+### Worker Isolation (`server/platform/workers/cpuHost.ts`)
+- Heavy CPU/native work — PDF extraction (`unpdf`) and local 384-dimensional embeddings (`@huggingface/transformers` running quantized `Xenova/all-MiniLM-L6-v2` via `onnxruntime-node`) — runs inside a single background `worker_threads` worker so the Express event loop never blocks.
+- **Native ONNX Lifecycle Rule**: Once `onnxruntime-node` initializes inside the worker, the worker is kept alive for the lifetime of the server process (never terminated/respawned on individual task timeouts), preventing V8 native-addon re-registration crashes.
+- **Offline / Airgapped Fallback**: Models are pinned by commit SHA and SHA-256 digest (`scripts/fetch-models.ts`). If weights are unavailable and `TRANSFORMERS_OFFLINE=1` (or network is unreachable), embedding calls degrade cleanly to a deterministic normalized token-hash vector so search and tests continue operating without crashing.
 
-### Streaming Response
+### Reciprocal Rank Fusion (`server/search/hybridSearch.ts`)
+Queries execute both lexical BM25 (`rag_chunks_fts`, weight `1.0`) and partitioned cosine KNN (`rag_chunks_vec` filtered by `ownerId = ?`, weight `1.2`) across guide notes, flashcards, boards, uploaded Kit sources, and episodic memory, merging candidates via Reciprocal Rank Fusion (`RRF_K = 15`):
 
-The streaming endpoint uses Express + SSE (Server-Sent Events) to stream Gemini's response token-by-token:
-
-```javascript
-// Pseudocode
-const result = await model.generateContentStream([systemInstruction, ...history, userMessage])
-for await (const chunk of result.stream) {
-  const text = chunk.text()
-  accumulated += text
-  res.write(`data: ${JSON.stringify({ text: accumulated })}\n\n`)
-}
-res.write('data: [DONE]\n\n')
-```
-
-### AI Features
-
-| Feature | Endpoint | System Prompt |
-|---------|----------|---------------|
-| Learning Chat | `/api/chat/stream` | Persona-based (Socratic/ELI5/Strict/Devil's Advocate) |
-| Topic Starters | `/api/chat/starters` | Generates 6 study prompts for a given pillar/topic |
-| Commit to Guide | `/api/chat/commit` | Extracts key facts and formats for each blueprint section |
-| Concept Map | `/api/chat/concept-map` | Generates a Markdown concept map from chat history |
-| Feynman Analysis | Used via `/api/chat/stream` directly | Strict evaluator with Missing Points / Jargon / Gaps format |
-| Guide Q&A | `/api/chat/stream` (inline panel) | Context-primed with the topic being viewed |
-| Architecture Verify | `/api/chat/stream` (builder panel) | Reviews whiteboard layout for completeness |
-| Flashcard Generation | `/api/chat/stream` (study panel) | Generates Anki-style Q&A pairs |
-| Shadow Memory Update | Auto-extracted from chat | Extracts user facts from conversation history |
-
-### Shadow Memory
-
-After certain AI interactions, the system sends an additional Gemini call to extract memorable user facts (interview timeline, strengths, goals) and updates the `user_profile` table. This profile text is prepended to all subsequent AI prompts.
+$$\text{score}(d) = \sum_{s \in \{\text{fts}, \text{vec}\}} \frac{w_s}{15 + \text{rank}_s(d)}$$
 
 ---
 
-## Build & Deployment Pipeline
+## Archive Verifier & Content Security
 
-### Development
+### Zero-Dependency ZIP Verifier (`server/platform/archive/zip.ts`, `server/kits/kitExportImport.ts`)
+Mode 2 full backups (`<slug>.toolbox-backup.zip`) are read and written using Node's built-in `node:zlib` (`deflateRawSync` / `inflateRawSync` / `crc32`) with strict structural validation before touching SQLite:
+- Rejects multi-disk archives, ZIP64 records, encrypted entries, symlinks (`0o120000`), special files, path traversal (`..`, leading `/`, `\`, NUL bytes), overlapping local file byte ranges, and Local-vs-Central-Directory header mismatches.
+- Enforces hard ceilings: max **500 entries**, **100 MB** archive size, **150 MB** total uncompressed bytes (`maxOutputLength` decompression-bomb guard), and CRC-32 verification on every entry.
+- Enforces a closed entry allowlist (`kit.json`, `userdata.json`, and `files/<sourceId>/<safeBasename>`) and remaps every imported Kit, deck, card, board, session, and source to fresh UUIDs under the importing `Scope`.
 
-```bash
-npm run dev         # Starts both Vite (5173) and Express (3100) via concurrently
-```
-
-### Production Build
-
-```bash
-npm run build       # Runs vite build → outputs to dist/
-npm start           # Starts only the Express server (serves dist/)
-```
-
-### Docker Multi-Stage Build
-
-```dockerfile
-# Stage 1: Build
-FROM node:18-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
-
-# Stage 2: Runtime
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci --only=production
-COPY --from=builder /app/dist ./dist
-COPY server ./server
-CMD ["node", "server/index.js"]
-```
-
-### Test Suite
-
-```bash
-npm test           # Run all tests once (vitest run)
-npm run test:watch # Watch mode for development
-```
-
-Tests live in `src/__tests__/` and use Vitest with React Testing Library. The test setup is in `vitest.setup.js`.
+### Constructive Diagrams, Math & Prompt Boundaries
+- **Inline SVG (`src/utils/sanitizeSvg.ts`)**: `language-svg` code blocks are parsed with `DOMParser` (`image/svg+xml`) against a 22-element static geometry allowlist (`svg`, `g`, `path`, `rect`, `circle`, `text`, etc.), capped at 100 KB / 1,000 elements / depth 64. Scripts, `on*` handlers, `<foreignObject>`, external URLs, `<!DOCTYPE`/`<!ENTITY` XXE preambles, and `<use>` reference chains are stripped or rejected, and internal `id`/`url(#...)` tokens are per-diagram prefixed to prevent DOM ID collisions.
+- **Mermaid (`src/components/shared/MermaidRenderer.jsx`)**: Initialized with `securityLevel: 'strict'` and locked `secure` keys so per-diagram directives cannot downgrade sandboxing.
+- **KaTeX**: Rendered via `remark-math` + `rehype-katex` with bundled local CSS/fonts (zero runtime CDN requests).
+- **Untrusted Input Fencing**: Learner drill/Feynman submissions are wrapped in `<untrusted_submission>` tags (`antiSycophancy.ts`) and MCP responses wrap user-authored prose in `<untrusted_data>` (`toolboxMcpTools.ts`) to resist prompt injection.

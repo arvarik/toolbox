@@ -102,13 +102,22 @@ export function createApp(): Express {
   if (isProduction) {
     const distPath = path.join(__dirname, "..", "dist");
     app.use(express.static(distPath));
-    app.get("*all", (req, res) => {
-      if (!req.path.startsWith("/api")) {
-        res.sendFile(path.join(distPath, "index.html"));
+    app.get("*all", (req, res, next) => {
+      if (
+        req.path === "/api" ||
+        req.path.startsWith("/api/") ||
+        req.path.startsWith("/.well-known/")
+      ) {
+        notFoundHandler(req, res, next);
+        return;
       }
+      res.sendFile("index.html", { root: distPath }, (err) => {
+        if (err) next();
+      });
     });
   }
 
+  app.use(notFoundHandler);
   app.use(errorHandler);
   return app;
 }

@@ -11,16 +11,23 @@ services:
       - ./data:/app/data
     environment:
       - NODE_ENV=production
+      - HOST=0.0.0.0
       - PORT=3100
+      - DATA_DIR=/app/data
       - DB_PATH=/app/data/toolbox.db
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - CLAUDE_API_KEY=${CLAUDE_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - AUTH_REQUIRED=${AUTH_REQUIRED:-false}
+      - PUBLIC_URL=${PUBLIC_URL:-}
+      - TRUST_PROXY_HOPS=${TRUST_PROXY_HOPS:-0}
+      - TOOLBOX_SECRET_KEY=${TOOLBOX_SECRET_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - SEARXNG_URL=${SEARXNG_URL:-}
     deploy:
       resources:
         limits:
-          memory: 512M
-          cpus: '0.5'
+          memory: 1G
+          cpus: '1.0'
     logging:
       driver: "local"
       options:
@@ -28,7 +35,7 @@ services:
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3100/api/health"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3

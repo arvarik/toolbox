@@ -30,7 +30,7 @@ const MIN_ATTEMPT_CHARS = 30;
 const DIFFICULTY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
   1: {
     label: "Level 1 · Foundational",
-    badge: "bg-info/15 text-info border-info/30",
+    badge: "bg-info/10 text-info border-info/30",
   },
   2: {
     label: "Level 2 · Multi-Constraint",

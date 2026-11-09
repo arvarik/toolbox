@@ -29,6 +29,7 @@ import {
 import { easeFromDifficulty } from "../srs/scheduler.ts";
 import { applyImplicitPrerequisiteCredit } from "../graph/encompassing.ts";
 import { planNodeFailureRemediation } from "../graph/remediation.ts";
+import { upsertRagChunk } from "../search/hybridSearch.ts";
 
 const router = Router();
 
@@ -693,6 +694,17 @@ router.post(
       });
 
       fastTrackTx();
+
+      if (committedSectionId && node.topicId) {
+        await upsertRagChunk(db, scope, {
+          kitId: kit.id,
+          kind: "guide",
+          sourceRefId: `${node.pillarId}:${node.topicId}:${committedSectionId}`,
+          nodeId: node.id,
+          title: `${node.topicId} — ${committedSectionId}`,
+          content: feynmanExplanation.trim(),
+        });
+      }
 
       // 3. Propagate upward FIRe prerequisite credit with weight 1.0.
       implicitCredit = applyImplicitPrerequisiteCredit(db, scope, kit, {

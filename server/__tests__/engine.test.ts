@@ -1,11 +1,5 @@
+// @vitest-environment node
 import { describe, it, expect } from "vitest";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-
-const tempDir = mkdtempSync(path.join(tmpdir(), "toolbox-test-"));
-process.env.DATA_DIR = tempDir;
-process.env.DB_PATH = path.join(tempDir, "test.db");
 
 const { customModelId, parseCustomModelId, DEFAULT_MODEL_ID } = await import(
   "../providers/defs.ts"

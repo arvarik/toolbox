@@ -9,6 +9,7 @@ import {
   type Pillar,
 } from "../../shared/kits/kitSkeleton.ts";
 import { runStructured } from "../ai/engine.ts";
+import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import { getOwnedKit, type OwnedKitDetail } from "../kits/kitService.ts";
 import { syncKitStructure, type KitSyncResult } from "../kits/kitSync.ts";
 import { ValidationError } from "../platform/net/errors.ts";
@@ -604,7 +605,11 @@ export async function expandLivingKit(
 
     const shouldKick =
       input.runSeederInBackground ??
-      !(process.env.VITEST || process.env.NODE_ENV === "test");
+      !(
+        process.env.VITEST ||
+        process.env.NODE_ENV === "test" ||
+        isBackgroundJobsDisabled()
+      );
     if (shouldKick) {
       kickSeedJobRunner(db, jobId);
     }

@@ -948,11 +948,15 @@ function registerToolboxTools(
         }
         if (item.prerequisiteCardId) {
           const exists = db
-            .prepare("SELECT 1 FROM flashcards WHERE ownerId = ? AND id = ?")
-            .get(scope.ownerId, item.prerequisiteCardId);
+            .prepare(
+              `SELECT 1 FROM flashcards f
+               JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+               WHERE f.ownerId = ? AND f.id = ? AND d.kit_id = ?`,
+            )
+            .get(scope.ownerId, item.prerequisiteCardId, kitDetail.id);
           if (!exists) {
             throw new ValidationError(
-              `Prerequisite card "${item.prerequisiteCardId}" does not exist.`,
+              `Prerequisite card "${item.prerequisiteCardId}" does not exist in Kit "${kitDetail.slug}".`,
             );
           }
         }

@@ -9,8 +9,7 @@
     "moduleResolution": "bundler",
     "isolatedModules": true,
     "moduleDetection": "force",
-    "allowJs": true,
-    "checkJs": false,
+    "allowJs": false,
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["./*"]
@@ -23,6 +22,6 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true
   },
-  "include": ["src", "server", "shared", "scripts", "*.ts"],
-  "exclude": ["node_modules", "dist", "data", "uploads", "backups"]
+  "include": ["src", "server", "shared", "tests", "scripts", "*.ts"],
+  "exclude": ["node_modules", "dist", "data", "uploads", "backups", "test-results", "playwright-report"]
 }

@@ -9,6 +9,7 @@ import {
   type StarterCardSeed,
 } from "../../shared/kits/kitSkeleton.ts";
 import { runStructured } from "../ai/engine.ts";
+import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import {
   getOwnedKit,
   mintUniqueKitSlug,
@@ -324,7 +325,7 @@ export function enqueueKitSeedJob(
  * Fires the per-Pillar job runner asynchronously in the background (non-blocking).
  */
 export function kickSeedJobRunner(db: Database.Database, jobId: string): void {
-  if (activeJobRunners.has(jobId)) return;
+  if (isBackgroundJobsDisabled() || activeJobRunners.has(jobId)) return;
   const p = Promise.resolve()
     .then(() => runSeedKitJob(db, jobId))
     .then(() => undefined)
@@ -796,7 +797,8 @@ export async function runSeedKitJob(
       });
       commitPillarTx();
 
-      // Index newly inserted flashcards into hybrid RAG (`kind = "flashcard"`)
+      // Index newly inserted flashcards and baseline guide notes into hybrid RAG
+      const ragInputs: UpsertRagChunkInput[] = [];
       if (newCardSeeds.length > 0) {
         const cardRows = db
           .prepare(
@@ -814,20 +816,34 @@ export async function runSeedKitJob(
         }>;
 
         const newKeySet = new Set(newCardSeeds.map((c) => c.key));
-        const ragInputs: UpsertRagChunkInput[] = cardRows
-          .filter((r) => newKeySet.has(r.seed_key))
-          .map((r) => ({
+        for (const r of cardRows) {
+          if (!newKeySet.has(r.seed_key)) continue;
+          ragInputs.push({
             kitId: kitRow.id,
             kind: "flashcard",
             sourceRefId: r.id,
             nodeId: r.node_id,
             title: r.front.slice(0, 140),
             content: `Q: ${r.front}\nA: ${r.back}`,
-          }));
-
-        if (ragInputs.length > 0) {
-          await upsertRagChunksBatch(db, scope, ragInputs);
+          });
         }
+      }
+
+      if (newBaselineNotes.length > 0) {
+        for (const note of newBaselineNotes) {
+          if (!note.content.trim()) continue;
+          ragInputs.push({
+            kitId: kitRow.id,
+            kind: "guide",
+            sourceRefId: `${note.pillarId}:${note.topicId}:${note.sectionId}`,
+            title: `${note.topicId} — ${note.sectionId}`,
+            content: note.content,
+          });
+        }
+      }
+
+      if (ragInputs.length > 0) {
+        await upsertRagChunksBatch(db, scope, ragInputs);
       }
 
       processedInThisCall++;
@@ -1065,7 +1081,11 @@ export async function commitCompiledKit(
 
   const shouldKick =
     input.runSeederInBackground ??
-    !(process.env.VITEST || process.env.NODE_ENV === "test");
+    !(
+      process.env.VITEST ||
+      process.env.NODE_ENV === "test" ||
+      isBackgroundJobsDisabled()
+    );
   if (shouldKick) {
     kickSeedJobRunner(db, jobId);
   }

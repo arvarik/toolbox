@@ -1,14 +1,8 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+// @vitest-environment node
 import request from "supertest";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { Express } from "express";
-
-const tempDir = mkdtempSync(path.join(tmpdir(), "toolbox-wave1d-test-"));
-process.env.DATA_DIR = tempDir;
-process.env.DB_PATH = path.join(tempDir, "wave1d.db");
 
 const mockRunStructured = vi.fn();
 
@@ -888,5 +882,121 @@ describe("FIRe-Lite Prerequisite Credit, Drills API, Challenge Fast-Track, Feynm
       .post(`/api/drills/${aliceDrills.body[0].id}/submit`)
       .send({ submission: "Cross-tenant attempt" })
       .expect(404);
+
+    // Cross-Kit isolation on /api/graph + /api/graph/health, deck stats, interleaved/review due, card-only review & prereq guard
+    const sdDeckRes = await aliceAgent
+      .post("/api/decks")
+      .set("X-Toolbox-Kit", "system-design")
+      .send({ name: "System Design Isolation Deck" })
+      .expect(201);
+    const sdCardRes = await aliceAgent
+      .post(`/api/decks/${sdDeckRes.body.id}/cards`)
+      .set("X-Toolbox-Kit", "system-design")
+      .send({
+        front: "Quorum Math Cross-Kit Collision Probe",
+        back: "Belongs to system-design, never distributed-lab",
+        node_id: "node-a",
+      })
+      .expect(201);
+    const sdCardId = sdCardRes.body.id as string;
+
+    // Cross-Kit prerequisite_id is rejected/stripped so prerequisites never cross Kits
+    const crossPrereqCard = await aliceAgent
+      .post(`/api/decks/${deckId}/cards`)
+      .set("X-Toolbox-Kit", "distributed-lab")
+      .send({
+        front: "Cross-Kit Prereq Attempt",
+        back: "Should strip foreign Kit prerequisite_id",
+        prerequisite_id: sdCardId,
+      })
+      .expect(201);
+    expect(crossPrereqCard.body.prerequisite_id).toBeNull();
+
+    // /api/graph, /api/graph/health, and /api/graph/nodes/:id scope strictly to distributed-lab and compute FSRS stability strength
+    for (const graphPath of ["/api/graph", "/api/graph/health"]) {
+      const gRes = await aliceAgent
+        .get(graphPath)
+        .set("X-Toolbox-Kit", "distributed-lab")
+        .expect(200);
+      const nodeA = gRes.body.nodes.find((n: { id: string }) => n.id === "node-a");
+      expect(nodeA).toBeDefined();
+      expect(nodeA.strength).toBeGreaterThan(0);
+    }
+    const nodeDetail = await aliceAgent
+      .get("/api/graph/nodes/node-a")
+      .set("X-Toolbox-Kit", "distributed-lab")
+      .expect(200);
+    expect(
+      nodeDetail.body.cards.some((c: { id: string }) => c.id === sdCardId),
+    ).toBe(false);
+
+    // /api/decks/interleaved/due honors X-Toolbox-Kit while /api/review/due spans all owned Kits
+    const kitInterleaved = await aliceAgent
+      .get("/api/decks/interleaved/due")
+      .set("X-Toolbox-Kit", "distributed-lab")
+      .expect(200);
+    expect(
+      kitInterleaved.body.every(
+        (c: { kit_slug: string }) => c.kit_slug === "distributed-lab",
+      ),
+    ).toBe(true);
+
+    await aliceAgent
+      .get("/api/decks/interleaved/due?kitId=nonexistent-kit")
+      .expect(404);
+
+    const unifiedReview = await aliceAgent
+      .get("/api/review/due")
+      .set("X-Toolbox-Kit", "distributed-lab")
+      .expect(200);
+    const reviewSlugs = new Set(
+      unifiedReview.body.map((c: { kit_slug: string }) => c.kit_slug),
+    );
+    expect(reviewSlugs.has("distributed-lab")).toBe(true);
+    expect(reviewSlugs.has("system-design")).toBe(true);
+
+    // /api/decks/stats scopes to active Kit or aggregates across all Kits via ?kitId=all
+    const kitStats = await aliceAgent
+      .get("/api/decks/stats")
+      .set("X-Toolbox-Kit", "distributed-lab")
+      .expect(200);
+    const allStats = await aliceAgent
+      .get("/api/decks/stats?kitId=all")
+      .set("X-Toolbox-Kit", "distributed-lab")
+      .expect(200);
+    expect(kitStats.body.kitId).toBe(customKitId);
+    expect(allStats.body.kitId).toBeNull();
+    expect(allStats.body.cardCount).toBeGreaterThan(kitStats.body.cardCount);
+
+    // POST /api/decks/cards/:cardId/review grades without requiring :deckId in URL
+    const directRev = await aliceAgent
+      .post(`/api/decks/cards/${sdCardId}/review`)
+      .send({ quality: 5, confidence: "high" })
+      .expect(200);
+    expect(directRev.body.state).toBe(2);
+    expect(directRev.body.repetitions).toBe(1);
+    expect(directRev.body.stability).toBeGreaterThan(0);
+
+    // POST /api/calculator/audit passes tenant scope to runStructured
+    mockRunStructured.mockResolvedValueOnce({
+      verdict: "sound",
+      summary: "Throughput fits single-node NVMe budget.",
+      findings: [],
+      omittedFactors: [],
+    });
+    const calcRes = await aliceAgent
+      .post("/api/calculator/audit")
+      .send({
+        inputs: { dau: 100000, readsPerUser: 10 },
+        results: { qps: 12 },
+      })
+      .expect(200);
+    expect(calcRes.body.summary).toContain("NVMe");
+    expect(mockRunStructured).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "quick",
+        scope: expect.objectContaining({ ownerId: localOwnerId }),
+      }),
+    );
   });
 });
