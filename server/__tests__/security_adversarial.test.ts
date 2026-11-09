@@ -19,8 +19,13 @@ import {
 } from "../platform/ai/aiSettingsService.ts";
 import { scopeForOwnerId } from "../platform/tenancy/scope.ts";
 import { fetchEndpointModels } from "../providers/defs.ts";
+import { makeKitSkeleton } from "./testHelpers.ts";
+import { topologicalSort } from "../../shared/kits/kitSkeleton.ts";
 import { makeDataPrivate } from "../platform/fs/privateFiles.ts";
-import { CONTENT_SECURITY_POLICY } from "../platform/net/errors.ts";
+import {
+  CONTENT_SECURITY_POLICY,
+  trimTrailingSlashes,
+} from "../platform/net/errors.ts";
 import { __resetHostGuard } from "../platform/net/hostGuard.ts";
 import { __resetMcpRateLimit } from "../platform/mcp/mcpPrimitives.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
@@ -512,5 +517,42 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
       normalizeEndpointBaseUrl(`http://a${".".repeat(1_000_000)}b/v1`),
     ).toThrow(/too long/);
     expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("9. bounds CPU and memory on untrusted input: request paths, Kit graph size, and multipart field count", async () => {
+    // /\/+$/ was O(n^2) on every request path (rate limiter, read-only token guard).
+    const started = performance.now();
+    expect(trimTrailingSlashes(`/api${"/".repeat(200_000)}x`)).toBe(
+      `/api${"/".repeat(200_000)}x`,
+    );
+    expect(trimTrailingSlashes("/api/mcp///")).toBe("/api/mcp");
+    expect(trimTrailingSlashes("///")).toBe("/");
+    // The old queue re-sort made topologicalSort O(n^2): 40,000 nodes took 14 s.
+    topologicalSort(
+      Array.from({ length: 100_000 }, (_, i) => ({ id: `n${i}` })),
+      [],
+    );
+    expect(performance.now() - started).toBeLessThan(2_000);
+
+    // A 3 MB Kit with 50,000 nodes is refused by the schema caps, not processed.
+    const hugeKit = makeKitSkeleton((s) => {
+      s.graph.nodes = Array.from({ length: 50_000 }, (_, i) => ({
+        ...s.graph.nodes[0],
+        id: `n${i}`,
+      }));
+    });
+    const capRes = await memberAgent
+      .post("/api/kits/import-kit")
+      .send({ skeleton: hugeKit })
+      .expect(400);
+    expect(capRes.body.error.code).toBe("VALIDATION_ERROR");
+
+    // Multer keeps every text field in memory; unlimited fields were a memory DoS.
+    let manyFields = memberAgent.post("/api/kits/import-backup");
+    for (let i = 0; i < 20; i++) manyFields = manyFields.field(`f${i}`, "x");
+    const fieldsRes = await manyFields
+      .attach("file", Buffer.from("PK"), "x.toolbox-backup.zip")
+      .expect(413);
+    expect(fieldsRes.body.error.code).toBe("PAYLOAD_TOO_LARGE");
   });
 });

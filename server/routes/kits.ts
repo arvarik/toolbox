@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
 import { z } from "zod";
@@ -40,11 +41,14 @@ import { syncDomainSourcesToRag } from "../search/hybridSearch.ts";
 const router = Router();
 
 const MAX_BACKUP_UPLOAD_BYTES = 100 * 1024 * 1024;
+const UPLOAD_DIR = path.resolve(os.tmpdir());
 const uploadBackup = multer({
-  dest: os.tmpdir(),
+  dest: UPLOAD_DIR,
   limits: {
     fileSize: MAX_BACKUP_UPLOAD_BYTES,
     files: 1,
+    // Busboy keeps every text field in memory and allows unlimited fields by default.
+    fields: 8,
   },
 });
 
@@ -126,21 +130,22 @@ function handleSkeletonImport(
 
 async function handleBackupUpload(req: Request, res: Response): Promise<void> {
   const scope = scopeOf(req);
-  const file = req.file;
-  if (!file?.path) {
+  // Multer names the file with random bytes inside UPLOAD_DIR. Check that before any file access.
+  const uploadPath = req.file?.path ? path.resolve(req.file.path) : "";
+  if (!uploadPath.startsWith(UPLOAD_DIR + path.sep)) {
     throw new BadRequestError("Missing backup archive file upload");
   }
   try {
     const onCollision = parseCollision(
       req.body?.onCollision ?? req.query.onCollision,
     );
-    const zipBuf = await fs.promises.readFile(file.path);
+    const zipBuf = await fs.promises.readFile(uploadPath);
     const result = await importKitBackupZip(db, scope, zipBuf, { onCollision });
     res
       .status(result.mode === "created" || result.mode === "copied" ? 201 : 200)
       .json(result);
   } finally {
-    await fs.promises.unlink(file.path).catch(() => {});
+    await fs.promises.unlink(uploadPath).catch(() => {});
   }
 }
 

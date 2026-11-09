@@ -45,6 +45,7 @@ const uploadCompilerFiles = multer({
   limits: {
     fileSize: MAX_PDF_BYTES,
     files: 8,
+    fields: 8,
   },
 });
 
