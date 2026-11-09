@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { runStructured } from "../ai/engine.ts";
+import { scopeOf } from "../platform/tenancy/scope.ts";
 import logger from "../utils/logger.ts";
 
 const router = Router();
@@ -82,8 +83,11 @@ Audit the estimate. Ground rules:
 - If the estimate is broadly sound, say so — verdict "sound", few or no findings. Do not manufacture problems.
 - Keep every finding concrete and tied to a number the user can change.`;
 
+  const scope = scopeOf(req);
   try {
     const audit = await runStructured({
+      scope,
+      capability: "quick",
       model,
       prompt,
       schema: AUDIT_SCHEMA,

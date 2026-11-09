@@ -328,6 +328,7 @@ export async function safeFetch(
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref();
   const currentHeaders = normalizeHeaders(options.headers);
   try {
     for (let hop = 0; hop <= maxRedirects; hop++) {

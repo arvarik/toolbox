@@ -20,3 +20,8 @@ export const DB_PATH =
 export const DATA_DIR = process.env.DATA_DIR || path.dirname(DB_PATH);
 export const BACKUPS_DIR = path.join(DATA_DIR, "backups");
 export const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
+
+export function isBackgroundJobsDisabled(): boolean {
+  const raw = process.env.DISABLE_BACKGROUND_JOBS?.trim().toLowerCase();
+  return raw === "true" || raw === "1";
+}

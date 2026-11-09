@@ -1,7 +1,12 @@
 import { Router } from "express";
 import db from "../db.ts";
+import { asyncHandler } from "../platform/net/errors.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
 import { resolveActiveKit } from "../kits/kitContext.ts";
+import {
+  deleteRagChunksBySource,
+  upsertRagChunk,
+} from "../search/hybridSearch.ts";
 import logger from "../utils/logger.ts";
 
 const router = Router();
@@ -136,26 +141,42 @@ router.get("/:pillarId/:topicId/:sectionId", (req, res) => {
   res.json({ content: row.content, committedAt: row.committed_at });
 });
 
-router.put("/:pillarId/:topicId/:sectionId", (req, res) => {
-  const scope = scopeOf(req);
-  const kit = resolveActiveKit(req, db, scope);
-  const { pillarId, topicId, sectionId } = req.params;
-  const { content } = req.body as { content?: string };
+router.put(
+  "/:pillarId/:topicId/:sectionId",
+  asyncHandler(async (req, res) => {
+    const scope = scopeOf(req);
+    const kit = resolveActiveKit(req, db, scope);
+    const { pillarId, topicId, sectionId } = req.params;
+    const { content } = req.body as { content?: string };
 
-  if (content === undefined) {
-    res.status(400).json({ message: "content is required" });
-    return;
-  }
+    if (content === undefined || typeof content !== "string") {
+      res.status(400).json({ message: "content is required" });
+      return;
+    }
 
-  db.prepare(
-    `INSERT INTO guide_content (ownerId, kit_id, pillar_id, topic_id, section_id, content, committed_at)
-     VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-     ON CONFLICT(ownerId, kit_id, pillar_id, topic_id, section_id)
-     DO UPDATE SET content = excluded.content, committed_at = excluded.committed_at`,
-  ).run(scope.ownerId, kit.id, pillarId, topicId, sectionId, content);
+    db.prepare(
+      `INSERT INTO guide_content (ownerId, kit_id, pillar_id, topic_id, section_id, content, committed_at)
+       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(ownerId, kit_id, pillar_id, topic_id, section_id)
+       DO UPDATE SET content = excluded.content, committed_at = excluded.committed_at`,
+    ).run(scope.ownerId, kit.id, pillarId, topicId, sectionId, content);
 
-  res.json({ ok: true });
-});
+    const sourceRefId = `${pillarId}:${topicId}:${sectionId}`;
+    if (content.trim()) {
+      await upsertRagChunk(db, scope, {
+        kitId: kit.id,
+        kind: "guide",
+        sourceRefId,
+        title: `${topicId} — ${sectionId}`,
+        content,
+      });
+    } else {
+      deleteRagChunksBySource(db, scope, kit.id, "guide", sourceRefId);
+    }
+
+    res.json({ ok: true });
+  }),
+);
 
 router.delete("/:pillarId/:topicId/:sectionId", (req, res) => {
   const scope = scopeOf(req);
@@ -166,6 +187,13 @@ router.delete("/:pillarId/:topicId/:sectionId", (req, res) => {
     `DELETE FROM guide_content
      WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
   ).run(scope.ownerId, kit.id, pillarId, topicId, sectionId);
+  deleteRagChunksBySource(
+    db,
+    scope,
+    kit.id,
+    "guide",
+    `${pillarId}:${topicId}:${sectionId}`,
+  );
   res.json({ ok: true });
 });
 

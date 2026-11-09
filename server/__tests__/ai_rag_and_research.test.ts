@@ -1,17 +1,10 @@
 // @vitest-environment node
 import http from "node:http";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { Express } from "express";
 import { scopeForOwnerId, type Scope } from "../platform/tenancy/scope.ts";
-
-const tempDir = mkdtempSync(path.join(tmpdir(), "toolbox-wave1b-"));
-process.env.DATA_DIR = tempDir;
-process.env.DB_PATH = path.join(tempDir, "wave1b.db");
 
 const { default: db } = await import("../db.ts");
 const { createApp } = await import("../app.ts");
@@ -909,4 +902,229 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
     );
     expect(afterDelete).toHaveLength(0);
   });
+
+  it("7. eliminates RAG ghosting on card/deck/guide/Kit CRUD, scopes /api/search by Kit slug, persists chat persona, and returns JSON 404 on unknown production /api routes", async () => {
+    const countRagEverywhere = (chunkId: string) => {
+      const c1 = (
+        db
+          .prepare("SELECT COUNT(*) AS c FROM rag_chunks WHERE chunk_id = ?")
+          .get(chunkId) as { c: number }
+      ).c;
+      const c2 = (
+        db
+          .prepare("SELECT COUNT(*) AS c FROM rag_chunks_fts WHERE chunk_id = ?")
+          .get(chunkId) as { c: number }
+      ).c;
+      const c3 = (
+        db
+          .prepare("SELECT COUNT(*) AS c FROM rag_chunks_vec WHERE chunk_id = ?")
+          .get(chunkId) as { c: number }
+      ).c;
+      return c1 + c2 + c3;
+    };
+
+    // 1. Card create -> edit -> delete syncs rag_chunks + FTS5 + sqlite-vec and scopes /api/search by Kit slug
+    const deckRes = await aliceAgent
+      .post("/api/decks")
+      .set("X-Toolbox-Kit", "ml-systems")
+      .send({ name: "RAG Lifecycle Deck" })
+      .expect(201);
+    const deckId = deckRes.body.id as string;
+
+    const cardCreate = await aliceAgent
+      .post(`/api/decks/${deckId}/cards`)
+      .set("X-Toolbox-Kit", "ml-systems")
+      .send({
+        front: "ZeRO Stage 3 Optimizer Partitioning",
+        back: "Shards parameters, gradients, and optimizer states across data-parallel ranks.",
+      })
+      .expect(201);
+    const cardId = cardCreate.body.id as string;
+    const cardChunkId = `${aliceId}:${aliceKit2Id}:flashcard:${cardId}`;
+    expect(countRagEverywhere(cardChunkId)).toBe(3);
+
+    const scopedHit = await aliceAgent
+      .get("/api/search")
+      .query({ q: "ZeRO Stage 3 Optimizer", kitId: "ml-systems" })
+      .expect(200);
+    expect(
+      scopedHit.body.flashcards.some((c: { id: string }) => c.id === cardId),
+    ).toBe(true);
+    expect(
+      scopedHit.body.chunks.some(
+        (c: { sourceRefId: string }) => c.sourceRefId === cardId,
+      ),
+    ).toBe(true);
+
+    const otherKitMiss = await aliceAgent
+      .get("/api/search")
+      .query({ q: "ZeRO Stage 3 Optimizer", kitId: "system-design" })
+      .expect(200);
+    expect(otherKitMiss.body.flashcards).toHaveLength(0);
+    expect(
+      otherKitMiss.body.chunks.some(
+        (c: { sourceRefId: string }) => c.sourceRefId === cardId,
+      ),
+    ).toBe(false);
+
+    await aliceAgent
+      .put(`/api/decks/${deckId}/cards/${cardId}`)
+      .send({
+        front: "Ring AllReduce Bandwidth Optimal",
+        back: "Communicates 2(N-1)/N tensor volume independent of worker count.",
+      })
+      .expect(200);
+    const staleAfterEdit = await hybridSearch(
+      db,
+      aliceScope,
+      "ZeRO Stage Partitioning",
+      { kitId: aliceKit2Id, skipVec: true },
+    );
+    expect(
+      staleAfterEdit.some((h) => h.sourceRefId === cardId),
+    ).toBe(false);
+    const updatedHits = await hybridSearch(
+      db,
+      aliceScope,
+      "Ring AllReduce Bandwidth",
+      { kitId: aliceKit2Id },
+    );
+    expect(updatedHits[0]?.sourceRefId).toBe(cardId);
+    expect(updatedHits[0]?.title).toBe("Ring AllReduce Bandwidth Optimal");
+
+    await aliceAgent
+      .delete(`/api/decks/${deckId}/cards/${cardId}`)
+      .expect(204);
+    expect(countRagEverywhere(cardChunkId)).toBe(0);
+
+    // 2. Deck delete purges child flashcard chunks before ON DELETE CASCADE
+    const card2 = await aliceAgent
+      .post(`/api/decks/${deckId}/cards`)
+      .set("X-Toolbox-Kit", "ml-systems")
+      .send({ front: "Pipeline Bubble Fraction", back: "(p - 1) / m" })
+      .expect(201);
+    const card2ChunkId = `${aliceId}:${aliceKit2Id}:flashcard:${card2.body.id as string}`;
+    expect(countRagEverywhere(card2ChunkId)).toBe(3);
+
+    await aliceAgent.delete(`/api/decks/${deckId}`).expect(204);
+    expect(countRagEverywhere(card2ChunkId)).toBe(0);
+
+    // 3. Guide section PUT -> clear ("") purges rag_chunks + FTS5 + vec0
+    const firstPillar = SYSTEM_DESIGN_KIT_SKELETON_FOR_TEST();
+    await aliceAgent
+      .put(
+        `/api/guide-content/${firstPillar.p}/${firstPillar.t}/${firstPillar.s}`,
+      )
+      .set("X-Toolbox-Kit", "ml-systems")
+      .send({ content: "Speculative decoding draft verification acceptance rate." })
+      .expect(200);
+    const guideRef = `${firstPillar.p}:${firstPillar.t}:${firstPillar.s}`;
+    const guideChunkId = `${aliceId}:${aliceKit2Id}:guide:${guideRef}`;
+    expect(countRagEverywhere(guideChunkId)).toBe(3);
+
+    await aliceAgent
+      .put(
+        `/api/guide-content/${firstPillar.p}/${firstPillar.t}/${firstPillar.s}`,
+      )
+      .set("X-Toolbox-Kit", "ml-systems")
+      .send({ content: "" })
+      .expect(200);
+    expect(countRagEverywhere(guideChunkId)).toBe(0);
+
+    // 4. Kit delete purges rag_chunks_vec alongside rag_chunks and rag_chunks_fts
+    await upsertRagChunk(db, aliceScope, {
+      kitId: aliceKit2Id,
+      kind: "guide",
+      sourceRefId: "temp-ml-note",
+      title: "Temporary ML Note",
+      content: "Ephemeral tensor parallelism note.",
+    });
+    await aliceAgent.delete(`/api/kits/${aliceKit2Id}`).expect(200);
+    const remainingVecForDeletedKit = (
+      db
+        .prepare(
+          "SELECT COUNT(*) AS c FROM rag_chunks_vec WHERE ownerId = ? AND kit_id = ?",
+        )
+        .get(aliceId, aliceKit2Id) as { c: number }
+    ).c;
+    expect(remainingVecForDeletedKit).toBe(0);
+
+    // 5. Chat session persona round-trips through SQLite
+    await aliceAgent
+      .post("/api/chat/sessions")
+      .send({
+        session: {
+          id: "persona-session-1",
+          name: "Strict Review",
+          persona: "gordon",
+          messages: [{ role: "user", content: "Critique my shard key." }],
+        },
+      })
+      .expect(200);
+    const sessionsRes = await aliceAgent.get("/api/chat/sessions").expect(200);
+    expect(sessionsRes.body["persona-session-1"]?.persona).toBe("gordon");
+
+    // 6. Production mode unknown /api/* routes always return JSON 404 and /api-* prefixes never hang
+    const prevNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    try {
+      const prodApp = createApp();
+      const missApiGet = await request(prodApp)
+        .get("/api/nonexistent-endpoint")
+        .expect(404);
+      expect(missApiGet.headers["content-type"]).toMatch(/json/);
+      expect(missApiGet.body.error?.code).toBe("ROUTE_NOT_FOUND");
+
+      const missApiPost = await request(prodApp)
+        .post("/api/nonexistent-endpoint")
+        .expect(404);
+      expect(missApiPost.headers["content-type"]).toMatch(/json/);
+      expect(missApiPost.body.error?.code).toBe("ROUTE_NOT_FOUND");
+
+      const missPrefix = await request(prodApp).get("/api-typo");
+      expect([200, 404]).toContain(missPrefix.status);
+    } finally {
+      process.env.NODE_ENV = prevNodeEnv;
+    }
+
+    // 7. DISABLE_BACKGROUND_JOBS=true disables background runners and activates offline mock embedder
+    const { isBackgroundJobsDisabled } = await import("../appConfig.ts");
+    const { shouldUseMockEmbedder } = await import(
+      "../platform/workers/cpuHost.ts"
+    );
+    const prevBg = process.env.DISABLE_BACKGROUND_JOBS;
+    const prevEnvForBg = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    process.env.DISABLE_BACKGROUND_JOBS = "true";
+    try {
+      expect(isBackgroundJobsDisabled()).toBe(true);
+      expect(shouldUseMockEmbedder()).toBe(true);
+    } finally {
+      process.env.NODE_ENV = prevEnvForBg;
+      if (prevBg === undefined) delete process.env.DISABLE_BACKGROUND_JOBS;
+      else process.env.DISABLE_BACKGROUND_JOBS = prevBg;
+    }
+  });
 });
+
+function SYSTEM_DESIGN_KIT_SKELETON_FOR_TEST(): {
+  p: string;
+  t: string;
+  s: string;
+} {
+  const row = db
+    .prepare("SELECT skeleton_json FROM kits LIMIT 1")
+    .get() as { skeleton_json: string };
+  const skel = JSON.parse(row.skeleton_json) as {
+    pillars: Array<{
+      id: string;
+      topics: Array<{ id: string }>;
+      sections: Array<{ id: string }>;
+    }>;
+  };
+  return {
+    p: skel.pillars[0].id,
+    t: skel.pillars[0].topics[0].id,
+    s: skel.pillars[0].sections[0].id,
+  };
+}

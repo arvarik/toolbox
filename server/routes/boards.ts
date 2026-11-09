@@ -127,11 +127,11 @@ router.patch("/reorder", (req, res) => {
   }
 
   const updateStmt = db.prepare(
-    "UPDATE boards SET position = ? WHERE ownerId = ? AND id = ?",
+    "UPDATE boards SET position = ? WHERE ownerId = ? AND kit_id = ? AND id = ?",
   );
   const updateAll = db.transaction((orderedIds: string[]) => {
     orderedIds.forEach((id, index) => {
-      updateStmt.run(index, scope.ownerId, id);
+      updateStmt.run(index, scope.ownerId, kit.id, id);
     });
   });
 

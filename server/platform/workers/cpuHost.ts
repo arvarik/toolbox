@@ -77,10 +77,13 @@ export function deterministicHashEmbed(
   });
 }
 
-function shouldUseMockEmbedder(): boolean {
+export function shouldUseMockEmbedder(): boolean {
+  const disableBg = process.env.DISABLE_BACKGROUND_JOBS?.trim().toLowerCase();
   return (
     process.env.NODE_ENV === "test" ||
-    process.env.TOOLBOX_EMBEDDINGS_MOCK === "1"
+    process.env.TOOLBOX_EMBEDDINGS_MOCK === "1" ||
+    disableBg === "true" ||
+    disableBg === "1"
   );
 }
 

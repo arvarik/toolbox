@@ -1,3 +1,4 @@
+// @vitest-environment node
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 import { LOCAL_OWNER_EMAIL } from "../appConfig.ts";

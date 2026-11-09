@@ -1,7 +1,10 @@
 import crypto from "node:crypto";
 import type Database from "better-sqlite3";
-import * as sqliteVec from "sqlite-vec";
-import { kitTokFor, ownerTokFor } from "../kits/kitsSchema.ts";
+import {
+  ensureVecExtensionLoaded,
+  kitTokFor,
+  ownerTokFor,
+} from "../kits/kitsSchema.ts";
 import {
   bumpEmbeddingGen,
   getEmbeddingGen,
@@ -50,13 +53,7 @@ const VEC_WEIGHT = 1.2;
 const MAX_VEC_COSINE_DISTANCE = 0.78;
 const BATCH_SIZE = 32;
 
-const loadedVecDbs = new WeakSet<Database.Database>();
-
-export function ensureVecExtensionLoaded(db: Database.Database): void {
-  if (loadedVecDbs.has(db)) return;
-  sqliteVec.load(db);
-  loadedVecDbs.add(db);
-}
+export { ensureVecExtensionLoaded };
 
 export function kindTokFor(kind: string): string {
   return `d_${kind.replace(/[^a-zA-Z0-9]/g, "_")}`;
@@ -315,22 +312,15 @@ export async function upsertRagChunk(
   return chunkId;
 }
 
-export function deleteRagChunksBySource(
+export function deleteRagChunksByIds(
   db: Database.Database,
   scope: Scope,
-  kitId: string,
-  kind: RagChunkKind,
-  sourceRefId: string,
+  chunkIds: readonly string[],
 ): number {
-  ensureVecExtensionLoaded(db);
-  const existing = db
-    .prepare(
-      "SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND kit_id = ? AND kind = ? AND source_ref_id = ?",
-    )
-    .all(scope.ownerId, kitId, kind, sourceRefId) as Array<{ chunk_id: string }>;
-  if (existing.length === 0) return 0;
-
+  if (chunkIds.length === 0) return 0;
   const hasVec = readVecTableDimension(db) !== null;
+  if (hasVec) ensureVecExtensionLoaded(db);
+
   const ownerTok = ownerTokFor(scope.ownerId);
   const delFts = db.prepare(
     "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND chunk_id = ?",
@@ -343,14 +333,74 @@ export function deleteRagChunksBySource(
   );
 
   const tx = db.transaction(() => {
-    for (const r of existing) {
-      delFts.run(ownerTok, r.chunk_id);
-      delVec?.run(scope.ownerId, r.chunk_id);
-      delChunk.run(scope.ownerId, r.chunk_id);
+    for (const chunkId of chunkIds) {
+      delFts.run(ownerTok, chunkId);
+      delVec?.run(scope.ownerId, chunkId);
+      delChunk.run(scope.ownerId, chunkId);
     }
   });
   tx();
-  return existing.length;
+  return chunkIds.length;
+}
+
+export function deleteRagChunksBySource(
+  db: Database.Database,
+  scope: Scope,
+  kitId: string,
+  kind: RagChunkKind,
+  sourceRefId: string,
+): number {
+  const existing = db
+    .prepare(
+      "SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND kit_id = ? AND kind = ? AND source_ref_id = ?",
+    )
+    .all(scope.ownerId, kitId, kind, sourceRefId) as Array<{ chunk_id: string }>;
+  return deleteRagChunksByIds(
+    db,
+    scope,
+    existing.map((r) => r.chunk_id),
+  );
+}
+
+export function deleteRagChunksForKit(
+  db: Database.Database,
+  scope: Scope,
+  kitId: string,
+): number {
+  const existing = db
+    .prepare("SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND kit_id = ?")
+    .all(scope.ownerId, kitId) as Array<{ chunk_id: string }>;
+  const removed = deleteRagChunksByIds(
+    db,
+    scope,
+    existing.map((r) => r.chunk_id),
+  );
+  db.prepare(
+    "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND kitTok = ?",
+  ).run(ownerTokFor(scope.ownerId), kitTokFor(kitId));
+  if (readVecTableDimension(db) !== null) {
+    ensureVecExtensionLoaded(db);
+    db.prepare(
+      "DELETE FROM rag_chunks_vec WHERE ownerId = ? AND kit_id = ?",
+    ).run(scope.ownerId, kitId);
+  }
+  return removed;
+}
+
+export function deleteRagChunksForDeck(
+  db: Database.Database,
+  scope: Scope,
+  kitId: string,
+  deckId: string,
+): number {
+  const cards = db
+    .prepare("SELECT id FROM flashcards WHERE ownerId = ? AND deck_id = ?")
+    .all(scope.ownerId, deckId) as Array<{ id: string }>;
+  if (cards.length === 0) return 0;
+  const chunkIds = cards.map(
+    (c) => `${scope.ownerId}:${kitId}:flashcard:${c.id}`,
+  );
+  return deleteRagChunksByIds(db, scope, chunkIds);
 }
 
 /**
@@ -440,6 +490,7 @@ export async function syncDomainSourcesToRag(
   db: Database.Database,
   scope: Scope,
   kitId?: string,
+  opts: { pruneStale?: boolean } = {},
 ): Promise<number> {
   const inputs: UpsertRagChunkInput[] = [];
 
@@ -593,6 +644,32 @@ export async function syncDomainSourcesToRag(
       title: "Episodic Memory",
       content: ep.memory_text,
     });
+  }
+
+  if (opts.pruneStale) {
+    const liveIds = new Set<string>();
+    for (const item of inputs) {
+      if (!item.content.trim()) continue;
+      liveIds.add(
+        item.chunkId ??
+          `${scope.ownerId}:${item.kitId}:${item.kind}:${item.sourceRefId}`,
+      );
+    }
+    const storedRows = kitId
+      ? (db
+          .prepare(
+            "SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND kit_id = ?",
+          )
+          .all(scope.ownerId, kitId) as Array<{ chunk_id: string }>)
+      : (db
+          .prepare("SELECT chunk_id FROM rag_chunks WHERE ownerId = ?")
+          .all(scope.ownerId) as Array<{ chunk_id: string }>);
+    const staleIds = storedRows
+      .map((r) => r.chunk_id)
+      .filter((id) => !liveIds.has(id));
+    if (staleIds.length > 0) {
+      deleteRagChunksByIds(db, scope, staleIds);
+    }
   }
 
   return upsertRagChunksBatch(db, scope, inputs);

@@ -16,7 +16,7 @@ import {
 } from "../platform/net/errors.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
-import { kitTokFor, ownerTokFor } from "./kitsSchema.ts";
+import { deleteRagChunksForKit } from "../search/hybridSearch.ts";
 import {
   getOwnedKit,
   kitsUploadsBaseDir,
@@ -131,13 +131,7 @@ export function importKitMode1(
 
   const runTx = db.transaction(() => {
     if (existing && onCollision === "replace") {
-      db.prepare(
-        "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND kitTok = ?",
-      ).run(ownerTokFor(scope.ownerId), kitTokFor(existing.id));
-      db.prepare("DELETE FROM rag_chunks WHERE ownerId = ? AND kit_id = ?").run(
-        scope.ownerId,
-        existing.id,
-      );
+      deleteRagChunksForKit(db, scope, existing.id);
       db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(
         scope.ownerId,
         existing.id,
@@ -814,12 +808,7 @@ export async function importKitBackupZip(
 
     const runImportTx = db.transaction(() => {
       if (existing && onCollision === "replace") {
-        db.prepare(
-          "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND kitTok = ?",
-        ).run(ownerTokFor(scope.ownerId), kitTokFor(existing.id));
-        db.prepare(
-          "DELETE FROM rag_chunks WHERE ownerId = ? AND kit_id = ?",
-        ).run(scope.ownerId, existing.id);
+        deleteRagChunksForKit(db, scope, existing.id);
         db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(
           scope.ownerId,
           existing.id,

@@ -2,6 +2,7 @@ import { Router } from "express";
 import crypto from "node:crypto";
 import { tool, type ModelMessage, type ToolSet } from "ai";
 import { z } from "zod";
+import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import db from "../db.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import { runWebResearch } from "../platform/research/webResearch.ts";
@@ -41,8 +42,61 @@ function toModelMessages(history: StoredMessage[] | undefined): ModelMessage[] {
     }));
 }
 
-function tutorSystemPrompt(rolePrompt: string, context?: string): string {
-  return context ? `${rolePrompt} Context: ${context}` : rolePrompt;
+function resolvePersonaPrompt(
+  kit: ActiveKitContext,
+  rawPersona?: string,
+): string | null {
+  if (!rawPersona) return null;
+  const normalized =
+    rawPersona === "gordon"
+      ? "strict"
+      : rawPersona === "interviewer"
+        ? "socratic"
+        : rawPersona;
+  const personas = kit.skeleton.tutor.personas as Record<
+    string,
+    { label: string; prompt: string } | undefined
+  >;
+  return personas[normalized]?.prompt ?? null;
+}
+
+function tutorSystemPrompt(
+  kit: ActiveKitContext,
+  context?: string,
+  persona?: string,
+): string {
+  const { rolePrompt } = kit.skeleton.tutor;
+  const cleanedContext =
+    context && kit.slug !== "system-design"
+      ? context.replace(
+          /of a system design interview study tool/gi,
+          `of the "${kit.skeleton.identity.name}" study kit`,
+        )
+      : context;
+
+  const parts: string[] = [rolePrompt];
+  const pillarNames = kit.skeleton.pillars.map((p) => p.name).join(", ");
+  parts.push(
+    `Active Study Kit: "${kit.skeleton.identity.name}" (slug: ${kit.slug}). Syllabus Pillars: ${pillarNames}.`,
+  );
+
+  const personaPrompt = resolvePersonaPrompt(kit, persona);
+  if (
+    personaPrompt &&
+    (!cleanedContext || !cleanedContext.includes(personaPrompt))
+  ) {
+    parts.push(`Tutor Persona Directive: ${personaPrompt}`);
+  }
+
+  if (cleanedContext) {
+    const trimmed = cleanedContext.startsWith(rolePrompt)
+      ? cleanedContext.slice(rolePrompt.length).trim()
+      : cleanedContext.trim();
+    if (trimmed) {
+      parts.push(`Context: ${trimmed}`);
+    }
+  }
+  return parts.join("\n\n");
 }
 
 router.get("/starters", async (req, res) => {
@@ -202,11 +256,13 @@ router.post("/", async (req, res) => {
   const {
     message,
     context,
+    persona,
     history = [],
     model,
   } = req.body as {
     message?: string;
     context?: string;
+    persona?: string;
     history?: StoredMessage[];
     model?: string;
   };
@@ -221,7 +277,7 @@ router.post("/", async (req, res) => {
       model,
       scope,
       capability: "deep",
-      system: tutorSystemPrompt(kit.skeleton.tutor.rolePrompt, context),
+      system: tutorSystemPrompt(kit, context, persona),
       messages: [
         ...toModelMessages(history),
         { role: "user", content: message },
@@ -440,12 +496,14 @@ router.post("/stream", async (req, res) => {
   const {
     message,
     context,
+    persona,
     history = [],
     model,
     webResearch,
   } = req.body as {
     message?: string;
     context?: string;
+    persona?: string;
     history?: StoredMessage[];
     model?: string;
     webResearch?: boolean;
@@ -468,6 +526,7 @@ router.post("/stream", async (req, res) => {
   const heartbeat = setInterval(() => {
     if (!res.writableEnded) res.write(": ping\n\n");
   }, 15_000);
+  heartbeat.unref();
 
   try {
     const profileRow = db
@@ -490,7 +549,7 @@ router.post("/stream", async (req, res) => {
         ? webResearch
         : Boolean(kit.skeleton.capabilities?.webResearchDefault);
 
-    let system = tutorSystemPrompt(kit.skeleton.tutor.rolePrompt, context);
+    let system = tutorSystemPrompt(kit, context, persona);
     system += `\n\nThe learner's flashcards, study guide notes, and Kit reference sources live in a hybrid search index. Use search_flashcards, search_guide, and search_kit_sources whenever an answer should build on their material.${enableWebResearch ? " Use web_research when up-to-date external facts or primary sources are needed." : ""}`;
     if (userProfile) {
       system += `\n\n[User Profile]:\n${userProfile}`;
@@ -554,7 +613,11 @@ router.post("/stream", async (req, res) => {
       res.end();
     }
 
-    if (!abortController.signal.aborted && generatedText) {
+    if (
+      !isBackgroundJobsDisabled() &&
+      !abortController.signal.aborted &&
+      generatedText
+    ) {
       extractEpisodicMemories({
         scope,
         kitId: kit.id,
@@ -691,6 +754,7 @@ ${sourceBlock}`;
 
 router.post("/generate-reverse-cards", async (req, res) => {
   const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
   const { cards, model } = req.body as {
     cards?: Array<{ front: string; back: string }>;
     model?: string;
@@ -705,7 +769,7 @@ router.post("/generate-reverse-cards", async (req, res) => {
       .map((c, i) => `[Card ${i}]\nQ: ${c.front}\nA: ${c.back}`)
       .join("\n\n");
 
-    const prompt = `You are an expert flashcard creator. Given the flashcards below, generate ONE reverse card for each that tests the SAME concept from a different angle or retrieval pathway.
+    const prompt = `You are an expert flashcard creator for ${kit.skeleton.identity.name}. Given the flashcards below, generate ONE reverse card for each that tests the SAME concept from a different angle or retrieval pathway.
 
 RULES:
 1. The reverse card must test the same knowledge from a different direction.
@@ -800,6 +864,7 @@ Now write the guide section content:`;
 
 router.post("/evaluate-interceptor", async (req, res) => {
   const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
   const { explanation, front, back, model } = req.body as {
     explanation?: string;
     front?: string;
@@ -815,12 +880,18 @@ router.post("/evaluate-interceptor", async (req, res) => {
   }
 
   try {
-    const prompt = `You are a rigorous, anti-sycophancy learning evaluator. The learner was asked a flashcard question and must explain WHY the answer is true to prove genuine understanding rather than pattern-matching.
+    const fencedExplanation = explanation.replace(
+      /<\/untrusted_/gi,
+      "<\\/untrusted_",
+    );
+    const prompt = `You are a rigorous, anti-sycophancy learning evaluator for ${kit.skeleton.identity.name}. The learner was asked a flashcard question and must explain WHY the answer is true to prove genuine understanding rather than pattern-matching.
 
 Question: ${front}
 Canonical Answer: ${back}
 
-Learner's Explanation: "${explanation}"
+<untrusted_submission>
+${fencedExplanation}
+</untrusted_submission>
 
 Follow this strict falsification-first evaluation order:
 1. Extract every distinct factual or causal claim made by the learner in extractedClaims.
@@ -900,6 +971,7 @@ Follow this strict falsification-first evaluation order:
 
 router.post("/concept-map", async (req, res) => {
   const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
   const { history = [], model } = req.body as {
     history?: StoredMessage[];
     model?: string;
@@ -915,7 +987,7 @@ router.post("/concept-map", async (req, res) => {
       .map((msg) => `${msg.role}: ${msg.content}`)
       .join("\n\n");
 
-    const prompt = `You are an expert educational visualizer. Extract the key concepts, entities, and their relationships from the following chat history.
+    const prompt = `You are an expert educational visualizer for ${kit.skeleton.identity.name}. Extract the key concepts, entities, and their relationships from the following chat history.
 Your output MUST be a valid, syntactically correct \`mermaid\` graph definition (e.g. \`graph TD\`).
 Use concise node labels and relationship labels. Only output the markdown block containing the mermaid code.
 
@@ -1140,7 +1212,7 @@ Return the targeted sections with their complete updated content.`;
   }
 });
 
-router.post("/commit/save", (req, res) => {
+router.post("/commit/save", async (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const {
@@ -1201,11 +1273,7 @@ router.post("/commit/save", (req, res) => {
         content: u.content,
       }));
     if (ragInputs.length > 0) {
-      void upsertRagChunksBatch(db, scope, ragInputs).catch((err: unknown) => {
-        logger.warn("[chat/commit/save] Deferred RAG sync:", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
+      await upsertRagChunksBatch(db, scope, ragInputs);
     }
     res.json({ ok: true, savedCount });
   } catch (err) {
@@ -1226,6 +1294,7 @@ router.get("/sessions", (req, res) => {
       .all(scope.ownerId, kit.id) as Array<{
       id: string;
       name: string;
+      persona: string | null;
       created_at: string;
       messages: string;
       pillar_id: string | null;
@@ -1237,6 +1306,7 @@ router.get("/sessions", (req, res) => {
       sessions[r.id] = {
         id: r.id,
         name: r.name,
+        persona: r.persona || "socratic",
         createdAt: r.created_at,
         messages: JSON.parse(r.messages || "[]"),
         pillarId: r.pillar_id,
@@ -1255,6 +1325,7 @@ router.get("/sessions", (req, res) => {
 interface IncomingChatSession {
   id?: string;
   name?: string;
+  persona?: string | null;
   messages?: unknown[];
   pillarId?: string | null;
   topicId?: string | null;
@@ -1273,10 +1344,11 @@ router.post("/sessions", (req, res) => {
 
   try {
     db.prepare(
-      `INSERT INTO chat_sessions (id, ownerId, kit_id, name, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      `INSERT INTO chat_sessions (id, ownerId, kit_id, name, persona, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
        ON CONFLICT(ownerId, id) DO UPDATE SET
          name = excluded.name,
+         persona = excluded.persona,
          messages = excluded.messages,
          pillar_id = excluded.pillar_id,
          topic_id = excluded.topic_id,
@@ -1287,6 +1359,7 @@ router.post("/sessions", (req, res) => {
       scope.ownerId,
       kit.id,
       session.name || "Session",
+      session.persona || "socratic",
       JSON.stringify(session.messages || []),
       session.pillarId || null,
       session.topicId || null,
@@ -1314,10 +1387,11 @@ router.post("/sessions/bulk", (req, res) => {
 
   try {
     const insert = db.prepare(
-      `INSERT INTO chat_sessions (id, ownerId, kit_id, name, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+      `INSERT INTO chat_sessions (id, ownerId, kit_id, name, persona, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
        ON CONFLICT(ownerId, id) DO UPDATE SET
          name = excluded.name,
+         persona = excluded.persona,
          messages = excluded.messages,
          pillar_id = excluded.pillar_id,
          topic_id = excluded.topic_id,
@@ -1334,6 +1408,7 @@ router.post("/sessions/bulk", (req, res) => {
             scope.ownerId,
             kit.id,
             s.name || "Session",
+            s.persona || "socratic",
             JSON.stringify(s.messages || []),
             s.pillarId || null,
             s.topicId || null,

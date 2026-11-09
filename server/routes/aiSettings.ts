@@ -4,6 +4,7 @@ import {
   CustomEndpointInputSchema,
   UserByokUpdateSchema,
 } from "../../shared/platform/aiSettings.ts";
+import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import db from "../db.ts";
 import {
   assertNoUserEmbeddingsOverride,
@@ -154,11 +155,15 @@ adminAiSettingsRouter.put(
     const { embeddingsChanged, embeddings } = updateAdminAiSettings(parsed);
     if (embeddingsChanged) {
       ensureEmbeddingStore(db, embeddings.dimension);
-      void reindexMissingEmbeddings(db, { limit: 256 }).catch((err: unknown) => {
-        logger.warn(
-          `[admin/ai-settings] Background embedding reindex deferred: ${err instanceof Error ? err.message : String(err)}`,
+      if (!isBackgroundJobsDisabled()) {
+        void reindexMissingEmbeddings(db, { limit: 256 }).catch(
+          (err: unknown) => {
+            logger.warn(
+              `[admin/ai-settings] Background embedding reindex deferred: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          },
         );
-      });
+      }
     }
     res.json(getAdminAiSettingsView());
   }),

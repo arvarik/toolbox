@@ -2,6 +2,7 @@ import type Database from "better-sqlite3";
 import { NotFoundError, ValidationError } from "../platform/net/errors.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
+import { deleteRagChunksBySource } from "../search/hybridSearch.ts";
 import {
   getArchivedGuideNotes,
   getOwnedKit,
@@ -245,6 +246,13 @@ export function syncKitStructure(
           g.pillar_id,
           g.topic_id,
           g.section_id,
+        );
+        deleteRagChunksBySource(
+          db,
+          scope,
+          existing.id,
+          "guide",
+          `${g.pillar_id}:${g.topic_id}:${g.section_id}`,
         );
         remappedGuideNotes++;
       }

@@ -28,6 +28,7 @@ const router = Router();
 
 interface GraphCardRow extends HealthCardRow {
   deck_id: string;
+  learning_step: number | null;
   repetitions: number;
   last_reviewed: string | null;
   prerequisite_id: string | null;
@@ -36,29 +37,39 @@ interface GraphCardRow extends HealthCardRow {
 }
 
 const CARD_COLUMNS =
-  "id, deck_id, node_id, front, back, state, ease_factor, interval, repetitions, next_review, last_reviewed, prerequisite_id, source_pillar_id, source_topic_id, source_section_id";
+  "f.id, f.deck_id, f.node_id, f.front, f.back, f.state, f.learning_step, f.stability, f.difficulty, f.lapses, f.ease_factor, f.interval, f.repetitions, f.next_review, f.last_reviewed, f.prerequisite_id, f.source_pillar_id, f.source_topic_id, f.source_section_id";
 
-function loadCards(scope: Scope): GraphCardRow[] {
+function loadCards(scope: Scope, kitId: string): GraphCardRow[] {
   return db
-    .prepare(`SELECT ${CARD_COLUMNS} FROM flashcards WHERE ownerId = ?`)
-    .all(scope.ownerId) as GraphCardRow[];
+    .prepare(
+      `SELECT ${CARD_COLUMNS}
+       FROM flashcards f
+       JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+       WHERE f.ownerId = ? AND d.kit_id = ?`,
+    )
+    .all(scope.ownerId, kitId) as GraphCardRow[];
 }
 
-function openRemediationIds(scope: Scope): Set<string> {
+function openRemediationIds(scope: Scope, kitId: string): Set<string> {
   const rows = db
     .prepare(
-      "SELECT card_id FROM remediation_queue WHERE ownerId = ? AND resolved_at IS NULL",
+      "SELECT card_id FROM remediation_queue WHERE ownerId = ? AND kit_id = ? AND resolved_at IS NULL",
     )
-    .all(scope.ownerId) as Array<{ card_id: string }>;
+    .all(scope.ownerId, kitId) as Array<{ card_id: string }>;
   return new Set(rows.map((r) => r.card_id));
 }
 
 function loadDeckIndex(
   scope: Scope,
+  kitId: string,
 ): Map<string, { name: string; settings: DeckSettings }> {
   const decks = db
-    .prepare("SELECT id, name, settings FROM decks WHERE ownerId = ?")
-    .all(scope.ownerId) as Array<{ id: string; name: string; settings: string }>;
+    .prepare("SELECT id, name, settings FROM decks WHERE ownerId = ? AND kit_id = ?")
+    .all(scope.ownerId, kitId) as Array<{
+    id: string;
+    name: string;
+    settings: string;
+  }>;
   return new Map(
     decks.map((d) => [
       d.id,
@@ -90,14 +101,14 @@ function toSessionCard(
   };
 }
 
-router.get("/", (req, res) => {
+router.get(["/", "/health"], (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { pillars, graph: graphDef } = kit.skeleton;
 
   try {
-    const cards = loadCards(scope);
-    const remediationCardIds = openRemediationIds(scope);
+    const cards = loadCards(scope, kit.id);
+    const remediationCardIds = openRemediationIds(scope, kit.id);
     const { byNode } = computeGraphHealth(cards, {
       remediationCardIds,
       nodes: graphDef.nodes,
@@ -170,8 +181,8 @@ router.get("/nodes/:id", (req, res) => {
   }
 
   try {
-    const cards = loadCards(scope);
-    const remediationCardIds = openRemediationIds(scope);
+    const cards = loadCards(scope, kit.id);
+    const remediationCardIds = openRemediationIds(scope, kit.id);
     const now = new Date();
     const { byNode, cardNodeIndex } = computeGraphHealth(cards, {
       remediationCardIds,
@@ -179,7 +190,7 @@ router.get("/nodes/:id", (req, res) => {
       nodes: graphDef.nodes,
       edges: graphDef.edges,
     });
-    const deckIndex = loadDeckIndex(scope);
+    const deckIndex = loadDeckIndex(scope, kit.id);
 
     const linkedCards = cards
       .filter((c) => (cardNodeIndex.get(c.id) || []).includes(node.id))
@@ -302,14 +313,14 @@ router.post("/nodes/:id/session", (req, res) => {
   }
 
   try {
-    const cards = loadCards(scope);
+    const cards = loadCards(scope, kit.id);
     const now = new Date();
     const { cardNodeIndex } = computeGraphHealth(cards, {
       now,
       nodes: graphDef.nodes,
       edges: graphDef.edges,
     });
-    const deckIndex = loadDeckIndex(scope);
+    const deckIndex = loadDeckIndex(scope, kit.id);
 
     const linked = cards.filter((c) =>
       (cardNodeIndex.get(c.id) || []).includes(node.id),
@@ -338,14 +349,14 @@ router.post("/tracks/:id/session", (req, res) => {
   }
 
   try {
-    const cards = loadCards(scope);
+    const cards = loadCards(scope, kit.id);
     const now = new Date();
     const { cardNodeIndex } = computeGraphHealth(cards, {
       now,
       nodes: graphDef.nodes,
       edges: graphDef.edges,
     });
-    const deckIndex = loadDeckIndex(scope);
+    const deckIndex = loadDeckIndex(scope, kit.id);
     const byId = nodeMap(graphDef.nodes);
 
     const orderedNodeIds = expandTrack(track, graphDef.nodes, graphDef.edges);

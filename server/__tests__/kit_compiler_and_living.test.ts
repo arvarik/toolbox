@@ -1,7 +1,4 @@
 // @vitest-environment node
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,9 +9,6 @@ import {
 } from "../../shared/kits/kitSkeleton.ts";
 import { scopeForOwnerId, type Scope } from "../platform/tenancy/scope.ts";
 
-const tempDir = mkdtempSync(path.join(tmpdir(), "toolbox-wave2e-"));
-process.env.DATA_DIR = tempDir;
-process.env.DB_PATH = path.join(tempDir, "wave2e.db");
 process.env.MOCK_LOCAL_EMBEDDER = "1";
 
 // Spy/mock seam around `runStructured` and `runWebResearch` while keeping real implementations available
@@ -789,11 +783,6 @@ describe("Wave 2E: Deep Research Kit Compiler, Worker PDF Extraction, Tarjan SCC
 
   afterAll(() => {
     __resetHostGuard();
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
   });
 
   it("1. enforces strict Zod v4 provider grammar (all-required object properties, zero tuple/regex/unknown) on all 8 LLM schemas", () => {

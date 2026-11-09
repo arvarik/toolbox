@@ -75,8 +75,8 @@ export default function RubricFeedbackCard({
               isMasteryEligible
                 ? "bg-success/15 text-success border-success/30"
                 : isAssisted
-                  ? "bg-warning/15 text-warning border-warning/30"
-                  : "bg-error/15 text-error border-error/30"
+                  ? "bg-warning/10 text-warning border-warning/30"
+                  : "bg-error/10 text-error border-error/30"
             }`}
           >
             {pct}%
