@@ -9,32 +9,34 @@ import {
   type Pillar,
 } from "../../shared/kits/kitSkeleton.ts";
 import { runStructured } from "../ai/engine.ts";
-import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import { getOwnedKit, type OwnedKitDetail } from "../kits/kitService.ts";
 import { syncKitStructure, type KitSyncResult } from "../kits/kitSync.ts";
 import { ValidationError } from "../platform/net/errors.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import {
+  GraphNodeLlmSchema,
+  PillarLlmSchema,
   repairAndVerifyDag,
+  TopicLlmSchema,
   toSlugId,
+  TrackLlmSchema,
+  uniqueSlug,
   type DagRepairReport,
 } from "./dagCompiler.ts";
 import {
   enqueueKitSeedJob,
   kickSeedJobRunner,
   recoverOrphanedRunningJobs,
+  shouldAutoKickSeeder,
 } from "./seedHydrator.ts";
-
-export { recoverOrphanedRunningJobs };
-import {
-  commitStagedSourcesToKit,
-  type LoadedStagedSource,
-} from "./sourceIngest.ts";
+import { commitStagedSourcesToKit, type LoadedStagedSource } from "./sourceIngest.ts";
 import {
   buildVerifiedSourcePool,
   formatVerifiedPoolForPrompt,
   hydrateBibliography,
 } from "./verifiedPool.ts";
+
+export { recoverOrphanedRunningJobs };
 
 const EXPAND_PILLAR_COLORS = [
   "#0891b2",
@@ -50,83 +52,14 @@ const EXPAND_PILLAR_COLORS = [
  * ZERO `.optional()`, ZERO `.default()`, ZERO `z.tuple()`, ZERO `.regex()`, ZERO `z.unknown()`.
  */
 export const LivingExpandLlmSchema = z.object({
-  newPillars: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      shortName: z.string(),
-      color: z.string(),
-      sections: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          icon: z.string(),
-          promptHint: z.string(),
-          ownershipRule: z.string(),
-        }),
-      ),
-      topics: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          summary: z.string(),
-        }),
-      ),
-    }),
-  ),
+  newPillars: z.array(PillarLlmSchema),
   topicAdditionsToExistingPillars: z.array(
-    z.object({
-      existingPillarId: z.string(),
-      topics: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          summary: z.string(),
-        }),
-      ),
-    }),
+    z.object({ existingPillarId: z.string(), topics: z.array(TopicLlmSchema) }),
   ),
-  newNodes: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      pillarId: z.string(),
-      topicId: z.string().nullable(),
-      summary: z.string(),
-      keywords: z.array(z.string()),
-      components: z.array(z.string()),
-      prereqIds: z.array(z.string()),
-    }),
-  ),
-  newTracks: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      emoji: z.string(),
-      description: z.string(),
-      targets: z.array(z.string()),
-    }),
-  ),
+  newNodes: z.array(GraphNodeLlmSchema),
+  newTracks: z.array(TrackLlmSchema),
   citedSourceIds: z.array(z.string()),
 });
-
-function mintUniqueSlug(raw: string, fallback: string, used: Set<string>): string {
-  const base = toSlugId(raw, fallback);
-  if (!used.has(base)) {
-    used.add(base);
-    return base;
-  }
-  for (let i = 2; i < 10_000; i++) {
-    const candidate = `${base}-${i}`;
-    if (!used.has(candidate)) {
-      used.add(candidate);
-      return candidate;
-    }
-  }
-  const emergency = `${base}-${used.size + 1}`;
-  used.add(emergency);
-  return emergency;
-}
 
 export interface ExpandLivingKitInput {
   slugOrId: string;
@@ -226,23 +159,15 @@ export async function expandLivingKit(
 
   // ── 1. Additive Pillar & Topic Merge (100% of existing IDs untouched)
   const usedPillarIds = new Set(existingSkeleton.pillars.map((p) => p.id));
-  const pillarRawToId = new Map<string, string>(
-    existingSkeleton.pillars.map((p) => [p.id, p.id]),
-  );
-  const topicRawToLocation = new Map<
-    string,
-    { pillarId: string; topicId: string }
-  >();
+  const pillarRawToId = new Map(existingSkeleton.pillars.map((p) => [p.id, p.id]));
+  const topicRawToLocation = new Map<string, { pillarId: string; topicId: string }>();
   for (const p of existingSkeleton.pillars) {
-    for (const t of p.topics) {
-      topicRawToLocation.set(t.id, { pillarId: p.id, topicId: t.id });
-    }
+    for (const t of p.topics) topicRawToLocation.set(t.id, { pillarId: p.id, topicId: t.id });
   }
 
   const addedPillarIds: string[] = [];
   const addedTopicIds: string[] = [];
 
-  // Clone existing pillars & apply topicAdditionsToExistingPillars
   const mergedPillars: Pillar[] = existingSkeleton.pillars.map((p) => ({
     ...p,
     sections: [...p.sections],
@@ -257,19 +182,15 @@ export async function expandLivingKit(
     if (!targetPillar) continue;
 
     const usedTopicsInPillar = new Set(targetPillar.topics.map((t) => t.id));
-    for (let i = 0; i < addition.topics.length; i++) {
-      const rt = addition.topics[i];
-      if (!rt.name.trim()) continue;
-      const topicId = mintUniqueSlug(
+    addition.topics.forEach((rt, i) => {
+      if (!rt.name.trim()) return;
+      const topicId = uniqueSlug(
         rt.id || rt.name,
         `${targetPillar.id}-exp-topic-${i + 1}`,
         usedTopicsInPillar,
       );
       if (rt.id) {
-        topicRawToLocation.set(rt.id.trim().toLowerCase(), {
-          pillarId: targetPillar.id,
-          topicId,
-        });
+        topicRawToLocation.set(rt.id.trim().toLowerCase(), { pillarId: targetPillar.id, topicId });
       }
       topicRawToLocation.set(topicId, { pillarId: targetPillar.id, topicId });
       targetPillar.topics.push({
@@ -278,10 +199,10 @@ export async function expandLivingKit(
         ...(rt.summary.trim() ? { summary: rt.summary.trim().slice(0, 400) } : {}),
       });
       addedTopicIds.push(topicId);
-    }
+    });
   }
 
-  // Fallback: if LLM emitted neither newPillars nor topicAdditions, create 1 additive Pillar from the prompt
+  const defaultSectionsTemplate = existingSkeleton.pillars[0].sections;
   const rawNewPillars =
     rawExpand.newPillars.length > 0 || addedTopicIds.length > 0
       ? rawExpand.newPillars
@@ -291,13 +212,7 @@ export async function expandLivingKit(
             name: cleanPrompt.slice(0, 80),
             shortName: cleanPrompt.slice(0, 32),
             color: EXPAND_PILLAR_COLORS[0],
-            sections: existingSkeleton.pillars[0].sections.map((s) => ({
-              id: s.id,
-              name: s.name,
-              icon: s.icon,
-              promptHint: s.promptHint,
-              ownershipRule: s.ownershipRule,
-            })),
+            sections: defaultSectionsTemplate.map((s) => ({ ...s })),
             topics: [
               {
                 id: `${toSlugId(cleanPrompt.slice(0, 30), "expansion")}-core`,
@@ -308,10 +223,8 @@ export async function expandLivingKit(
           },
         ];
 
-  const defaultSectionsTemplate = existingSkeleton.pillars[0].sections;
-
   rawNewPillars.slice(0, 4).forEach((rp, idx) => {
-    const pillarId = mintUniqueSlug(
+    const pillarId = uniqueSlug(
       rp.id || rp.shortName || rp.name,
       `expanded-pillar-${idx + 1}`,
       usedPillarIds,
@@ -321,21 +234,17 @@ export async function expandLivingKit(
 
     const usedSecIds = new Set<string>();
     const sections = rp.sections.slice(0, 5).map((s, sIdx) => ({
-      id: mintUniqueSlug(s.id || s.name, `lens-${sIdx + 1}`, usedSecIds),
+      id: uniqueSlug(s.id || s.name, `lens-${sIdx + 1}`, usedSecIds),
       name: s.name.trim().slice(0, 80) || `Lens ${sIdx + 1}`,
       icon: s.icon.trim().slice(0, 40) || "book-open",
       promptHint: s.promptHint.trim().slice(0, 300),
       ownershipRule: s.ownershipRule.trim().slice(0, 300),
     }));
     while (sections.length < 2) {
-      const tmpl =
-        defaultSectionsTemplate[sections.length] ?? defaultSectionsTemplate[0];
+      const tmpl = defaultSectionsTemplate[sections.length] ?? defaultSectionsTemplate[0];
       sections.push({
-        id: mintUniqueSlug(tmpl.id, `lens-${sections.length + 1}`, usedSecIds),
-        name: tmpl.name,
-        icon: tmpl.icon,
-        promptHint: tmpl.promptHint,
-        ownershipRule: tmpl.ownershipRule,
+        ...tmpl,
+        id: uniqueSlug(tmpl.id, `lens-${sections.length + 1}`, usedSecIds),
       });
     }
 
@@ -352,14 +261,12 @@ export async function expandLivingKit(
           ];
 
     const topics = sourceTopics.map((t, tIdx) => {
-      const topicId = mintUniqueSlug(
+      const topicId = uniqueSlug(
         t.id || t.name,
         `${pillarId}-topic-${tIdx + 1}`,
         usedTopicIds,
       );
-      if (t.id) {
-        topicRawToLocation.set(t.id.trim().toLowerCase(), { pillarId, topicId });
-      }
+      if (t.id) topicRawToLocation.set(t.id.trim().toLowerCase(), { pillarId, topicId });
       topicRawToLocation.set(topicId, { pillarId, topicId });
       addedTopicIds.push(topicId);
       return {
@@ -377,9 +284,7 @@ export async function expandLivingKit(
         rp.shortName.trim().slice(0, 40) ||
         rp.name.trim().slice(0, 40) ||
         `Module ${mergedPillars.length + 1}`,
-      color:
-        rp.color.trim() ||
-        EXPAND_PILLAR_COLORS[idx % EXPAND_PILLAR_COLORS.length],
+      color: rp.color.trim() || EXPAND_PILLAR_COLORS[idx % EXPAND_PILLAR_COLORS.length],
       sections,
       topics,
     };
@@ -391,9 +296,7 @@ export async function expandLivingKit(
 
   // ── 2. Additive Concept Nodes & Prerequisite Edges
   const usedNodeIds = new Set(existingSkeleton.graph.nodes.map((n) => n.id));
-  const nodeRawToId = new Map<string, string>(
-    existingSkeleton.graph.nodes.map((n) => [n.id, n.id]),
-  );
+  const nodeRawToId = new Map(existingSkeleton.graph.nodes.map((n) => [n.id, n.id]));
 
   const fallbackNewPillar =
     (addedPillarIds[0] ? mergedPillarById.get(addedPillarIds[0]) : undefined) ??
@@ -411,9 +314,7 @@ export async function expandLivingKit(
           keywords: [t.name.toLowerCase()],
           components: [],
           prereqIds:
-            existingSkeleton.graph.nodes.length > 0
-              ? [existingSkeleton.graph.nodes[0].id]
-              : [],
+            existingSkeleton.graph.nodes.length > 0 ? [existingSkeleton.graph.nodes[0].id] : [],
         }));
 
   const addedNodes: GraphNode[] = [];
@@ -421,11 +322,7 @@ export async function expandLivingKit(
   const stagedNewEdges: Array<{ nodeId: string; rawPrereqs: string[] }> = [];
 
   sourceNewNodes.forEach((rn, idx) => {
-    const nodeId = mintUniqueSlug(
-      rn.id || rn.name,
-      `exp-concept-${idx + 1}`,
-      usedNodeIds,
-    );
+    const nodeId = uniqueSlug(rn.id || rn.name, `exp-concept-${idx + 1}`, usedNodeIds);
     if (rn.id) nodeRawToId.set(rn.id.trim().toLowerCase(), nodeId);
     nodeRawToId.set(nodeId, nodeId);
 
@@ -436,9 +333,7 @@ export async function expandLivingKit(
       pillarRawToId.get(toSlugId(rn.pillarId, "")) ??
       topicLoc?.pillarId ??
       fallbackNewPillar.id;
-    if (!mergedPillarById.has(resolvedPillarId)) {
-      resolvedPillarId = fallbackNewPillar.id;
-    }
+    if (!mergedPillarById.has(resolvedPillarId)) resolvedPillarId = fallbackNewPillar.id;
 
     const pillarObj = mergedPillarById.get(resolvedPillarId)!;
     const pillarTopicSet = new Set(pillarObj.topics.map((t) => t.id));
@@ -452,56 +347,36 @@ export async function expandLivingKit(
     }
 
     const keywords = Array.from(
-      new Set(
-        rn.keywords
-          .map((k) => k.trim().toLowerCase().slice(0, 60))
-          .filter(Boolean),
-      ),
+      new Set(rn.keywords.map((k) => k.trim().toLowerCase().slice(0, 60)).filter(Boolean)),
     ).slice(0, 12);
-    if (keywords.length === 0) {
-      keywords.push(rn.name.trim().toLowerCase().slice(0, 60) || nodeId);
-    }
+    if (keywords.length === 0) keywords.push(rn.name.trim().toLowerCase().slice(0, 60) || nodeId);
 
-    const node: GraphNode = {
+    addedNodes.push({
       id: nodeId,
       name: rn.name.trim().slice(0, 100) || `Expanded Concept ${idx + 1}`,
       pillarId: resolvedPillarId,
       topicId: resolvedTopicId,
-      summary:
-        rn.summary.trim().slice(0, 500) ||
-        `Expanded concept in ${pillarObj.name}.`,
+      summary: rn.summary.trim().slice(0, 500) || `Expanded concept in ${pillarObj.name}.`,
       keywords,
       components: Array.from(
         new Set(rn.components.map((c) => c.trim().slice(0, 60)).filter(Boolean)),
       ).slice(0, 8),
-    };
-
-    addedNodes.push(node);
+    });
     addedNodeIds.push(nodeId);
     stagedNewEdges.push({ nodeId, rawPrereqs: rn.prereqIds });
   });
 
-  const mergedNodes: GraphNode[] = [
-    ...existingSkeleton.graph.nodes,
-    ...addedNodes,
-  ];
+  const mergedNodes: GraphNode[] = [...existingSkeleton.graph.nodes, ...addedNodes];
   const addedEdges: GraphEdge[] = [];
   for (const item of stagedNewEdges) {
     for (const rawPre of item.rawPrereqs) {
       const preId =
-        nodeRawToId.get(rawPre.trim().toLowerCase()) ??
-        nodeRawToId.get(toSlugId(rawPre, ""));
-      if (preId && preId !== item.nodeId) {
-        addedEdges.push({ from: preId, to: item.nodeId });
-      }
+        nodeRawToId.get(rawPre.trim().toLowerCase()) ?? nodeRawToId.get(toSlugId(rawPre, ""));
+      if (preId && preId !== item.nodeId) addedEdges.push({ from: preId, to: item.nodeId });
     }
   }
 
-  // Protect existing DAG edges so tie-breaking preferentially drops newly introduced back-edges
-  const protectedEdgeKeys = new Set(
-    existingSkeleton.graph.edges.map((e) => `${e.from}\0${e.to}`),
-  );
-
+  const protectedEdgeKeys = new Set(existingSkeleton.graph.edges.map((e) => `${e.from}\0${e.to}`));
   const dagRepair = await repairAndVerifyDag({
     pillars: mergedPillars,
     nodes: mergedNodes,
@@ -520,18 +395,14 @@ export async function expandLivingKit(
     const targets = Array.from(
       new Set(
         rt.targets
-          .map(
-            (t) =>
-              nodeRawToId.get(t.trim().toLowerCase()) ??
-              nodeRawToId.get(toSlugId(t, "")),
-          )
+          .map((t) => nodeRawToId.get(t.trim().toLowerCase()) ?? nodeRawToId.get(toSlugId(t, "")))
           .filter((id): id is string => Boolean(id && validNodeSet.has(id))),
       ),
     );
     if (targets.length === 0) return;
 
     addedTracks.push({
-      id: mintUniqueSlug(rt.id || rt.name, `exp-track-${idx + 1}`, usedTrackIds),
+      id: uniqueSlug(rt.id || rt.name, `exp-track-${idx + 1}`, usedTrackIds),
       name: rt.name.trim().slice(0, 100) || `Expansion Track ${idx + 1}`,
       emoji: rt.emoji.trim().slice(0, 16) || "🚀",
       description: rt.description.trim().slice(0, 400),
@@ -541,9 +412,7 @@ export async function expandLivingKit(
 
   const hydratedNewBib = hydrateBibliography(pool, rawExpand.citedSourceIds);
   const existingBibKeys = new Set(
-    existingSkeleton.bibliography.map(
-      (b) => b.url ?? `title:${b.title.toLowerCase()}`,
-    ),
+    existingSkeleton.bibliography.map((b) => b.url ?? `title:${b.title.toLowerCase()}`),
   );
   const mergedBib = [...existingSkeleton.bibliography];
   for (const item of hydratedNewBib) {
@@ -571,13 +440,12 @@ export async function expandLivingKit(
   } satisfies KitSkeletonV1);
 
   // ── 4. Zero-Data-Loss Sync + Source Commit + Targeted Per-Pillar Seeder
-  const synced = syncKitStructure(
+  const { kit: _preSeedKit, ...syncStats } = syncKitStructure(
     db,
     scope,
     existingKit.id,
     verifiedMergedSkeleton,
   );
-  const { kit: _preSeedKit, ...syncStats } = synced;
 
   const sourceRes = await commitStagedSourcesToKit(
     db,
@@ -586,49 +454,34 @@ export async function expandLivingKit(
     input.stagedSources ?? [],
   );
 
-  const affectedPillarIds = Array.from(
-    new Set(addedNodes.map((n) => n.pillarId)),
-  );
-
+  const affectedPillarIds = Array.from(new Set(addedNodes.map((n) => n.pillarId)));
   let jobId: string | null = null;
   if (affectedPillarIds.length > 0 && addedNodeIds.length > 0) {
     const firstAffectedPillar = mergedPillarById.get(affectedPillarIds[0]);
-    const banner = `Seeding Pillar 1/${affectedPillarIds.length}: ${firstAffectedPillar?.shortName ?? "Expansion"}…`;
-
     db.prepare(
-      `UPDATE kits
-       SET status = 'seeding', status_detail = ?, updated_at = datetime('now')
-       WHERE ownerId = ? AND id = ?`,
-    ).run(banner, scope.ownerId, existingKit.id);
+      "UPDATE kits SET status = 'seeding', status_detail = ?, updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
+    ).run(
+      `Seeding Pillar 1/${affectedPillarIds.length}: ${firstAffectedPillar?.shortName ?? "Expansion"}…`,
+      scope.ownerId,
+      existingKit.id,
+    );
 
-    recoverOrphanedRunningJobs(db, {
-      ownerId: scope.ownerId,
-      kitId: existingKit.id,
-    });
+    recoverOrphanedRunningJobs(db, { ownerId: scope.ownerId, kitId: existingKit.id });
 
-    const enqueued = enqueueKitSeedJob(db, scope, {
+    jobId = enqueueKitSeedJob(db, scope, {
       kitId: existingKit.id,
       targetPillarIds: affectedPillarIds,
       targetNodeIds: addedNodeIds,
       model: input.model ?? null,
-    });
-    jobId = enqueued.jobId;
+    }).jobId;
 
-    const shouldKick =
-      input.runSeederInBackground ??
-      !(
-        process.env.VITEST ||
-        process.env.NODE_ENV === "test" ||
-        isBackgroundJobsDisabled()
-      );
-    if (shouldKick) {
+    if (shouldAutoKickSeeder(input.runSeederInBackground)) {
       kickSeedJobRunner(db, jobId);
     }
   }
 
-  const updatedKit = getOwnedKit(db, scope, existingKit.id);
   return {
-    kit: updatedKit,
+    kit: getOwnedKit(db, scope, existingKit.id),
     jobId,
     addedPillarIds,
     addedTopicIds,

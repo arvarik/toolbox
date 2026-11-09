@@ -89,6 +89,7 @@ router.get(
     });
 
     const likePattern = `%${trimmed}%`;
+    const k = kitId ?? null;
 
     // Hydrate hybrid flashcard hits first, then supplement with substring LIKE matches
     const cardIdsFromHybrid = chunks
@@ -114,26 +115,17 @@ router.get(
       }
     }
 
-    const likeCards = (
-      kitId
-        ? db
-            .prepare(
-              `SELECT f.id, f.deck_id, f.front, f.back, f.state
-               FROM flashcards f
-               JOIN decks d ON d.id = f.deck_id AND d.ownerId = f.ownerId
-               WHERE f.ownerId = ? AND d.kit_id = ? AND (f.front LIKE ? OR f.back LIKE ?)
-               LIMIT 10`,
-            )
-            .all(scope.ownerId, kitId, likePattern, likePattern)
-        : db
-            .prepare(
-              `SELECT id, deck_id, front, back, state
-               FROM flashcards
-               WHERE ownerId = ? AND (front LIKE ? OR back LIKE ?)
-               LIMIT 10`,
-            )
-            .all(scope.ownerId, likePattern, likePattern)
-    ) as Array<Record<string, unknown>>;
+    const likeCards = db
+      .prepare(
+        `SELECT f.id, f.deck_id, f.front, f.back, f.state
+         FROM flashcards f
+         LEFT JOIN decks d ON d.id = f.deck_id AND d.ownerId = f.ownerId
+         WHERE f.ownerId = ? AND (? IS NULL OR d.kit_id = ?) AND (f.front LIKE ? OR f.back LIKE ?)
+         LIMIT 10`,
+      )
+      .all(scope.ownerId, k, k, likePattern, likePattern) as Array<
+      Record<string, unknown>
+    >;
 
     for (const c of likeCards) {
       const id = String(c.id);
@@ -163,25 +155,16 @@ router.get(
       if (row) guideMap.set(`${chunk.kitId}:${chunk.sourceRefId}`, row);
     }
 
-    const likeGuides = (
-      kitId
-        ? db
-            .prepare(
-              `SELECT kit_id, pillar_id, topic_id, section_id, content
-               FROM guide_content
-               WHERE ownerId = ? AND kit_id = ? AND content != '' AND (content LIKE ? OR section_id LIKE ? OR topic_id LIKE ?)
-               LIMIT 10`,
-            )
-            .all(scope.ownerId, kitId, likePattern, likePattern, likePattern)
-        : db
-            .prepare(
-              `SELECT kit_id, pillar_id, topic_id, section_id, content
-               FROM guide_content
-               WHERE ownerId = ? AND content != '' AND (content LIKE ? OR section_id LIKE ? OR topic_id LIKE ?)
-               LIMIT 10`,
-            )
-            .all(scope.ownerId, likePattern, likePattern, likePattern)
-    ) as Array<Record<string, unknown>>;
+    const likeGuides = db
+      .prepare(
+        `SELECT kit_id, pillar_id, topic_id, section_id, content
+         FROM guide_content
+         WHERE ownerId = ? AND (? IS NULL OR kit_id = ?) AND content != '' AND (content LIKE ? OR section_id LIKE ? OR topic_id LIKE ?)
+         LIMIT 10`,
+      )
+      .all(scope.ownerId, k, k, likePattern, likePattern, likePattern) as Array<
+      Record<string, unknown>
+    >;
 
     for (const g of likeGuides) {
       const key = `${g.kit_id}:${g.pillar_id}:${g.topic_id}:${g.section_id}`;
@@ -195,41 +178,23 @@ router.get(
       }
     }
 
-    const boards = kitId
-      ? db
-          .prepare(
-            `SELECT id, name
-             FROM boards
-             WHERE ownerId = ? AND kit_id = ? AND name LIKE ?
-             LIMIT 10`,
-          )
-          .all(scope.ownerId, kitId, likePattern)
-      : db
-          .prepare(
-            `SELECT id, name
-             FROM boards
-             WHERE ownerId = ? AND name LIKE ?
-             LIMIT 10`,
-          )
-          .all(scope.ownerId, likePattern);
+    const boards = db
+      .prepare(
+        `SELECT id, name
+         FROM boards
+         WHERE ownerId = ? AND (? IS NULL OR kit_id = ?) AND name LIKE ?
+         LIMIT 10`,
+      )
+      .all(scope.ownerId, k, k, likePattern);
 
-    const decks = kitId
-      ? db
-          .prepare(
-            `SELECT id, name, description, tags
-             FROM decks
-             WHERE ownerId = ? AND kit_id = ? AND (name LIKE ? OR description LIKE ? OR tags LIKE ?)
-             LIMIT 10`,
-          )
-          .all(scope.ownerId, kitId, likePattern, likePattern, likePattern)
-      : db
-          .prepare(
-            `SELECT id, name, description, tags
-             FROM decks
-             WHERE ownerId = ? AND (name LIKE ? OR description LIKE ? OR tags LIKE ?)
-             LIMIT 10`,
-          )
-          .all(scope.ownerId, likePattern, likePattern, likePattern);
+    const decks = db
+      .prepare(
+        `SELECT id, name, description, tags
+         FROM decks
+         WHERE ownerId = ? AND (? IS NULL OR kit_id = ?) AND (name LIKE ? OR description LIKE ? OR tags LIKE ?)
+         LIMIT 10`,
+      )
+      .all(scope.ownerId, k, k, likePattern, likePattern, likePattern);
 
     res.json({
       flashcards: [...flashcardsMap.values()],

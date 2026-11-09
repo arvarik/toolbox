@@ -1,4 +1,9 @@
-import { Router } from "express";
+import {
+  Router,
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
 import { randomUUID } from "node:crypto";
 import db from "../db.ts";
 import { sealCredential } from "../kits/kitsSchema.ts";
@@ -19,6 +24,14 @@ import { maskSecret, isMaskedValue } from "../utils/mask.ts";
 
 const router = Router();
 
+function requireAdmin(req: Request, _res: Response, next: NextFunction): void {
+  if (req.principal?.user.role !== "admin") {
+    next(new ForbiddenError("Only administrators can manage instance endpoints"));
+    return;
+  }
+  next();
+}
+
 function toClientEndpoint(row: CustomEndpointRow, isAdmin: boolean) {
   const catalog = loadCatalog(`custom:${row.id}`);
   return {
@@ -33,16 +46,36 @@ function toClientEndpoint(row: CustomEndpointRow, isAdmin: boolean) {
   };
 }
 
+function requireEndpoint(
+  id: string,
+  res: Response,
+): CustomEndpointRow | undefined {
+  const existing = getCustomEndpoint(id);
+  if (!existing) res.status(404).json({ message: "Endpoint not found" });
+  return existing ?? undefined;
+}
+
+async function probeModelsOrFail(
+  key: string,
+  url: string,
+  res: Response,
+): Promise<boolean> {
+  try {
+    await fetchEndpointModels(key, url);
+    return true;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(400).json({ message: msg || "Could not reach the endpoint" });
+    return false;
+  }
+}
+
 router.get("/", (req, res) => {
   const isAdmin = req.principal?.user.role === "admin";
   res.json(listCustomEndpoints().map((ep) => toClientEndpoint(ep, isAdmin)));
 });
 
-router.post("/test", async (req, res, next) => {
-  if (req.principal?.user.role !== "admin") {
-    next(new ForbiddenError("Only administrators can manage instance endpoints"));
-    return;
-  }
+router.post("/test", requireAdmin, async (req, res) => {
   const { baseUrl, apiKey, endpointId } = req.body as {
     baseUrl?: string;
     apiKey?: string;
@@ -61,8 +94,7 @@ router.post("/test", async (req, res, next) => {
   let effectiveKey =
     typeof apiKey === "string" && !isMaskedValue(apiKey) ? apiKey : "";
   if (!effectiveKey && endpointId) {
-    const existing = getCustomEndpoint(endpointId);
-    if (existing) effectiveKey = existing.api_key || "";
+    effectiveKey = getCustomEndpoint(endpointId)?.api_key || "";
   }
 
   try {
@@ -76,11 +108,7 @@ router.post("/test", async (req, res, next) => {
   }
 });
 
-router.post("/", async (req, res, next) => {
-  if (req.principal?.user.role !== "admin") {
-    next(new ForbiddenError("Only administrators can manage instance endpoints"));
-    return;
-  }
+router.post("/", requireAdmin, async (req, res, next) => {
   const { name, baseUrl, apiKey } = req.body as {
     name?: string;
     baseUrl?: string;
@@ -100,24 +128,16 @@ router.post("/", async (req, res, next) => {
   const key =
     typeof apiKey === "string" && !isMaskedValue(apiKey) ? apiKey.trim() : "";
 
+  if (!(await probeModelsOrFail(key, normalized, res))) return;
+
   const endpoint = {
     id: randomUUID(),
     name: name.trim(),
     base_url: normalized,
     api_key: key,
   };
-
-  try {
-    await fetchEndpointModels(key, normalized);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    res.status(400).json({ message: msg || "Could not reach the endpoint" });
-    return;
-  }
-
   db.prepare(
-    `INSERT INTO custom_endpoints (id, name, base_url, api_key)
-     VALUES (?, ?, ?, ?)`,
+    "INSERT INTO custom_endpoints (id, name, base_url, api_key) VALUES (?, ?, ?, ?)",
   ).run(
     endpoint.id,
     endpoint.name,
@@ -125,27 +145,16 @@ router.post("/", async (req, res, next) => {
     sealCredential(endpoint.api_key),
   );
 
-  try {
-    await refreshEndpointCatalog(endpoint);
-  } catch {
-    // Discovery hiccup after pre-flight — endpoint remains saved
-  }
-
+  await refreshEndpointCatalog(endpoint).catch(() => {});
   res
     .status(201)
     .json(toClientEndpoint(getCustomEndpoint(endpoint.id)!, true));
 });
 
-router.put("/:id", async (req, res, next) => {
-  if (req.principal?.user.role !== "admin") {
-    next(new ForbiddenError("Only administrators can manage instance endpoints"));
-    return;
-  }
-  const existing = getCustomEndpoint(req.params.id);
-  if (!existing) {
-    res.status(404).json({ message: "Endpoint not found" });
-    return;
-  }
+router.put("/:id", requireAdmin, async (req, res, next) => {
+  const id = String(req.params.id);
+  const existing = requireEndpoint(id, res);
+  if (!existing) return;
 
   const { name, baseUrl, apiKey } = req.body as {
     name?: string;
@@ -164,46 +173,28 @@ router.put("/:id", async (req, res, next) => {
     next(err);
     return;
   }
-  let nextKey = existing.api_key || "";
-  if (typeof apiKey === "string" && !isMaskedValue(apiKey)) {
-    nextKey = apiKey.trim();
-  }
+  const nextKey =
+    typeof apiKey === "string" && !isMaskedValue(apiKey)
+      ? apiKey.trim()
+      : existing.api_key || "";
 
-  try {
-    await fetchEndpointModels(nextKey, nextUrl);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    res.status(400).json({ message: msg || "Could not reach the endpoint" });
-    return;
-  }
+  if (!(await probeModelsOrFail(nextKey, nextUrl, res))) return;
 
   db.prepare(
     `UPDATE custom_endpoints
      SET name = ?, base_url = ?, api_key = ?, updated_at = datetime('now')
      WHERE id = ?`,
-  ).run(nextName, nextUrl, sealCredential(nextKey), req.params.id);
+  ).run(nextName, nextUrl, sealCredential(nextKey), id);
 
-  handleEndpointRemoved(req.params.id);
-  const updated = getCustomEndpoint(req.params.id)!;
-  try {
-    await refreshEndpointCatalog(updated);
-  } catch {
-    // Discovery hiccup — user can refresh later
-  }
-
+  handleEndpointRemoved(id);
+  const updated = getCustomEndpoint(id)!;
+  await refreshEndpointCatalog(updated).catch(() => {});
   res.json(toClientEndpoint(updated, true));
 });
 
-router.post("/:id/refresh-models", async (req, res, next) => {
-  if (req.principal?.user.role !== "admin") {
-    next(new ForbiddenError("Only administrators can manage instance endpoints"));
-    return;
-  }
-  const endpoint = getCustomEndpoint(req.params.id);
-  if (!endpoint) {
-    res.status(404).json({ message: "Endpoint not found" });
-    return;
-  }
+router.post("/:id/refresh-models", requireAdmin, async (req, res, next) => {
+  const endpoint = requireEndpoint(String(req.params.id), res);
+  if (!endpoint) return;
   try {
     await validateEndpointBaseUrl(endpoint.base_url, { allowPrivate: true });
   } catch (err) {
@@ -219,18 +210,11 @@ router.post("/:id/refresh-models", async (req, res, next) => {
   }
 });
 
-router.delete("/:id", (req, res, next) => {
-  if (req.principal?.user.role !== "admin") {
-    next(new ForbiddenError("Only administrators can manage instance endpoints"));
-    return;
-  }
-  const existing = getCustomEndpoint(req.params.id);
-  if (!existing) {
-    res.status(404).json({ message: "Endpoint not found" });
-    return;
-  }
-  db.prepare("DELETE FROM custom_endpoints WHERE id = ?").run(req.params.id);
-  handleEndpointRemoved(req.params.id);
+router.delete("/:id", requireAdmin, (req, res) => {
+  const id = String(req.params.id);
+  if (!requireEndpoint(id, res)) return;
+  db.prepare("DELETE FROM custom_endpoints WHERE id = ?").run(id);
+  handleEndpointRemoved(id);
   res.json({ success: true });
 });
 

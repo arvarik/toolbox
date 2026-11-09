@@ -81,59 +81,64 @@ export function AiSettingsSection() {
 
   if (!canManage || !data || !capabilities) return null;
 
-  const handleSaveCapabilities = async () => {
-    setSavingCaps(true);
+  const runBusy = async (
+    setBusy: React.Dispatch<React.SetStateAction<boolean>>,
+    fallback: string,
+    fn: () => Promise<void>,
+  ) => {
+    setBusy(true);
     try {
+      await fn();
+    } catch (err) {
+      addToast({
+        type: "error",
+        message: err instanceof Error ? err.message : fallback,
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSaveCapabilities = () =>
+    runBusy(setSavingCaps, "Failed to save routing", async () => {
       const updated = await adminAiSettingsApi.update({ capabilities });
       setData(updated);
       setCapabilities(updated.capabilities);
       addToast({ type: "success", message: "Capability routing updated" });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message:
-          err instanceof Error ? err.message : "Failed to save routing",
-      });
-    } finally {
-      setSavingCaps(false);
-    }
-  };
+    });
 
   const handleProviderChange = (provider: EmbeddingsProvider) => {
-    if (provider === "local") {
-      setEmbeddings({
+    const presets: Record<EmbeddingsProvider, EmbeddingsConfig> = {
+      local: {
         provider: "local",
         modelId: "Xenova/all-MiniLM-L6-v2",
         dimension: 384,
         endpointId: null,
-      });
-    } else if (provider === "gemini") {
-      setEmbeddings({
+      },
+      gemini: {
         provider: "gemini",
         modelId: "gemini-embedding-001",
         dimension: 768,
         endpointId: null,
-      });
-    } else if (provider === "openai") {
-      setEmbeddings({
+      },
+      openai: {
         provider: "openai",
         modelId: "text-embedding-3-small",
         dimension: 1536,
         endpointId: null,
-      });
-    } else {
-      setEmbeddings({
+      },
+      custom: {
         provider: "custom",
         modelId: "nomic-embed-text",
         dimension: 768,
         endpointId: data.endpoints[0]?.id ?? null,
-      });
-    }
+      },
+    };
+    setEmbeddings(presets[provider]);
   };
 
-  const handleSaveEmbeddings = async () => {
-    setSavingEmbeddings(true);
-    try {
+  const handleSaveEmbeddings = () =>
+    runBusy(setSavingEmbeddings, "Failed to update embeddings", async () => {
       const updated = await adminAiSettingsApi.update({ embeddings });
       setData(updated);
       setEmbeddings(updated.embeddings);
@@ -141,72 +146,34 @@ export function AiSettingsSection() {
         type: "success",
         message: `Embeddings set to ${updated.embeddings.provider} (${updated.embeddings.dimension}-dim)`,
       });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message:
-          err instanceof Error ? err.message : "Failed to update embeddings",
-      });
-    } finally {
-      setSavingEmbeddings(false);
-    }
-  };
+    });
 
-  const handleReindex = async () => {
-    setReindexing(true);
-    try {
+  const handleReindex = () =>
+    runBusy(setReindexing, "Reindex failed", async () => {
       const res = await adminAiSettingsApi.reindexEmbeddings();
       await loadSettings();
       addToast({
         type: "success",
         message: `Re-embedded ${res.reindexed} RAG chunk${res.reindexed === 1 ? "" : "s"}`,
       });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Reindex failed",
-      });
-    } finally {
-      setReindexing(false);
-    }
-  };
+    });
 
-  const handleTestSearxng = async () => {
-    setTestingSearxng(true);
-    try {
+  const handleTestSearxng = () =>
+    runBusy(setTestingSearxng, "SearXNG connection failed", async () => {
       const res = await adminAiSettingsApi.testSearxng(webSearch.searxngUrl);
       addToast({
         type: "success",
         message: `SearXNG reachable (${res.latencyMs}ms · ${res.resultCount} sample results)`,
       });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message:
-          err instanceof Error ? err.message : "SearXNG connection failed",
-      });
-    } finally {
-      setTestingSearxng(false);
-    }
-  };
+    });
 
-  const handleSaveWebSearch = async () => {
-    setSavingWeb(true);
-    try {
+  const handleSaveWebSearch = () =>
+    runBusy(setSavingWeb, "Failed to save web research", async () => {
       const updated = await adminAiSettingsApi.update({ webSearch });
       setData(updated);
       setWebSearch(updated.webSearch);
       addToast({ type: "success", message: "Web research settings saved" });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message:
-          err instanceof Error ? err.message : "Failed to save web research",
-      });
-    } finally {
-      setSavingWeb(false);
-    }
-  };
+    });
 
   return (
     <>

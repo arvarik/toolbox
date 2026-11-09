@@ -7,45 +7,58 @@ import { ensureLocalOwner as ensureLocalOwnerOnDb } from "../platform/db/platfor
 import { registerOwnerDataHooks } from "../platform/db/connection.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import { log } from "../platform/net/errors.ts";
-import {
-  SYSTEM_DESIGN_KIT_SKELETON,
-} from "../../shared/kits/systemDesignKit.ts";
+import { SYSTEM_DESIGN_KIT_SKELETON } from "../../shared/kits/systemDesignKit.ts";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
 
 const OFFICIAL_SYSTEM_DESIGN_SHARED_ID = "official-system-design";
-const API_KEY_CONFIG_KEYS = new Set([
-  "gemini_api_key",
-  "claude_api_key",
-  "openai_api_key",
-]);
+const API_KEY_CONFIG_KEYS = new Set(["gemini_api_key", "claude_api_key", "openai_api_key"]);
+
+const RAG_TABLES_DDL = `
+  CREATE TABLE IF NOT EXISTS rag_chunks (
+    chunk_id TEXT PRIMARY KEY,
+    ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL,
+    source_ref_id TEXT NOT NULL,
+    node_id TEXT DEFAULT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    embedding_gen TEXT DEFAULT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_rag_chunks_owner_kit ON rag_chunks(ownerId, kit_id, kind);
+  CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(ownerId, kit_id, kind, source_ref_id);
+
+  CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
+    chunk_id UNINDEXED,
+    ownerTok,
+    kitTok,
+    kindTok,
+    title,
+    content,
+    tokenize='porter unicode61'
+  );
+`;
 
 export function sealCredential(plain: string | null | undefined): string {
   if (!plain) return "";
-  if (plain.startsWith("v1:")) return plain;
-  return seal(plain);
+  return plain.startsWith("v1:") ? plain : seal(plain);
 }
 
 export function openCredential(stored: string | null | undefined): string {
   if (!stored) return "";
-  if (!stored.startsWith("v1:")) return stored;
-  return open(stored);
+  return !stored.startsWith("v1:") ? stored : open(stored);
 }
 
 function hasTable(db: Database.Database, name: string): boolean {
-  const row = db
-    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(name);
-  return Boolean(row);
+  return Boolean(
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name),
+  );
 }
 
-function hasColumn(
-  db: Database.Database,
-  table: string,
-  column: string,
-): boolean {
-  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
-    name: string;
-  }>;
+function hasColumn(db: Database.Database, table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
   return cols.some((c) => c.name === column);
 }
 
@@ -313,33 +326,8 @@ function createV2Tables(db: Database.Database): void {
       web_search_engine TEXT DEFAULT NULL,
       updated_at TEXT DEFAULT (datetime('now'))
     );
-
-    CREATE TABLE IF NOT EXISTS rag_chunks (
-      chunk_id TEXT PRIMARY KEY,
-      ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL,
-      source_ref_id TEXT NOT NULL,
-      node_id TEXT DEFAULT NULL,
-      title TEXT NOT NULL DEFAULT '',
-      content TEXT NOT NULL,
-      content_hash TEXT NOT NULL,
-      embedding_gen TEXT DEFAULT NULL,
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_rag_chunks_owner_kit ON rag_chunks(ownerId, kit_id, kind);
-    CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(ownerId, kit_id, kind, source_ref_id);
-
-    CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
-      chunk_id UNINDEXED,
-      ownerTok,
-      kitTok,
-      kindTok,
-      title,
-      content,
-      tokenize='porter unicode61'
-    );
   `);
+  db.exec(RAG_TABLES_DDL);
 }
 
 const loadedVecDbs = new WeakSet<Database.Database>();
@@ -384,33 +372,8 @@ function ensureV2ColumnMigrations(db: Database.Database): void {
       ON kit_sources(ownerId, kit_id);
     CREATE INDEX IF NOT EXISTS idx_kit_source_chunks_owner_kit_src
       ON kit_source_chunks(ownerId, kit_id, source_id);
-
-    CREATE TABLE IF NOT EXISTS rag_chunks (
-      chunk_id TEXT PRIMARY KEY,
-      ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
-      kind TEXT NOT NULL,
-      source_ref_id TEXT NOT NULL,
-      node_id TEXT DEFAULT NULL,
-      title TEXT NOT NULL DEFAULT '',
-      content TEXT NOT NULL,
-      content_hash TEXT NOT NULL,
-      embedding_gen TEXT DEFAULT NULL,
-      updated_at TEXT DEFAULT (datetime('now'))
-    );
-    CREATE INDEX IF NOT EXISTS idx_rag_chunks_owner_kit ON rag_chunks(ownerId, kit_id, kind);
-    CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(ownerId, kit_id, kind, source_ref_id);
-
-    CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
-      chunk_id UNINDEXED,
-      ownerTok,
-      kitTok,
-      kindTok,
-      title,
-      content,
-      tokenize='porter unicode61'
-    );
   `);
+  db.exec(RAG_TABLES_DDL);
 }
 
 function seedOfficialStarterKits(db: Database.Database): void {
@@ -463,12 +426,11 @@ function sealPlaintextCredentialsInDb(db: Database.Database): void {
     }
   }
   if (hasTable(db, "custom_endpoints")) {
-    const eps = db
-      .prepare("SELECT id, api_key FROM custom_endpoints")
-      .all() as Array<{ id: string; api_key: string | null }>;
-    const updEp = db.prepare(
-      "UPDATE custom_endpoints SET api_key = ? WHERE id = ?",
-    );
+    const eps = db.prepare("SELECT id, api_key FROM custom_endpoints").all() as Array<{
+      id: string;
+      api_key: string | null;
+    }>;
+    const updEp = db.prepare("UPDATE custom_endpoints SET api_key = ? WHERE id = ?");
     for (const ep of eps) {
       if (ep.api_key && !ep.api_key.startsWith("v1:")) {
         updEp.run(sealCredential(ep.api_key), ep.id);
@@ -498,14 +460,28 @@ function migrateLegacyV1Database(db: Database.Database): void {
     "user_profile",
   ];
 
+  const copyLegacy = (
+    tbl: string,
+    insertSql: string,
+    buildArgs: (r: Record<string, unknown>, idx: number) => unknown[] | null,
+  ) => {
+    if (!hasTable(db, `_v1_${tbl}`)) return;
+    const rows = db.prepare(`SELECT * FROM _v1_${tbl}`).all() as Array<Record<string, unknown>>;
+    const ins = db.prepare(insertSql);
+    rows.forEach((r, idx) => {
+      const args = buildArgs(r, idx);
+      if (args) ins.run(...args);
+    });
+  };
+
   db.pragma("foreign_keys = OFF");
   try {
-    const runUpgrade = db.transaction(() => {
+    db.transaction(() => {
       const localOwnerId = ensureLocalOwnerOnDb(db);
 
       for (const tbl of legacyTables) {
         if (hasTable(db, tbl)) {
-          db.exec(`DROP INDEX IF EXISTS idx_remediation_open`);
+          db.exec("DROP INDEX IF EXISTS idx_remediation_open");
           db.exec(`ALTER TABLE ${tbl} RENAME TO _v1_${tbl}`);
         }
       }
@@ -533,18 +509,14 @@ function migrateLegacyV1Database(db: Database.Database): void {
       );
 
       const validDeckIds = new Set<string>();
-      if (hasTable(db, "_v1_decks")) {
-        const rows = db.prepare("SELECT * FROM _v1_decks").all() as Array<
-          Record<string, unknown>
-        >;
-        const ins = db.prepare(
-          `INSERT INTO decks (id, ownerId, kit_id, name, description, color_index, tags, settings, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
-        );
-        for (const r of rows) {
+      copyLegacy(
+        "decks",
+        `INSERT INTO decks (id, ownerId, kit_id, name, description, color_index, tags, settings, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
+        (r) => {
           const id = String(r.id);
           validDeckIds.add(id);
-          ins.run(
+          return [
             id,
             localOwnerId,
             kitId,
@@ -555,44 +527,40 @@ function migrateLegacyV1Database(db: Database.Database): void {
             String(r.settings ?? "{}"),
             r.created_at ?? null,
             r.updated_at ?? null,
-          );
-        }
-      }
+          ];
+        },
+      );
 
       const validCardIds = new Set<string>();
       const pendingPrereqs: Array<{ id: string; prereqId: string }> = [];
-      if (hasTable(db, "_v1_flashcards")) {
-        const rows = db.prepare("SELECT * FROM _v1_flashcards").all() as Array<
-          Record<string, unknown>
-        >;
-        const ins = db.prepare(
-          `INSERT INTO flashcards (
-             id, ownerId, deck_id, node_id, front, back, position,
-             ease_factor, interval, repetitions, next_review, last_reviewed,
-             state, learning_step, prerequisite_id, embedding,
-             source_pillar_id, source_topic_id, source_section_id,
-             is_reverse, reverse_of_id, created_at, updated_at
-           ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
-        );
-        for (const r of rows) {
+      copyLegacy(
+        "flashcards",
+        `INSERT INTO flashcards (
+           id, ownerId, deck_id, node_id, front, back, position,
+           ease_factor, interval, repetitions, next_review, last_reviewed,
+           state, learning_step, prerequisite_id, embedding,
+           source_pillar_id, source_topic_id, source_section_id,
+           is_reverse, reverse_of_id, created_at, updated_at
+         ) VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
+        (r) => {
           const deckId = String(r.deck_id ?? "");
-          if (!validDeckIds.has(deckId)) continue;
+          if (!validDeckIds.has(deckId)) return null;
           const id = String(r.id);
           validCardIds.add(id);
           const reps = Number(r.repetitions ?? 0);
           let state = Number(r.state ?? 0);
           if (state === 0 && reps > 0) state = 2;
-
-          ins.run(
+          if (typeof r.prerequisite_id === "string" && r.prerequisite_id.trim()) {
+            pendingPrereqs.push({ id, prereqId: r.prerequisite_id.trim() });
+          }
+          return [
             id,
             localOwnerId,
             deckId,
             String(r.front ?? ""),
             String(r.back ?? ""),
             Number(r.position ?? 0),
-            r.ease_factor !== undefined && r.ease_factor !== null
-              ? Number(r.ease_factor)
-              : 2.5,
+            r.ease_factor !== undefined && r.ease_factor !== null ? Number(r.ease_factor) : 2.5,
             Number(r.interval ?? 0),
             reps,
             (r.next_review as string | null) ?? null,
@@ -607,157 +575,113 @@ function migrateLegacyV1Database(db: Database.Database): void {
             (r.reverse_of_id as string | null) ?? null,
             r.created_at ?? null,
             r.updated_at ?? null,
-          );
-          if (typeof r.prerequisite_id === "string" && r.prerequisite_id.trim()) {
-            pendingPrereqs.push({ id, prereqId: r.prerequisite_id.trim() });
-          }
-        }
-        // Only restore prerequisite_id when the referenced card still exists (eliminates orphan deadlocks).
-        const updPrereq = db.prepare(
-          "UPDATE flashcards SET prerequisite_id = ? WHERE ownerId = ? AND id = ?",
-        );
-        for (const p of pendingPrereqs) {
-          if (validCardIds.has(p.prereqId) && p.prereqId !== p.id) {
-            updPrereq.run(p.prereqId, localOwnerId, p.id);
-          }
+          ];
+        },
+      );
+
+      // Only restore prerequisite_id when the referenced card still exists (eliminates orphan deadlocks).
+      const updPrereq = db.prepare(
+        "UPDATE flashcards SET prerequisite_id = ? WHERE ownerId = ? AND id = ?",
+      );
+      for (const p of pendingPrereqs) {
+        if (validCardIds.has(p.prereqId) && p.prereqId !== p.id) {
+          updPrereq.run(p.prereqId, localOwnerId, p.id);
         }
       }
 
-      if (hasTable(db, "_v1_guide_content")) {
-        const rows = db
-          .prepare("SELECT * FROM _v1_guide_content")
-          .all() as Array<Record<string, unknown>>;
-        const ins = db.prepare(
-          `INSERT INTO guide_content (ownerId, kit_id, pillar_id, topic_id, section_id, content, committed_at, embedding)
-           VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?)`,
-        );
-        for (const r of rows) {
-          ins.run(
-            localOwnerId,
-            kitId,
-            String(r.pillar_id),
-            String(r.topic_id),
-            String(r.section_id),
-            String(r.content ?? ""),
-            r.committed_at ?? null,
-            (r.embedding as string | null) ?? null,
-          );
-        }
-      }
+      copyLegacy(
+        "guide_content",
+        `INSERT INTO guide_content (ownerId, kit_id, pillar_id, topic_id, section_id, content, committed_at, embedding)
+         VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?)`,
+        (r) => [
+          localOwnerId,
+          kitId,
+          String(r.pillar_id),
+          String(r.topic_id),
+          String(r.section_id),
+          String(r.content ?? ""),
+          r.committed_at ?? null,
+          (r.embedding as string | null) ?? null,
+        ],
+      );
 
-      if (hasTable(db, "_v1_chat_starters")) {
-        const rows = db
-          .prepare("SELECT * FROM _v1_chat_starters")
-          .all() as Array<Record<string, unknown>>;
-        const ins = db.prepare(
-          `INSERT INTO chat_starters (ownerId, kit_id, pillar_id, topic_id, suggestions, content_hash, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
-        );
-        for (const r of rows) {
-          ins.run(
-            localOwnerId,
-            kitId,
-            String(r.pillar_id),
-            String(r.topic_id),
-            String(r.suggestions ?? "[]"),
-            String(r.content_hash ?? ""),
-            r.updated_at ?? null,
-          );
-        }
-      }
+      copyLegacy(
+        "chat_starters",
+        `INSERT INTO chat_starters (ownerId, kit_id, pillar_id, topic_id, suggestions, content_hash, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
+        (r) => [
+          localOwnerId,
+          kitId,
+          String(r.pillar_id),
+          String(r.topic_id),
+          String(r.suggestions ?? "[]"),
+          String(r.content_hash ?? ""),
+          r.updated_at ?? null,
+        ],
+      );
 
-      if (hasTable(db, "_v1_boards")) {
-        const rows = db.prepare("SELECT * FROM _v1_boards").all() as Array<
-          Record<string, unknown>
-        >;
-        const ins = db.prepare(
-          `INSERT INTO boards (id, ownerId, kit_id, name, data, position, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
-        );
-        rows.forEach((r, idx) => {
-          ins.run(
-            String(r.id),
-            localOwnerId,
-            kitId,
-            String(r.name ?? "Untitled Board"),
-            String(r.data ?? "{}"),
-            r.position !== undefined && r.position !== null
-              ? Number(r.position)
-              : idx,
-            r.created_at ?? null,
-            r.updated_at ?? null,
-          );
-        });
-      }
+      copyLegacy(
+        "boards",
+        `INSERT INTO boards (id, ownerId, kit_id, name, data, position, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
+        (r, idx) => [
+          String(r.id),
+          localOwnerId,
+          kitId,
+          String(r.name ?? "Untitled Board"),
+          String(r.data ?? "{}"),
+          r.position !== undefined && r.position !== null ? Number(r.position) : idx,
+          r.created_at ?? null,
+          r.updated_at ?? null,
+        ],
+      );
 
-      if (hasTable(db, "_v1_chat_sessions")) {
-        const rows = db
-          .prepare("SELECT * FROM _v1_chat_sessions")
-          .all() as Array<Record<string, unknown>>;
-        const ins = db.prepare(
-          `INSERT INTO chat_sessions (id, ownerId, kit_id, name, persona, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'socratic', ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
-        );
-        for (const r of rows) {
-          ins.run(
-            String(r.id),
-            localOwnerId,
-            kitId,
-            String(r.name ?? "Session"),
-            String(r.messages ?? "[]"),
-            (r.pillar_id as string | null) ?? null,
-            (r.topic_id as string | null) ?? null,
-            (r.topic_name as string | null) ?? null,
-            r.created_at ?? null,
-            r.updated_at ?? null,
-          );
-        }
-      }
+      copyLegacy(
+        "chat_sessions",
+        `INSERT INTO chat_sessions (id, ownerId, kit_id, name, persona, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'socratic', ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
+        (r) => [
+          String(r.id),
+          localOwnerId,
+          kitId,
+          String(r.name ?? "Session"),
+          String(r.messages ?? "[]"),
+          (r.pillar_id as string | null) ?? null,
+          (r.topic_id as string | null) ?? null,
+          (r.topic_name as string | null) ?? null,
+          r.created_at ?? null,
+          r.updated_at ?? null,
+        ],
+      );
 
-      if (hasTable(db, "_v1_study_sessions")) {
-        const rows = db
-          .prepare("SELECT * FROM _v1_study_sessions")
-          .all() as Array<Record<string, unknown>>;
-        const ins = db.prepare(
-          `INSERT INTO study_sessions (ownerId, date, count) VALUES (?, ?, ?)`,
-        );
-        for (const r of rows) {
-          ins.run(localOwnerId, String(r.date), Number(r.count ?? 0));
-        }
-      }
+      copyLegacy(
+        "study_sessions",
+        "INSERT INTO study_sessions (ownerId, date, count) VALUES (?, ?, ?)",
+        (r) => [localOwnerId, String(r.date), Number(r.count ?? 0)],
+      );
 
-      if (hasTable(db, "_v1_episodic_memory")) {
-        const rows = db
-          .prepare("SELECT * FROM _v1_episodic_memory")
-          .all() as Array<Record<string, unknown>>;
-        const ins = db.prepare(
-          `INSERT INTO episodic_memory (ownerId, kit_id, memory_text, importance_score, embedding, created_at)
-           VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
-        );
-        for (const r of rows) {
-          ins.run(
-            localOwnerId,
-            kitId,
-            String(r.memory_text ?? ""),
-            Number(r.importance_score ?? 0),
-            (r.embedding as string | null) ?? null,
-            r.created_at ?? null,
-          );
-        }
-      }
+      copyLegacy(
+        "episodic_memory",
+        `INSERT INTO episodic_memory (ownerId, kit_id, memory_text, importance_score, embedding, created_at)
+         VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
+        (r) => [
+          localOwnerId,
+          kitId,
+          String(r.memory_text ?? ""),
+          Number(r.importance_score ?? 0),
+          (r.embedding as string | null) ?? null,
+          r.created_at ?? null,
+        ],
+      );
 
-      if (hasTable(db, "_v1_remediation_queue")) {
-        const rows = db
-          .prepare("SELECT * FROM _v1_remediation_queue")
-          .all() as Array<Record<string, unknown>>;
-        const ins = db.prepare(
-          `INSERT INTO remediation_queue (ownerId, kit_id, card_id, source_card_id, node_id, node_name, reason, created_at, resolved_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?)`,
-        );
-        for (const r of rows) {
+      copyLegacy(
+        "remediation_queue",
+        `INSERT INTO remediation_queue (ownerId, kit_id, card_id, source_card_id, node_id, node_name, reason, created_at, resolved_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), ?)`,
+        (r) => {
           const cardId = String(r.card_id ?? "");
-          if (!validCardIds.has(cardId)) continue;
-          ins.run(
+          if (!validCardIds.has(cardId)) return null;
+          return [
             localOwnerId,
             kitId,
             cardId,
@@ -767,34 +691,25 @@ function migrateLegacyV1Database(db: Database.Database): void {
             String(r.reason ?? ""),
             r.created_at ?? null,
             (r.resolved_at as string | null) ?? null,
-          );
-        }
-      }
+          ];
+        },
+      );
 
       if (hasTable(db, "_v1_user_profile")) {
-        const row = db
-          .prepare("SELECT * FROM _v1_user_profile WHERE id = 1")
-          .get() as Record<string, unknown> | undefined;
+        const row = db.prepare("SELECT * FROM _v1_user_profile WHERE id = 1").get() as
+          | Record<string, unknown>
+          | undefined;
         if (row?.profile_text) {
           db.prepare(
             `INSERT INTO user_learning_profile (ownerId, profile_text, updated_at)
              VALUES (?, ?, COALESCE(?, datetime('now')))`,
-          ).run(
-            localOwnerId,
-            String(row.profile_text),
-            row.updated_at ?? null,
-          );
+          ).run(localOwnerId, String(row.profile_text), row.updated_at ?? null);
         }
       }
 
-      for (const tbl of legacyTables) {
-        db.exec(`DROP TABLE IF EXISTS _v1_${tbl}`);
-      }
-
+      for (const tbl of legacyTables) db.exec(`DROP TABLE IF EXISTS _v1_${tbl}`);
       sealPlaintextCredentialsInDb(db);
-    });
-
-    runUpgrade();
+    })();
   } finally {
     db.pragma("foreign_keys = ON");
   }
@@ -809,6 +724,20 @@ export function initKitsSchema(db: Database.Database): void {
     sealPlaintextCredentialsInDb(db);
   }
   ensureV2ColumnMigrations(db);
+
+  const ownedCounts = (ownerId: string) => {
+    const count = (sql: string) => (db.prepare(sql).get(ownerId) as { c: number }).c;
+    return {
+      kits: count("SELECT COUNT(*) as c FROM kits WHERE ownerId = ?"),
+      decks: count("SELECT COUNT(*) as c FROM decks WHERE ownerId = ?"),
+      flashcards: count("SELECT COUNT(*) as c FROM flashcards WHERE ownerId = ?"),
+      guideSections: count(
+        "SELECT COUNT(*) as c FROM guide_content WHERE ownerId = ? AND content != ''",
+      ),
+      boards: count("SELECT COUNT(*) as c FROM boards WHERE ownerId = ?"),
+      chatSessions: count("SELECT COUNT(*) as c FROM chat_sessions WHERE ownerId = ?"),
+    };
+  };
 
   registerOwnerDataHooks({
     countedTables: [
@@ -825,66 +754,25 @@ export function initKitsSchema(db: Database.Database): void {
         .prepare("SELECT id FROM users WHERE email = ?")
         .get(LOCAL_OWNER_EMAIL) as { id: string } | undefined;
       if (!local) return 0;
-      const cards = (
-        db
-          .prepare("SELECT COUNT(*) as c FROM flashcards WHERE ownerId = ?")
-          .get(local.id) as { c: number }
-      ).c;
-      const notes = (
-        db
-          .prepare(
-            "SELECT COUNT(*) as c FROM guide_content WHERE ownerId = ? AND content != ''",
-          )
-          .get(local.id) as { c: number }
-      ).c;
-      const boards = (
-        db
-          .prepare("SELECT COUNT(*) as c FROM boards WHERE ownerId = ?")
-          .get(local.id) as { c: number }
-      ).c;
-      return cards + notes + boards;
+      const c = ownedCounts(local.id);
+      return c.flashcards + c.guideSections + c.boards;
     },
     countItemsByOwner: () => {
       const map = new Map<string, number>();
-      const cardRows = db
-        .prepare(
-          "SELECT ownerId, COUNT(*) as c FROM flashcards GROUP BY ownerId",
-        )
-        .all() as Array<{ ownerId: string; c: number }>;
-      for (const r of cardRows) map.set(r.ownerId, (map.get(r.ownerId) ?? 0) + r.c);
-
-      const noteRows = db
-        .prepare(
-          "SELECT ownerId, COUNT(*) as c FROM guide_content WHERE content != '' GROUP BY ownerId",
-        )
-        .all() as Array<{ ownerId: string; c: number }>;
-      for (const r of noteRows) map.set(r.ownerId, (map.get(r.ownerId) ?? 0) + r.c);
-
+      const addGroup = (sql: string) => {
+        const rows = db.prepare(sql).all() as Array<{ ownerId: string; c: number }>;
+        for (const r of rows) map.set(r.ownerId, (map.get(r.ownerId) ?? 0) + r.c);
+      };
+      addGroup("SELECT ownerId, COUNT(*) as c FROM flashcards GROUP BY ownerId");
+      addGroup(
+        "SELECT ownerId, COUNT(*) as c FROM guide_content WHERE content != '' GROUP BY ownerId",
+      );
       return map;
     },
-    ownedCounts: (ownerId: string) => {
-      const count = (sql: string) =>
-        (db.prepare(sql).get(ownerId) as { c: number }).c;
-      return {
-        kits: count("SELECT COUNT(*) as c FROM kits WHERE ownerId = ?"),
-        decks: count("SELECT COUNT(*) as c FROM decks WHERE ownerId = ?"),
-        flashcards: count(
-          "SELECT COUNT(*) as c FROM flashcards WHERE ownerId = ?",
-        ),
-        guideSections: count(
-          "SELECT COUNT(*) as c FROM guide_content WHERE ownerId = ? AND content != ''",
-        ),
-        boards: count("SELECT COUNT(*) as c FROM boards WHERE ownerId = ?"),
-        chatSessions: count(
-          "SELECT COUNT(*) as c FROM chat_sessions WHERE ownerId = ?",
-        ),
-      };
-    },
+    ownedCounts,
     purgeOwnerData: (ownerId: string) => {
       // Explicit cleanup alongside ON DELETE CASCADE for thoroughness.
-      db.prepare("DELETE FROM rag_chunks_fts WHERE ownerTok = ?").run(
-        ownerTokFor(ownerId),
-      );
+      db.prepare("DELETE FROM rag_chunks_fts WHERE ownerTok = ?").run(ownerTokFor(ownerId));
       if (hasTable(db, "rag_chunks_vec")) {
         ensureVecExtensionLoaded(db);
         const ids = db
@@ -899,9 +787,7 @@ export function initKitsSchema(db: Database.Database): void {
       db.prepare("DELETE FROM rag_chunks WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM kits WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM study_sessions WHERE ownerId = ?").run(ownerId);
-      db.prepare("DELETE FROM user_learning_profile WHERE ownerId = ?").run(
-        ownerId,
-      );
+      db.prepare("DELETE FROM user_learning_profile WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM user_ai_settings WHERE ownerId = ?").run(ownerId);
     },
   });
@@ -925,9 +811,7 @@ export function ensureDefaultSystemDesignKit(
     .prepare(
       "SELECT id, slug, skeleton_json FROM kits WHERE ownerId = ? AND slug = 'system-design'",
     )
-    .get(scope.ownerId) as
-    | { id: string; slug: string; skeleton_json: string }
-    | undefined;
+    .get(scope.ownerId) as { id: string; slug: string; skeleton_json: string } | undefined;
 
   if (existing) {
     let skeleton = SYSTEM_DESIGN_KIT_SKELETON;

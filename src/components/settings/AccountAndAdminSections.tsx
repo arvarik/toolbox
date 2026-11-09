@@ -30,6 +30,9 @@ import {
 } from "../../utils/authApi.ts";
 import { passkeysAvailable, useAuth } from "../auth/AuthGate.tsx";
 
+const errMessage = (err: unknown, fallback: string) =>
+  err instanceof Error ? err.message : fallback;
+
 export function AccountSecuritySection() {
   const { user, authRequired, localOwnerPresent, isResolved, beginSetup, logout, refresh } =
     useAuth();
@@ -98,10 +101,18 @@ export function AccountSecuritySection() {
 
   if (!authRequired || !user) return null;
 
+  const runGuarded = async (fallback: string, fn: () => Promise<void>) => {
+    try {
+      await fn();
+    } catch (err) {
+      addToast({ type: "error", message: errMessage(err, fallback) });
+    }
+  };
+
   const handleCreateToken = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tokenName.trim()) return;
-    try {
+    await runGuarded("Could not create token", async () => {
       const created = await authApi.createToken({
         name: tokenName.trim(),
         readOnly: tokenReadOnly,
@@ -111,26 +122,15 @@ export function AccountSecuritySection() {
       setTokenReadOnly(false);
       await loadAccountData();
       addToast({ type: "success", message: "Personal API token created" });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Could not create token",
-      });
-    }
+    });
   };
 
-  const handleRevokeToken = async (id: string) => {
-    try {
+  const handleRevokeToken = (id: string) =>
+    runGuarded("Could not revoke token", async () => {
       await authApi.revokeToken(id);
       await loadAccountData();
       addToast({ type: "info", message: "API token revoked" });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Could not revoke token",
-      });
-    }
-  };
+    });
 
   const handleAddPasskey = async () => {
     try {
@@ -143,60 +143,42 @@ export function AccountSecuritySection() {
       addToast({ type: "success", message: "Passkey registered" });
     } catch (err) {
       if (err instanceof Error && err.name === "NotAllowedError") return;
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Passkey setup failed",
-      });
+      addToast({ type: "error", message: errMessage(err, "Passkey setup failed") });
     }
   };
 
-  const handleDeletePasskey = async (id: string) => {
-    try {
+  const handleDeletePasskey = (id: string) =>
+    runGuarded("Could not remove passkey", async () => {
       await authApi.deletePasskey(id);
       await loadAccountData();
       addToast({ type: "info", message: "Passkey removed" });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Could not remove passkey",
-      });
-    }
-  };
+    });
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
     setChangingPassword(true);
     try {
-      await authApi.changePassword({ currentPassword, newPassword });
-      setCurrentPassword("");
-      setNewPassword("");
-      await refresh();
-      addToast({ type: "success", message: "Password updated" });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Could not change password",
+      await runGuarded("Could not change password", async () => {
+        await authApi.changePassword({ currentPassword, newPassword });
+        setCurrentPassword("");
+        setNewPassword("");
+        await refresh();
+        addToast({ type: "success", message: "Password updated" });
       });
     } finally {
       setChangingPassword(false);
     }
   };
 
-  const handleRevokeOtherSessions = async () => {
-    try {
+  const handleRevokeOtherSessions = () =>
+    runGuarded("Failed to revoke sessions", async () => {
       const { revoked } = await authApi.revokeOtherSessions();
       await loadAccountData();
       addToast({
         type: "info",
         message: `Signed out ${revoked} other session${revoked === 1 ? "" : "s"}`,
       });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Failed to revoke sessions",
-      });
-    }
-  };
+    });
 
   return (
     <>
@@ -467,8 +449,16 @@ export function InstanceAdminSection() {
 
   if (!isResolved || !authRequired || !isAdmin) return null;
 
-  const handleToggleRegistration = async () => {
+  const runAdmin = async (fallback: string, fn: () => Promise<void>) => {
     try {
+      await fn();
+    } catch (err) {
+      addToast({ type: "error", message: errMessage(err, fallback) });
+    }
+  };
+
+  const handleToggleRegistration = () =>
+    runAdmin("Update failed", async () => {
       const next = !registrationOpen;
       await adminApi.updateSettings({ registrationOpen: next });
       setRegistrationOpen(next);
@@ -478,17 +468,11 @@ export function InstanceAdminSection() {
           ? "Open registration enabled"
           : "Open registration disabled (invite-only)",
       });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Update failed",
-      });
-    }
-  };
+    });
 
   const handleCreateInvite = async (e: React.FormEvent) => {
     e.preventDefault();
-    try {
+    await runAdmin("Could not create invite", async () => {
       const res = await adminApi.createInvitation({
         email: inviteEmail.trim() || undefined,
         role: inviteRole,
@@ -497,53 +481,33 @@ export function InstanceAdminSection() {
       setInviteEmail("");
       await loadAdminData();
       addToast({ type: "success", message: "Invitation link generated" });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Could not create invite",
-      });
-    }
+    });
   };
 
-  const handleResetUserPassword = async (u: AdminUserItem) => {
-    try {
+  const handleResetUserPassword = (u: AdminUserItem) =>
+    runAdmin("Reset failed", async () => {
       const { temporaryPassword } = await adminApi.resetPassword(u.id);
       setTempPasswordInfo({ username: u.username, password: temporaryPassword });
       await loadAdminData();
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Reset failed",
-      });
-    }
-  };
+    });
 
-  const handleToggleUserStatus = async (u: AdminUserItem) => {
-    try {
+  const handleToggleUserStatus = (u: AdminUserItem) =>
+    runAdmin("Status update failed", async () => {
       if (u.status === "disabled") await adminApi.enableUser(u.id);
       else await adminApi.disableUser(u.id);
       await loadAdminData();
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Status update failed",
-      });
-    }
-  };
+    });
 
   const handleCreateBackup = async () => {
     setCreatingBackup(true);
     try {
-      const { backup } = await adminApi.createBackup();
-      await loadAdminData();
-      addToast({
-        type: "success",
-        message: `Verified backup created (${backup.filename})`,
-      });
-    } catch (err) {
-      addToast({
-        type: "error",
-        message: err instanceof Error ? err.message : "Backup failed",
+      await runAdmin("Backup failed", async () => {
+        const { backup } = await adminApi.createBackup();
+        await loadAdminData();
+        addToast({
+          type: "success",
+          message: `Verified backup created (${backup.filename})`,
+        });
       });
     } finally {
       setCreatingBackup(false);

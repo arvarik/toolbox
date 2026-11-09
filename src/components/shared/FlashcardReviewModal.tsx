@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import type { FormEvent } from 'react'
+import type { CSSProperties, FormEvent, ReactNode } from 'react'
 import { X, Edit3, Trash2, Save, Layers, Loader2, AlertTriangle, ArrowRightLeft } from 'lucide-react'
 import { decksApi, flashcardsApi, chatApi } from '../../utils/api'
 import type {
@@ -25,6 +25,206 @@ interface SectionCardGroup {
   sectionId: string | null
   sectionName: string | null
   cards: Array<{ card: GeneratedFlashcardDraft; index: number }>
+}
+
+const CAPTION_LABEL_STYLE: CSSProperties = {
+  fontSize: '10px',
+  fontWeight: 700,
+  color: 'var(--color-text-tertiary)',
+  letterSpacing: '0.05em',
+  marginBottom: 4,
+}
+
+const EDIT_LABEL_STYLE: CSSProperties = {
+  fontSize: 'var(--text-xs)',
+  fontWeight: 600,
+  color: 'var(--color-text-secondary)',
+  marginBottom: '4px',
+  display: 'block',
+}
+
+const EDIT_TEXTAREA_STYLE: CSSProperties = {
+  width: '100%',
+  padding: 'var(--space-2)',
+  background: 'var(--color-surface)',
+  border: '1px solid var(--color-border)',
+  borderRadius: 'var(--radius-md)',
+  color: 'var(--color-text-primary)',
+  fontSize: 'var(--text-sm)',
+  resize: 'none',
+  overflow: 'hidden',
+}
+
+const autoGrow = (el: HTMLTextAreaElement | null) => {
+  if (el) {
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }
+}
+
+const handleTextareaInput = (e: FormEvent<HTMLTextAreaElement>) => autoGrow(e.currentTarget)
+
+function CardEditForm({
+  front,
+  back,
+  onFrontChange,
+  onBackChange,
+  onSave,
+  onCancel,
+}: {
+  front: string
+  back: string
+  onFrontChange: (v: string) => void
+  onBackChange: (v: string) => void
+  onSave: () => void
+  onCancel: () => void
+}) {
+  const onCmdEnter = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault()
+      e.stopPropagation()
+      onSave()
+    }
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+      {[
+        { label: 'Front', value: front, onChange: onFrontChange },
+        { label: 'Back', value: back, onChange: onBackChange },
+      ].map((f) => (
+        <div key={f.label}>
+          <label style={EDIT_LABEL_STYLE}>{f.label}</label>
+          <textarea
+            ref={autoGrow}
+            value={f.value}
+            onChange={(e) => f.onChange(e.target.value)}
+            onInput={handleTextareaInput}
+            onKeyDown={onCmdEnter}
+            style={EDIT_TEXTAREA_STYLE}
+          />
+        </div>
+      ))}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+        <button className="btn btn-ghost btn-sm" onClick={onCancel}>
+          Cancel
+        </button>
+        <button className="btn btn-primary btn-sm" onClick={onSave}>
+          Save Edits
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function CardFacePreview({
+  front,
+  back,
+  isMobile,
+  isExcluded = false,
+  labelColor = 'var(--color-text-tertiary)',
+  frontBadge,
+  actions,
+}: {
+  front: string
+  back: string
+  isMobile: boolean
+  isExcluded?: boolean
+  labelColor?: string
+  frontBadge?: ReactNode
+  actions: ReactNode
+}) {
+  return (
+    <>
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          marginBottom: 'var(--space-3)',
+          gap: 'var(--space-2)',
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', marginBottom: 4 }}>
+            <div style={{ ...CAPTION_LABEL_STYLE, color: labelColor, marginBottom: 0 }}>FRONT</div>
+            {frontBadge}
+          </div>
+          <div
+            style={{
+              fontWeight: 600,
+              fontSize: 'var(--text-sm)',
+              color: isExcluded ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
+              lineHeight: 'var(--leading-relaxed)',
+              textDecoration: isExcluded ? 'line-through' : 'none',
+            }}
+          >
+            <MarkdownRenderer content={front} className="flashcard-compact-md" />
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 'var(--space-1)', flexShrink: 0 }}>{actions}</div>
+      </div>
+      <div>
+        <div style={{ ...CAPTION_LABEL_STYLE, color: labelColor }}>BACK</div>
+        <div
+          style={{
+            fontSize: 'var(--text-sm)',
+            color: isExcluded ? 'var(--color-text-tertiary)' : 'var(--color-text-secondary)',
+            background: 'var(--color-surface)',
+            padding: isMobile ? 'var(--space-2)' : 'var(--space-3)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid var(--color-border)',
+            lineHeight: 'var(--leading-relaxed)',
+            textDecoration: isExcluded ? 'line-through' : 'none',
+          }}
+        >
+          <MarkdownRenderer content={back} className="flashcard-compact-md" />
+        </div>
+      </div>
+    </>
+  )
+}
+
+function SectionDivider({
+  label,
+  color,
+  count,
+  marginTop,
+}: {
+  label: ReactNode
+  color: string
+  count: number
+  marginTop: number | string
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-2)',
+        marginBottom: 'var(--space-3)',
+        marginTop,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 'var(--text-xs)',
+          fontWeight: 700,
+          textTransform: 'uppercase',
+          letterSpacing: '0.05em',
+          color,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
+      <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', fontWeight: 600 }}>
+        {count} card{count !== 1 ? 's' : ''}
+      </span>
+    </div>
+  )
 }
 
 export default function FlashcardReviewModal({
@@ -161,14 +361,30 @@ export default function FlashcardReviewModal({
     })
   }
 
-  const toggleExclude = (index: number) => {
-    setExcludedIndexes((prev) => {
+  const toggleSet = (
+    setter: React.Dispatch<React.SetStateAction<Set<number>>>,
+    idx: number,
+  ) => {
+    setter((prev) => {
       const next = new Set(prev)
-      if (next.has(index)) next.delete(index)
-      else next.add(index)
+      if (next.has(idx)) next.delete(idx)
+      else next.add(idx)
       return next
     })
   }
+
+  const enrichReverse = (
+    rc: ReverseCardDraft,
+    src: GeneratedFlashcardDraft | undefined,
+    originalIndex = rc.originalIndex,
+  ): ReverseCardDraft => ({
+    ...rc,
+    originalIndex,
+    sourceSectionId: src?.sourceSectionId,
+    sourceSectionName: src?.sourceSectionName,
+    sourcePillarId: src?.sourcePillarId || pillarId || null,
+    sourceTopicId: src?.sourceTopicId || topicId || null,
+  })
 
   const startEdit = (index: number, card: GeneratedFlashcardDraft) => {
     setEditingIndex(index)
@@ -178,20 +394,13 @@ export default function FlashcardReviewModal({
 
   const saveEdit = () => {
     if (editingIndex !== null) {
-      setCards((prev) => {
-        const next = [...prev]
-        const existing = next[editingIndex]
-        if (existing) {
-          next[editingIndex] = { ...existing, front: editFront, back: editBack }
-        }
-        return next
-      })
+      setCards((prev) =>
+        prev.map((c, idx) =>
+          idx === editingIndex ? { ...c, front: editFront, back: editBack } : c,
+        ),
+      )
       setEditingIndex(null)
     }
-  }
-
-  const removeReverseCard = (index: number) => {
-    setReverseCards((prev) => prev.filter((_, i) => i !== index))
   }
 
   const startEditReverse = (index: number, card: ReverseCardDraft) => {
@@ -202,18 +411,13 @@ export default function FlashcardReviewModal({
 
   const saveEditReverse = () => {
     if (editingReverseIndex !== null) {
-      setReverseCards((prev) => {
-        const next = [...prev]
-        const existing = next[editingReverseIndex]
-        if (existing) {
-          next[editingReverseIndex] = {
-            ...existing,
-            front: editReverseFront,
-            back: editReverseBack,
-          }
-        }
-        return next
-      })
+      setReverseCards((prev) =>
+        prev.map((c, idx) =>
+          idx === editingReverseIndex
+            ? { ...c, front: editReverseFront, back: editReverseBack }
+            : c,
+        ),
+      )
       setEditingReverseIndex(null)
     }
   }
@@ -222,27 +426,17 @@ export default function FlashcardReviewModal({
     originalIndex: number,
     card: GeneratedFlashcardDraft,
   ) => {
-    setGeneratingReverseIndexes((prev) => {
-      const next = new Set(prev)
-      next.add(originalIndex)
-      return next
-    })
+    setGeneratingReverseIndexes((prev) => new Set(prev).add(originalIndex))
     try {
       const res = await chatApi.generateReverseCards({
         cards: [{ front: card.front, back: card.back }],
         model: selectedModel,
       })
       if (res?.reverseCards?.length > 0) {
-        const rc = res.reverseCards[0]
-        const enrichedReverse: ReverseCardDraft = {
-          ...rc,
-          originalIndex,
-          sourceSectionId: card.sourceSectionId,
-          sourceSectionName: card.sourceSectionName,
-          sourcePillarId: card.sourcePillarId || pillarId || null,
-          sourceTopicId: card.sourceTopicId || topicId || null,
-        }
-        setReverseCards((prev) => [...prev, enrichedReverse])
+        setReverseCards((prev) => [
+          ...prev,
+          enrichReverse(res.reverseCards[0], card, originalIndex),
+        ])
         addToast({ type: 'success', message: 'Generated reverse card' })
       }
     } catch (err) {
@@ -256,19 +450,6 @@ export default function FlashcardReviewModal({
         next.delete(originalIndex)
         return next
       })
-    }
-  }
-
-  const handleTextareaInput = (e: FormEvent<HTMLTextAreaElement>) => {
-    const el = e.currentTarget
-    el.style.height = 'auto'
-    el.style.height = `${el.scrollHeight}px`
-  }
-
-  const textareaRefEffect = (el: HTMLTextAreaElement | null) => {
-    if (el) {
-      el.style.height = 'auto'
-      el.style.height = `${el.scrollHeight}px`
     }
   }
 
@@ -290,16 +471,9 @@ export default function FlashcardReviewModal({
         model: selectedModel,
       })
       if (res?.reverseCards?.length > 0) {
-        const enrichedReverse: ReverseCardDraft[] = res.reverseCards.map((rc) => {
-          const originalCard = includedCards[rc.originalIndex]
-          return {
-            ...rc,
-            sourceSectionId: originalCard?.sourceSectionId,
-            sourceSectionName: originalCard?.sourceSectionName,
-            sourcePillarId: originalCard?.sourcePillarId || pillarId || null,
-            sourceTopicId: originalCard?.sourceTopicId || topicId || null,
-          }
-        })
+        const enrichedReverse = res.reverseCards.map((rc) =>
+          enrichReverse(rc, includedCards[rc.originalIndex]),
+        )
         setReverseCards(enrichedReverse)
         addToast({
           type: 'success',
@@ -420,90 +594,14 @@ export default function FlashcardReviewModal({
         }}
       >
         {editingIndex === i ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-            <div>
-              <label
-                style={{
-                  fontSize: 'var(--text-xs)',
-                  fontWeight: 600,
-                  color: 'var(--color-text-secondary)',
-                  marginBottom: '4px',
-                  display: 'block',
-                }}
-              >
-                Front
-              </label>
-              <textarea
-                ref={textareaRefEffect}
-                value={editFront}
-                onChange={(e) => setEditFront(e.target.value)}
-                onInput={handleTextareaInput}
-                onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    saveEdit()
-                  }
-                }}
-                style={{
-                  width: '100%',
-                  padding: 'var(--space-2)',
-                  background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--color-text-primary)',
-                  fontSize: 'var(--text-sm)',
-                  resize: 'none',
-                  overflow: 'hidden',
-                }}
-              />
-            </div>
-            <div>
-              <label
-                style={{
-                  fontSize: 'var(--text-xs)',
-                  fontWeight: 600,
-                  color: 'var(--color-text-secondary)',
-                  marginBottom: '4px',
-                  display: 'block',
-                }}
-              >
-                Back
-              </label>
-              <textarea
-                ref={textareaRefEffect}
-                value={editBack}
-                onChange={(e) => setEditBack(e.target.value)}
-                onInput={handleTextareaInput}
-                onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                    e.preventDefault()
-                    e.stopPropagation()
-                    saveEdit()
-                  }
-                }}
-                style={{
-                  width: '100%',
-                  padding: 'var(--space-2)',
-                  background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  color: 'var(--color-text-primary)',
-                  fontSize: 'var(--text-sm)',
-                  resize: 'none',
-                  overflow: 'hidden',
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
-              <button className="btn btn-ghost btn-sm" onClick={() => setEditingIndex(null)}>
-                Cancel
-              </button>
-              <button className="btn btn-primary btn-sm" onClick={saveEdit}>
-                Save Edits
-              </button>
-            </div>
-          </div>
+          <CardEditForm
+            front={editFront}
+            back={editBack}
+            onFrontChange={setEditFront}
+            onBackChange={setEditBack}
+            onSave={saveEdit}
+            onCancel={() => setEditingIndex(null)}
+          />
         ) : (
           <>
             {isDupe && (
@@ -535,21 +633,14 @@ export default function FlashcardReviewModal({
                   <button
                     className="btn btn-ghost btn-sm"
                     style={{ fontSize: '11px', padding: '2px 8px', flexShrink: 0 }}
-                    onClick={() => {
-                      setExpandedDuplicateIndexes((prev) => {
-                        const next = new Set(prev)
-                        if (next.has(i)) next.delete(i)
-                        else next.add(i)
-                        return next
-                      })
-                    }}
+                    onClick={() => toggleSet(setExpandedDuplicateIndexes, i)}
                   >
                     {expandedDuplicateIndexes.has(i) ? 'Hide' : 'Compare'}
                   </button>
                   <button
                     className="btn btn-ghost btn-sm"
                     style={{ fontSize: '11px', padding: '2px 8px', flexShrink: 0 }}
-                    onClick={() => toggleExclude(i)}
+                    onClick={() => toggleSet(setExcludedIndexes, i)}
                   >
                     {isExcluded ? 'Include Card' : 'Exclude Card'}
                   </button>
@@ -566,17 +657,7 @@ export default function FlashcardReviewModal({
                       color: 'var(--color-text-secondary)',
                     }}
                   >
-                    <div
-                      style={{
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        color: 'var(--color-text-tertiary)',
-                        letterSpacing: '0.05em',
-                        marginBottom: 4,
-                      }}
-                    >
-                      EXISTING FRONT
-                    </div>
+                    <div style={CAPTION_LABEL_STYLE}>EXISTING FRONT</div>
                     <div
                       style={{
                         fontWeight: 600,
@@ -589,17 +670,7 @@ export default function FlashcardReviewModal({
                         className="flashcard-compact-md"
                       />
                     </div>
-                    <div
-                      style={{
-                        fontSize: '10px',
-                        fontWeight: 700,
-                        color: 'var(--color-text-tertiary)',
-                        letterSpacing: '0.05em',
-                        marginBottom: 4,
-                      }}
-                    >
-                      EXISTING BACK
-                    </div>
+                    <div style={CAPTION_LABEL_STYLE}>EXISTING BACK</div>
                     <div>
                       <MarkdownRenderer
                         content={isDupe.duplicateOf?.back}
@@ -611,98 +682,45 @@ export default function FlashcardReviewModal({
               </div>
             )}
 
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'flex-start',
-                marginBottom: 'var(--space-3)',
-                gap: 'var(--space-2)',
-              }}
-            >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div
-                  style={{
-                    fontSize: '10px',
-                    fontWeight: 700,
-                    color: 'var(--color-text-tertiary)',
-                    letterSpacing: '0.05em',
-                    marginBottom: 4,
-                  }}
-                >
-                  FRONT
-                </div>
-                <div
-                  style={{
-                    fontWeight: 600,
-                    fontSize: 'var(--text-sm)',
-                    color: isExcluded ? 'var(--color-text-tertiary)' : 'var(--color-text-primary)',
-                    lineHeight: 'var(--leading-relaxed)',
-                    textDecoration: isExcluded ? 'line-through' : 'none',
-                  }}
-                >
-                  <MarkdownRenderer content={card.front} className="flashcard-compact-md" />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 'var(--space-1)', flexShrink: 0 }}>
-                <button
-                  className="btn btn-ghost btn-icon btn-sm"
-                  onClick={() => void handleGenerateSingleReverse(i, card)}
-                  title="Generate Reverse"
-                  disabled={generatingReverseIndexes.has(i) || isExcluded}
-                  style={{ width: 32, height: 32, color: 'var(--color-teal)' }}
-                >
-                  {generatingReverseIndexes.has(i) ? (
-                    <Loader2 size={14} className="spin" />
-                  ) : (
-                    <ArrowRightLeft size={14} />
-                  )}
-                </button>
-                <button
-                  className="btn btn-ghost btn-icon btn-sm"
-                  onClick={() => startEdit(i, card)}
-                  title="Edit"
-                  style={{ width: 32, height: 32 }}
-                >
-                  <Edit3 size={14} />
-                </button>
-                <button
-                  className="btn btn-ghost btn-icon btn-sm"
-                  onClick={() => removeCard(i)}
-                  title="Remove"
-                  style={{ color: 'var(--color-error)', width: 32, height: 32 }}
-                >
-                  <Trash2 size={14} />
-                </button>
-              </div>
-            </div>
-            <div>
-              <div
-                style={{
-                  fontSize: '10px',
-                  fontWeight: 700,
-                  color: 'var(--color-text-tertiary)',
-                  letterSpacing: '0.05em',
-                  marginBottom: 4,
-                }}
-              >
-                BACK
-              </div>
-              <div
-                style={{
-                  fontSize: 'var(--text-sm)',
-                  color: isExcluded ? 'var(--color-text-tertiary)' : 'var(--color-text-secondary)',
-                  background: 'var(--color-surface)',
-                  padding: isMobile ? 'var(--space-2)' : 'var(--space-3)',
-                  borderRadius: 'var(--radius-md)',
-                  border: '1px solid var(--color-border)',
-                  lineHeight: 'var(--leading-relaxed)',
-                  textDecoration: isExcluded ? 'line-through' : 'none',
-                }}
-              >
-                <MarkdownRenderer content={card.back} className="flashcard-compact-md" />
-              </div>
-            </div>
+            <CardFacePreview
+              front={card.front}
+              back={card.back}
+              isMobile={isMobile}
+              isExcluded={isExcluded}
+              actions={
+                <>
+                  <button
+                    className="btn btn-ghost btn-icon btn-sm"
+                    onClick={() => void handleGenerateSingleReverse(i, card)}
+                    title="Generate Reverse"
+                    disabled={generatingReverseIndexes.has(i) || isExcluded}
+                    style={{ width: 32, height: 32, color: 'var(--color-teal)' }}
+                  >
+                    {generatingReverseIndexes.has(i) ? (
+                      <Loader2 size={14} className="spin" />
+                    ) : (
+                      <ArrowRightLeft size={14} />
+                    )}
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-icon btn-sm"
+                    onClick={() => startEdit(i, card)}
+                    title="Edit"
+                    style={{ width: 32, height: 32 }}
+                  >
+                    <Edit3 size={14} />
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-icon btn-sm"
+                    onClick={() => removeCard(i)}
+                    title="Remove"
+                    style={{ color: 'var(--color-error)', width: 32, height: 32 }}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </>
+              }
+            />
           </>
         )}
       </div>
@@ -865,37 +883,12 @@ export default function FlashcardReviewModal({
               {sectionGroups.map((group, gi) => (
                 <div key={gi}>
                   {group.sectionName && hasAnySections && (
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 'var(--space-2)',
-                        marginBottom: 'var(--space-3)',
-                        marginTop: gi > 0 ? 'var(--space-4)' : 0,
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: 'var(--text-xs)',
-                          fontWeight: 700,
-                          textTransform: 'uppercase',
-                          letterSpacing: '0.05em',
-                          color: 'var(--color-accent)',
-                        }}
-                      >
-                        {group.sectionName}
-                      </div>
-                      <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
-                      <span
-                        style={{
-                          fontSize: '10px',
-                          color: 'var(--color-text-tertiary)',
-                          fontWeight: 600,
-                        }}
-                      >
-                        {group.cards.length} card{group.cards.length !== 1 ? 's' : ''}
-                      </span>
-                    </div>
+                    <SectionDivider
+                      label={group.sectionName}
+                      color="var(--color-accent)"
+                      count={group.cards.length}
+                      marginTop={gi > 0 ? 'var(--space-4)' : 0}
+                    />
                   )}
                   <div
                     style={{
@@ -911,41 +904,17 @@ export default function FlashcardReviewModal({
 
               {reverseCards.length > 0 && (
                 <div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 'var(--space-2)',
-                      marginBottom: 'var(--space-3)',
-                      marginTop: 'var(--space-4)',
-                    }}
-                  >
-                    <div
-                      style={{
-                        fontSize: 'var(--text-xs)',
-                        fontWeight: 700,
-                        textTransform: 'uppercase',
-                        letterSpacing: '0.05em',
-                        color: 'var(--color-teal)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                      }}
-                    >
-                      <ArrowRightLeft size={12} />
-                      Reverse Cards
-                    </div>
-                    <div style={{ flex: 1, height: 1, background: 'var(--color-border)' }} />
-                    <span
-                      style={{
-                        fontSize: '10px',
-                        color: 'var(--color-text-tertiary)',
-                        fontWeight: 600,
-                      }}
-                    >
-                      {reverseCards.length} card{reverseCards.length !== 1 ? 's' : ''}
-                    </span>
-                  </div>
+                  <SectionDivider
+                    label={
+                      <>
+                        <ArrowRightLeft size={12} />
+                        Reverse Cards
+                      </>
+                    }
+                    color="var(--color-teal)"
+                    count={reverseCards.length}
+                    marginTop="var(--space-4)"
+                  />
                   <div
                     style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}
                   >
@@ -961,166 +930,37 @@ export default function FlashcardReviewModal({
                         }}
                       >
                         {editingReverseIndex === ri ? (
-                          <div
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: 'var(--space-3)',
-                            }}
-                          >
-                            <div>
-                              <label
-                                style={{
-                                  fontSize: 'var(--text-xs)',
-                                  fontWeight: 600,
-                                  color: 'var(--color-text-secondary)',
-                                  marginBottom: '4px',
-                                  display: 'block',
-                                }}
-                              >
-                                Front
-                              </label>
-                              <textarea
-                                ref={textareaRefEffect}
-                                value={editReverseFront}
-                                onChange={(e) => setEditReverseFront(e.target.value)}
-                                onInput={handleTextareaInput}
-                                onKeyDown={(e) => {
-                                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    saveEditReverse()
-                                  }
-                                }}
-                                style={{
-                                  width: '100%',
-                                  padding: 'var(--space-2)',
-                                  background: 'var(--color-surface)',
-                                  border: '1px solid var(--color-border)',
-                                  borderRadius: 'var(--radius-md)',
-                                  color: 'var(--color-text-primary)',
-                                  fontSize: 'var(--text-sm)',
-                                  resize: 'none',
-                                  overflow: 'hidden',
-                                }}
-                              />
-                            </div>
-                            <div>
-                              <label
-                                style={{
-                                  fontSize: 'var(--text-xs)',
-                                  fontWeight: 600,
-                                  color: 'var(--color-text-secondary)',
-                                  marginBottom: '4px',
-                                  display: 'block',
-                                }}
-                              >
-                                Back
-                              </label>
-                              <textarea
-                                ref={textareaRefEffect}
-                                value={editReverseBack}
-                                onChange={(e) => setEditReverseBack(e.target.value)}
-                                onInput={handleTextareaInput}
-                                onKeyDown={(e) => {
-                                  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    saveEditReverse()
-                                  }
-                                }}
-                                style={{
-                                  width: '100%',
-                                  padding: 'var(--space-2)',
-                                  background: 'var(--color-surface)',
-                                  border: '1px solid var(--color-border)',
-                                  borderRadius: 'var(--radius-md)',
-                                  color: 'var(--color-text-primary)',
-                                  fontSize: 'var(--text-sm)',
-                                  resize: 'none',
-                                  overflow: 'hidden',
-                                }}
-                              />
-                            </div>
-                            <div
-                              style={{
-                                display: 'flex',
-                                justifyContent: 'flex-end',
-                                gap: 'var(--space-2)',
-                              }}
-                            >
-                              <button
-                                className="btn btn-ghost btn-sm"
-                                onClick={() => setEditingReverseIndex(null)}
-                              >
-                                Cancel
-                              </button>
-                              <button className="btn btn-primary btn-sm" onClick={saveEditReverse}>
-                                Save Edits
-                              </button>
-                            </div>
-                          </div>
+                          <CardEditForm
+                            front={editReverseFront}
+                            back={editReverseBack}
+                            onFrontChange={setEditReverseFront}
+                            onBackChange={setEditReverseBack}
+                            onSave={saveEditReverse}
+                            onCancel={() => setEditingReverseIndex(null)}
+                          />
                         ) : (
-                          <>
-                            <div
-                              style={{
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'flex-start',
-                                marginBottom: 'var(--space-3)',
-                                gap: 'var(--space-2)',
-                              }}
-                            >
-                              <div style={{ flex: 1, minWidth: 0 }}>
-                                <div
-                                  style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 'var(--space-2)',
-                                    marginBottom: 4,
-                                  }}
-                                >
-                                  <div
-                                    style={{
-                                      fontSize: '10px',
-                                      fontWeight: 700,
-                                      color: 'var(--color-teal)',
-                                      letterSpacing: '0.05em',
-                                    }}
-                                  >
-                                    FRONT
-                                  </div>
-                                  <div
-                                    style={{
-                                      fontSize: '9px',
-                                      padding: '1px 5px',
-                                      borderRadius: 'var(--radius-full)',
-                                      background: 'rgba(20, 184, 166, 0.1)',
-                                      color: 'var(--color-teal)',
-                                      fontWeight: 600,
-                                      flexShrink: 0,
-                                    }}
-                                  >
-                                    ↩ Reverse
-                                  </div>
-                                </div>
-                                <div
-                                  style={{
-                                    fontWeight: 600,
-                                    fontSize: 'var(--text-sm)',
-                                    color: 'var(--color-text-primary)',
-                                    lineHeight: 'var(--leading-relaxed)',
-                                  }}
-                                >
-                                  <MarkdownRenderer
-                                    content={rc.front}
-                                    className="flashcard-compact-md"
-                                  />
-                                </div>
-                              </div>
+                          <CardFacePreview
+                            front={rc.front}
+                            back={rc.back}
+                            isMobile={isMobile}
+                            labelColor="var(--color-teal)"
+                            frontBadge={
                               <div
-                                style={{ display: 'flex', gap: 'var(--space-1)', flexShrink: 0 }}
+                                style={{
+                                  fontSize: '9px',
+                                  padding: '1px 5px',
+                                  borderRadius: 'var(--radius-full)',
+                                  background: 'rgba(20, 184, 166, 0.1)',
+                                  color: 'var(--color-teal)',
+                                  fontWeight: 600,
+                                  flexShrink: 0,
+                                }}
                               >
+                                ↩ Reverse
+                              </div>
+                            }
+                            actions={
+                              <>
                                 <button
                                   className="btn btn-ghost btn-icon btn-sm"
                                   onClick={() => startEditReverse(ri, rc)}
@@ -1131,44 +971,17 @@ export default function FlashcardReviewModal({
                                 </button>
                                 <button
                                   className="btn btn-ghost btn-icon btn-sm"
-                                  onClick={() => removeReverseCard(ri)}
+                                  onClick={() =>
+                                    setReverseCards((prev) => prev.filter((_, idx) => idx !== ri))
+                                  }
                                   title="Remove"
                                   style={{ color: 'var(--color-error)', width: 32, height: 32 }}
                                 >
                                   <Trash2 size={14} />
                                 </button>
-                              </div>
-                            </div>
-                            <div>
-                              <div
-                                style={{
-                                  fontSize: '10px',
-                                  fontWeight: 700,
-                                  color: 'var(--color-teal)',
-                                  letterSpacing: '0.05em',
-                                  marginBottom: 4,
-                                }}
-                              >
-                                BACK
-                              </div>
-                              <div
-                                style={{
-                                  fontSize: 'var(--text-sm)',
-                                  color: 'var(--color-text-secondary)',
-                                  background: 'var(--color-surface)',
-                                  padding: isMobile ? 'var(--space-2)' : 'var(--space-3)',
-                                  borderRadius: 'var(--radius-md)',
-                                  border: '1px solid var(--color-border)',
-                                  lineHeight: 'var(--leading-relaxed)',
-                                }}
-                              >
-                                <MarkdownRenderer
-                                  content={rc.back}
-                                  className="flashcard-compact-md"
-                                />
-                              </div>
-                            </div>
-                          </>
+                              </>
+                            }
+                          />
                         )}
                       </div>
                     ))}

@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type Response } from "express";
 import crypto from "node:crypto";
 import { tool, type ModelMessage, type ToolSet } from "ai";
 import { z } from "zod";
@@ -6,10 +6,7 @@ import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import db from "../db.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import { runWebResearch } from "../platform/research/webResearch.ts";
-import {
-  resolveActiveKit,
-  type ActiveKitContext,
-} from "../kits/kitContext.ts";
+import { resolveActiveKit, type ActiveKitContext } from "../kits/kitContext.ts";
 import logger from "../utils/logger.ts";
 import { generateEmbedding } from "../utils/embeddings.ts";
 import {
@@ -17,6 +14,7 @@ import {
   syncDomainSourcesToRag,
   upsertRagChunk,
   upsertRagChunksBatch,
+  type RagChunkKind,
 } from "../search/hybridSearch.ts";
 import { runText, runStructured, chatStream } from "../ai/engine.ts";
 
@@ -25,6 +23,49 @@ const router = Router();
 interface StoredMessage {
   role?: string;
   content?: string;
+}
+
+interface IncomingChatSession {
+  id?: string;
+  name?: string;
+  persona?: string | null;
+  messages?: unknown[];
+  pillarId?: string | null;
+  topicId?: string | null;
+  topicName?: string | null;
+  createdAt?: string;
+}
+
+const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+function fail(
+  res: Response,
+  tag: string,
+  err: unknown,
+  fallback: string,
+  expose = false,
+): void {
+  const msg = errMsg(err);
+  logger.error(`[${tag}] Error:`, { error: msg });
+  res.status(500).json({ message: expose ? msg || fallback : fallback });
+}
+
+function loadUserProfile(ownerId: string): string {
+  const row = db
+    .prepare("SELECT profile_text FROM user_learning_profile WHERE ownerId = ?")
+    .get(ownerId) as { profile_text: string } | undefined;
+  return row?.profile_text || "";
+}
+
+async function ragSearch(
+  scope: Scope,
+  kitId: string,
+  query: string,
+  kind: RagChunkKind,
+  limit: number,
+) {
+  await syncDomainSourcesToRag(db, scope, kitId);
+  return hybridSearch(db, scope, query, { kitId, kinds: [kind], limit });
 }
 
 function toModelMessages(history: StoredMessage[] | undefined): ModelMessage[] {
@@ -42,10 +83,7 @@ function toModelMessages(history: StoredMessage[] | undefined): ModelMessage[] {
     }));
 }
 
-function resolvePersonaPrompt(
-  kit: ActiveKitContext,
-  rawPersona?: string,
-): string | null {
+function resolvePersonaPrompt(kit: ActiveKitContext, rawPersona?: string): string | null {
   if (!rawPersona) return null;
   const normalized =
     rawPersona === "gordon"
@@ -74,17 +112,14 @@ function tutorSystemPrompt(
         )
       : context;
 
-  const parts: string[] = [rolePrompt];
   const pillarNames = kit.skeleton.pillars.map((p) => p.name).join(", ");
-  parts.push(
+  const parts: string[] = [
+    rolePrompt,
     `Active Study Kit: "${kit.skeleton.identity.name}" (slug: ${kit.slug}). Syllabus Pillars: ${pillarNames}.`,
-  );
+  ];
 
   const personaPrompt = resolvePersonaPrompt(kit, persona);
-  if (
-    personaPrompt &&
-    (!cleanedContext || !cleanedContext.includes(personaPrompt))
-  ) {
+  if (personaPrompt && (!cleanedContext || !cleanedContext.includes(personaPrompt))) {
     parts.push(`Tutor Persona Directive: ${personaPrompt}`);
   }
 
@@ -92,9 +127,7 @@ function tutorSystemPrompt(
     const trimmed = cleanedContext.startsWith(rolePrompt)
       ? cleanedContext.slice(rolePrompt.length).trim()
       : cleanedContext.trim();
-    if (trimmed) {
-      parts.push(`Context: ${trimmed}`);
-    }
+    if (trimmed) parts.push(`Context: ${trimmed}`);
   }
   return parts.join("\n\n");
 }
@@ -133,33 +166,28 @@ router.get("/starters", async (req, res) => {
 
     for (const sec of blueprint) {
       const row = rows.find((r) => r.section_id === sec.id);
-      if (row && row.content && row.content.trim().length > 0) {
+      if (row?.content?.trim()) {
         completedSections.push({ name: sec.name, content: row.content });
       } else {
         missingSections.push({ name: sec.name });
       }
     }
-
     if (blueprint.length === 0) {
-      for (const r of rows) {
-        completedSections.push({ name: r.section_id, content: r.content });
-      }
+      for (const r of rows) completedSections.push({ name: r.section_id, content: r.content });
     }
 
-    const profileRow = db
-      .prepare(
-        "SELECT profile_text FROM user_learning_profile WHERE ownerId = ?",
+    const userProfile = loadUserProfile(scope.ownerId);
+    const contentHash = crypto
+      .createHash("md5")
+      .update(
+        JSON.stringify({
+          completed: completedSections,
+          missing: missingSections,
+          profile: userProfile,
+          blueprintCount: blueprint.length,
+        }),
       )
-      .get(scope.ownerId) as { profile_text: string } | undefined;
-    const userProfile = profileRow?.profile_text || "";
-
-    const hashData = JSON.stringify({
-      completed: completedSections,
-      missing: missingSections,
-      profile: userProfile,
-      blueprintCount: blueprint.length,
-    });
-    const contentHash = crypto.createHash("md5").update(hashData).digest("hex");
+      .digest("hex");
 
     const cached = db
       .prepare(
@@ -169,16 +197,13 @@ router.get("/starters", async (req, res) => {
       | { suggestions: string; content_hash: string }
       | undefined;
 
-    if (
-      cached &&
-      cached.content_hash === contentHash &&
-      cached.suggestions !== "[]"
-    ) {
+    const pickSix = (list: string[]) => [...list].sort(() => 0.5 - Math.random()).slice(0, 6);
+
+    if (cached && cached.content_hash === contentHash && cached.suggestions !== "[]") {
       try {
         const parsed = JSON.parse(cached.suggestions) as string[];
         if (Array.isArray(parsed) && parsed.length > 0) {
-          const shuffled = [...parsed].sort(() => 0.5 - Math.random());
-          res.json({ suggestions: shuffled.slice(0, 6) });
+          res.json({ suggestions: pickSix(parsed) });
           return;
         }
       } catch {
@@ -210,9 +235,7 @@ Generate 12 to 15 targeted, short, actionable starter questions the learner coul
         scope,
         capability: "quick",
         prompt,
-        element: z
-          .string()
-          .describe("A short, engaging study question for the learner to ask"),
+        element: z.string().describe("A short, engaging study question for the learner to ask"),
         feature: "chat/starters",
       });
       if (!Array.isArray(suggestions) || suggestions.length === 0) {
@@ -232,34 +255,18 @@ Generate 12 to 15 targeted, short, actionable starter questions the learner coul
          suggestions = excluded.suggestions,
          content_hash = excluded.content_hash,
          updated_at = excluded.updated_at`,
-    ).run(
-      scope.ownerId,
-      kit.id,
-      pillarId,
-      topicId,
-      JSON.stringify(suggestions),
-      contentHash,
-    );
+    ).run(scope.ownerId, kit.id, pillarId, topicId, JSON.stringify(suggestions), contentHash);
 
-    const shuffled = [...suggestions].sort(() => 0.5 - Math.random());
-    res.json({ suggestions: shuffled.slice(0, 6) });
+    res.json({ suggestions: pickSix(suggestions) });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/starters] Error:", { error: msg });
-    res.status(500).json({ message: "Failed to generate starters." });
+    fail(res, "chat/starters", err, "Failed to generate starters.");
   }
 });
 
 router.post("/", async (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const {
-    message,
-    context,
-    persona,
-    history = [],
-    model,
-  } = req.body as {
+  const { message, context, persona, history = [], model } = req.body as {
     message?: string;
     context?: string;
     persona?: string;
@@ -278,17 +285,12 @@ router.post("/", async (req, res) => {
       scope,
       capability: "deep",
       system: tutorSystemPrompt(kit, context, persona),
-      messages: [
-        ...toModelMessages(history),
-        { role: "user", content: message },
-      ],
+      messages: [...toModelMessages(history), { role: "user", content: message }],
       feature: "chat",
     });
     res.json({ response });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat] Error:", { error: msg });
-    res.status(500).json({ message: msg || "Failed to get AI response." });
+    fail(res, "chat", err, "Failed to get AI response.", true);
   }
 });
 
@@ -301,28 +303,21 @@ export function buildStudyTools(
     onCitations?: (citations: Array<{ title: string; url: string; snippet?: string }>) => void;
   } = {},
 ): ToolSet {
+  const querySchema = (desc: string) => z.object({ query: z.string().describe(desc) });
+
   const tools: ToolSet = {
     search_flashcards: tool({
       description:
         "Search the learner's flashcards by hybrid keyword + semantic similarity. Use this to see what they have learned, quiz them on their own cards, or check what they struggle with.",
-      inputSchema: z.object({
-        query: z.string().describe("Search query for flashcards"),
-      }),
+      inputSchema: querySchema("Search query for flashcards"),
       execute: async ({ query }) => {
-        await syncDomainSourcesToRag(db, scope, kit.id);
-        const hits = await hybridSearch(db, scope, query, {
-          kitId: kit.id,
-          kinds: ["flashcard"],
-          limit: 5,
-        });
+        const hits = await ragSearch(scope, kit.id, query, "flashcard", 5);
         if (hits.length === 0) return "No flashcards found.";
         const ids = hits.map((h) => h.sourceRefId);
         const ph = ids.map(() => "?").join(", ");
         const rows = db
           .prepare(
-            `SELECT id, front, back, state, ease_factor
-             FROM flashcards
-             WHERE ownerId = ? AND id IN (${ph})`,
+            `SELECT id, front, back, state, ease_factor FROM flashcards WHERE ownerId = ? AND id IN (${ph})`,
           )
           .all(scope.ownerId, ...ids) as Array<{
           id: string;
@@ -335,28 +330,16 @@ export function buildStudyTools(
         const ordered = ids
           .map((id) => byId.get(id))
           .filter((r): r is NonNullable<typeof r> => Boolean(r))
-          .map(({ front, back, state, ease_factor }) => ({
-            front,
-            back,
-            state,
-            ease_factor,
-          }));
+          .map(({ front, back, state, ease_factor }) => ({ front, back, state, ease_factor }));
         return ordered.length ? ordered : "No flashcards found.";
       },
     }),
     search_guide: tool({
       description:
         "Search the learner's committed study guide notes by hybrid keyword + semantic similarity. Use this to ground answers in what they have already written.",
-      inputSchema: z.object({
-        query: z.string().describe("Topic to search for in the study guide"),
-      }),
+      inputSchema: querySchema("Topic to search for in the study guide"),
       execute: async ({ query }) => {
-        await syncDomainSourcesToRag(db, scope, kit.id);
-        const hits = await hybridSearch(db, scope, query, {
-          kitId: kit.id,
-          kinds: ["guide"],
-          limit: 4,
-        });
+        const hits = await ragSearch(scope, kit.id, query, "guide", 4);
         return hits.length
           ? hits.map((h) => ({ title: h.title, content: h.content }))
           : "No guide content found.";
@@ -365,22 +348,11 @@ export function buildStudyTools(
     search_kit_sources: tool({
       description:
         "Search uploaded reference materials, PDFs, and source documents attached to this Kit.",
-      inputSchema: z.object({
-        query: z.string().describe("Search query for Kit reference sources"),
-      }),
+      inputSchema: querySchema("Search query for Kit reference sources"),
       execute: async ({ query }) => {
-        await syncDomainSourcesToRag(db, scope, kit.id);
-        const hits = await hybridSearch(db, scope, query, {
-          kitId: kit.id,
-          kinds: ["source_chunk"],
-          limit: 5,
-        });
+        const hits = await ragSearch(scope, kit.id, query, "source_chunk", 5);
         return hits.length
-          ? hits.map((h) => ({
-              title: h.title,
-              excerpt: h.content,
-              score: h.score,
-            }))
+          ? hits.map((h) => ({ title: h.title, excerpt: h.content, score: h.score }))
           : "No Kit source documents matched.";
       },
     }),
@@ -390,22 +362,11 @@ export function buildStudyTools(
     tools.web_research = tool({
       description:
         "Search the public web for up-to-date facts, benchmarks, specifications, or primary documentation when the learner's notes and Kit sources do not cover it.",
-      inputSchema: z.object({
-        query: z.string().describe("Concise web search query"),
-      }),
+      inputSchema: querySchema("Concise web search query"),
       execute: async ({ query }) => {
-        const res = await runWebResearch({
-          scope,
-          query,
-          signal: opts.abortSignal,
-        });
-        if (res.citations.length > 0) {
-          opts.onCitations?.(res.citations);
-        }
-        return {
-          summary: res.summary || "No web results found.",
-          citations: res.citations,
-        };
+        const res = await runWebResearch({ scope, query, signal: opts.abortSignal });
+        if (res.citations.length > 0) opts.onCitations?.(res.citations);
+        return { summary: res.summary || "No web results found.", citations: res.citations };
       },
     });
   }
@@ -451,12 +412,8 @@ model: ${generatedText}`;
     schema: z.object({
       events: z.array(
         z.object({
-          memory_text: z
-            .string()
-            .describe("A concise description of the learning event"),
-          importance_score: z
-            .number()
-            .describe("Importance score from 1 to 10"),
+          memory_text: z.string().describe("A concise description of the learning event"),
+          importance_score: z.number().describe("Importance score from 1 to 10"),
         }),
       ),
     }),
@@ -484,23 +441,14 @@ model: ${generatedText}`;
     });
   }
   if (events?.length) {
-    logger.info(
-      `[chat/memory] Extracted ${events.length} episodic memories.`,
-    );
+    logger.info(`[chat/memory] Extracted ${events.length} episodic memories.`);
   }
 }
 
 router.post("/stream", async (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const {
-    message,
-    context,
-    persona,
-    history = [],
-    model,
-    webResearch,
-  } = req.body as {
+  const { message, context, persona, history = [], model, webResearch } = req.body as {
     message?: string;
     context?: string;
     persona?: string;
@@ -520,6 +468,10 @@ router.post("/stream", async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
+  const sendSse = (payload: unknown) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
   const abortController = new AbortController();
   res.on("close", () => abortController.abort());
 
@@ -529,19 +481,8 @@ router.post("/stream", async (req, res) => {
   heartbeat.unref();
 
   try {
-    const profileRow = db
-      .prepare(
-        "SELECT profile_text FROM user_learning_profile WHERE ownerId = ?",
-      )
-      .get(scope.ownerId) as { profile_text: string } | undefined;
-    const userProfile = profileRow?.profile_text || "";
-
-    await syncDomainSourcesToRag(db, scope, kit.id);
-    const episodicHits = await hybridSearch(db, scope, message, {
-      kitId: kit.id,
-      kinds: ["episodic"],
-      limit: 5,
-    });
+    const userProfile = loadUserProfile(scope.ownerId);
+    const episodicHits = await ragSearch(scope, kit.id, message, "episodic", 5);
     const topEpisodes = episodicHits.map((h) => h.content);
 
     const enableWebResearch =
@@ -551,34 +492,22 @@ router.post("/stream", async (req, res) => {
 
     let system = tutorSystemPrompt(kit, context, persona);
     system += `\n\nThe learner's flashcards, study guide notes, and Kit reference sources live in a hybrid search index. Use search_flashcards, search_guide, and search_kit_sources whenever an answer should build on their material.${enableWebResearch ? " Use web_research when up-to-date external facts or primary sources are needed." : ""}`;
-    if (userProfile) {
-      system += `\n\n[User Profile]:\n${userProfile}`;
-    }
+    if (userProfile) system += `\n\n[User Profile]:\n${userProfile}`;
     if (topEpisodes.length > 0) {
       system +=
-        `\n\n[Relevant Past Learning Episodes]:\n` +
-        topEpisodes.map((t) => `- ${t}`).join("\n");
+        `\n\n[Relevant Past Learning Episodes]:\n` + topEpisodes.map((t) => `- ${t}`).join("\n");
     }
-
-    const messages: ModelMessage[] = [
-      ...toModelMessages(history),
-      { role: "user", content: message },
-    ];
 
     const { result, modelId } = chatStream({
       model,
       scope,
       capability: "deep",
       system,
-      messages,
+      messages: [...toModelMessages(history), { role: "user", content: message }],
       tools: buildStudyTools(scope, kit, {
         enableWebResearch,
         abortSignal: abortController.signal,
-        onCitations: (citations) => {
-          if (!res.writableEnded) {
-            res.write(`data: ${JSON.stringify({ citations })}\n\n`);
-          }
-        },
+        onCitations: (citations) => sendSse({ citations }),
       }),
       abortSignal: abortController.signal,
     });
@@ -588,22 +517,15 @@ router.post("/stream", async (req, res) => {
       if (res.writableEnded) break;
       if (part.type === "text-delta" && part.text) {
         generatedText += part.text;
-        res.write(`data: ${JSON.stringify({ text: part.text })}\n\n`);
+        sendSse({ text: part.text });
       } else if (part.type === "tool-call") {
-        res.write(
-          `data: ${JSON.stringify({ tool: `Running ${part.toolName}...` })}\n\n`,
-        );
+        sendSse({ tool: `Running ${part.toolName}...` });
       } else if (part.type === "error") {
-        const detail =
-          part.error instanceof Error
-            ? part.error.message
-            : String(part.error);
-        res.write(`data: ${JSON.stringify({ error: detail })}\n\n`);
+        sendSse({ error: errMsg(part.error) });
       } else if (part.type === "finish") {
         const usage = part.totalUsage;
         logger.info(
-          `[ai] chat/stream model=${modelId} finish=${part.finishReason} ` +
-            `in=${usage?.inputTokens ?? "?"} out=${usage?.outputTokens ?? "?"}`,
+          `[ai] chat/stream model=${modelId} finish=${part.finishReason} in=${usage?.inputTokens ?? "?"} out=${usage?.outputTokens ?? "?"}`,
         );
       }
     }
@@ -613,11 +535,7 @@ router.post("/stream", async (req, res) => {
       res.end();
     }
 
-    if (
-      !isBackgroundJobsDisabled() &&
-      !abortController.signal.aborted &&
-      generatedText
-    ) {
+    if (!isBackgroundJobsDisabled() && !abortController.signal.aborted && generatedText) {
       extractEpisodicMemories({
         scope,
         kitId: kit.id,
@@ -625,16 +543,15 @@ router.post("/stream", async (req, res) => {
         history,
         message,
         generatedText,
-      }).catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        logger.error("[chat/memory] Error:", { error: msg });
-      });
+      }).catch((err: unknown) =>
+        logger.error("[chat/memory] Error:", { error: errMsg(err) }),
+      );
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = errMsg(err);
     logger.error("[chat/stream] Error:", { error: msg });
     if (!res.writableEnded) {
-      res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
+      sendSse({ error: msg });
       res.end();
     }
   } finally {
@@ -645,15 +562,7 @@ router.post("/stream", async (req, res) => {
 router.post("/generate-flashcards", async (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const {
-    text,
-    topicName,
-    model,
-    sessionContext,
-    sections,
-    pillarId,
-    topicId,
-  } = req.body as {
+  const { text, topicName, model, sessionContext, sections, pillarId, topicId } = req.body as {
     text?: string;
     topicName?: string;
     model?: string;
@@ -664,31 +573,24 @@ router.post("/generate-flashcards", async (req, res) => {
   };
 
   if (!text && (!sections || sections.length === 0)) {
-    res
-      .status(400)
-      .json({ message: "Text or sections are required to generate flashcards." });
+    res.status(400).json({ message: "Text or sections are required to generate flashcards." });
     return;
   }
 
   try {
-    let contextBlock = "";
-    if (sessionContext) {
-      contextBlock = `\n\nFor additional context, this text comes from a study session about "${topicName || kit.skeleton.identity.name}". Here is some surrounding conversation context:\n--- SESSION CONTEXT ---\n${sessionContext}\n--- END CONTEXT ---\nUse this context ONLY to better understand the concepts — the flashcard content should primarily come from the source text below.\n`;
-    }
+    const contextBlock = sessionContext
+      ? `\n\nFor additional context, this text comes from a study session about "${topicName || kit.skeleton.identity.name}". Here is some surrounding conversation context:\n--- SESSION CONTEXT ---\n${sessionContext}\n--- END CONTEXT ---\nUse this context ONLY to better understand the concepts — the flashcard content should primarily come from the source text below.\n`
+      : "";
 
     const sectionAware = Boolean(sections && sections.length > 0);
     const sourceBlock = sectionAware
       ? sections!
-          .map(
-            (s) =>
-              `=== SECTION: "${s.sectionName}" (id: "${s.sectionId}") ===\n${s.content}`,
-          )
+          .map((s) => `=== SECTION: "${s.sectionName}" (id: "${s.sectionId}") ===\n${s.content}`)
           .join("\n\n---\n\n")
       : (text ?? "");
 
     const sectionAwareInstructions = sectionAware
-      ? `\n7. TAG EACH CARD with the section it came from using sourceSectionId and sourceSectionName fields. Use the exact section id and name provided above.
-8. Generate cards from EACH section that has substantive content. Aim for 2-4 cards per section, but skip sections with insufficient depth.`
+      ? `\n7. TAG EACH CARD with the section it came from using sourceSectionId and sourceSectionName fields. Use the exact section id and name provided above.\n8. Generate cards from EACH section that has substantive content. Aim for 2-4 cards per section, but skip sections with insufficient depth.`
       : "";
 
     const prompt = `You are an expert flashcard creator for ${kit.skeleton.identity.name} study.
@@ -707,21 +609,13 @@ Source material:
 ${sourceBlock}`;
 
     const baseElement = z.object({
-      front: z
-        .string()
-        .describe("The front of the flashcard: a concise 1-2 line question"),
-      back: z
-        .string()
-        .describe("The back of the flashcard: a dense 2-3 line answer"),
+      front: z.string().describe("The front of the flashcard: a concise 1-2 line question"),
+      back: z.string().describe("The back of the flashcard: a dense 2-3 line answer"),
     });
     const element = sectionAware
       ? baseElement.extend({
-          sourceSectionId: z
-            .string()
-            .describe("The section id this card was generated from"),
-          sourceSectionName: z
-            .string()
-            .describe("The section name this card was generated from"),
+          sourceSectionId: z.string().describe("The section id this card was generated from"),
+          sourceSectionName: z.string().describe("The section name this card was generated from"),
         })
       : baseElement;
 
@@ -744,11 +638,7 @@ ${sourceBlock}`;
 
     res.json({ cards });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/generate-flashcards] Error:", { error: msg });
-    res
-      .status(500)
-      .json({ message: msg || "Failed to generate flashcards." });
+    fail(res, "chat/generate-flashcards", err, "Failed to generate flashcards.", true);
   }
 });
 
@@ -765,10 +655,7 @@ router.post("/generate-reverse-cards", async (req, res) => {
   }
 
   try {
-    const cardList = cards
-      .map((c, i) => `[Card ${i}]\nQ: ${c.front}\nA: ${c.back}`)
-      .join("\n\n");
-
+    const cardList = cards.map((c, i) => `[Card ${i}]\nQ: ${c.front}\nA: ${c.back}`).join("\n\n");
     const prompt = `You are an expert flashcard creator for ${kit.skeleton.identity.name}. Given the flashcards below, generate ONE reverse card for each that tests the SAME concept from a different angle or retrieval pathway.
 
 RULES:
@@ -791,34 +678,21 @@ Generate one reverse card per input card.`;
       element: z.object({
         front: z.string().describe("Reverse question"),
         back: z.string().describe("Answer for the reverse question"),
-        originalIndex: z
-          .number()
-          .int()
-          .describe("Index of the original card this reverses"),
+        originalIndex: z.number().int().describe("Index of the original card this reverses"),
       }),
       feature: "chat/reverse-cards",
     });
 
     res.json({ reverseCards });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/generate-reverse-cards] Error:", { error: msg });
-    res
-      .status(500)
-      .json({ message: msg || "Failed to generate reverse cards." });
+    fail(res, "chat/generate-reverse-cards", err, "Failed to generate reverse cards.", true);
   }
 });
 
 router.post("/summarize", async (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const {
-    excerpts = [],
-    sectionId,
-    sectionName,
-    topicName,
-    model,
-  } = req.body as {
+  const { excerpts = [], sectionId, sectionName, topicName, model } = req.body as {
     excerpts?: string[];
     sectionId?: string;
     sectionName?: string;
@@ -832,7 +706,6 @@ router.post("/summarize", async (req, res) => {
   }
 
   try {
-    const excerptText = excerpts.join("\n\n---\n\n");
     const prompt = `You are a technical writing assistant helping compile a ${kit.skeleton.identity.name} study guide.
 
 The learner has been studying "${topicName || "this topic"}" — specifically the section "${sectionName || sectionId}".
@@ -842,7 +715,7 @@ Below are excerpts from their AI-assisted study conversation. Extract and synthe
 Format as clean, dense markdown suitable for a study reference guide (## headers, bullet points, inline backticks, **bold** key terms).
 
 --- CONVERSATION EXCERPTS ---
-${excerptText}
+${excerpts.join("\n\n---\n\n")}
 --- END EXCERPTS ---
 
 Now write the guide section content:`;
@@ -856,9 +729,7 @@ Now write the guide section content:`;
     });
     res.json({ content });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/summarize] Error:", { error: msg });
-    res.status(500).json({ message: msg || "Failed to summarize." });
+    fail(res, "chat/summarize", err, "Failed to summarize.", true);
   }
 });
 
@@ -873,17 +744,12 @@ router.post("/evaluate-interceptor", async (req, res) => {
   };
 
   if (!explanation || !front || !back) {
-    res
-      .status(400)
-      .json({ message: "explanation, front, and back are required" });
+    res.status(400).json({ message: "explanation, front, and back are required" });
     return;
   }
 
   try {
-    const fencedExplanation = explanation.replace(
-      /<\/untrusted_/gi,
-      "<\\/untrusted_",
-    );
+    const fencedExplanation = explanation.replace(/<\/untrusted_/gi, "<\\/untrusted_");
     const prompt = `You are a rigorous, anti-sycophancy learning evaluator for ${kit.skeleton.identity.name}. The learner was asked a flashcard question and must explain WHY the answer is true to prove genuine understanding rather than pattern-matching.
 
 Question: ${front}
@@ -899,12 +765,6 @@ Follow this strict falsification-first evaluation order:
 3. Write 1-2 sentences of specific, constructive feedback.
 4. Set pass = true ONLY if factualOrLogicalErrors is empty AND the learner explained the core mechanism.`;
 
-    let responsePayload: {
-      pass: boolean;
-      feedback: string;
-      extractedClaims: string[];
-      factualOrLogicalErrors: string[];
-    };
     try {
       const evaluation = await runStructured<{
         extractedClaims: string[];
@@ -919,9 +779,7 @@ Follow this strict falsification-first evaluation order:
         schema: z.object({
           extractedClaims: z
             .array(z.string())
-            .describe(
-              "Distinct factual or causal claims stated in the learner's explanation.",
-            ),
+            .describe("Distinct factual or causal claims stated in the learner's explanation."),
           factualOrLogicalErrors: z
             .array(z.string())
             .describe(
@@ -929,53 +787,37 @@ Follow this strict falsification-first evaluation order:
             ),
           feedback: z
             .string()
-            .describe(
-              "1-2 concise sentences explaining why the explanation passed or what was flawed.",
-            ),
+            .describe("1-2 concise sentences explaining why the explanation passed or what was flawed."),
           pass: z
             .boolean()
-            .describe(
-              "True only when factualOrLogicalErrors is empty and the core mechanism is explained.",
-            ),
+            .describe("True only when factualOrLogicalErrors is empty and the core mechanism is explained."),
         }),
         feature: "chat/evaluate",
       });
-      const finalPass =
-        evaluation.pass && evaluation.factualOrLogicalErrors.length === 0;
-      responsePayload = {
-        pass: finalPass,
+      res.json({
+        pass: evaluation.pass && evaluation.factualOrLogicalErrors.length === 0,
         feedback: evaluation.feedback,
         extractedClaims: evaluation.extractedClaims,
         factualOrLogicalErrors: evaluation.factualOrLogicalErrors,
-      };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.error("[chat/evaluate-interceptor] Evaluation failed:", {
-        error: msg,
       });
-      responsePayload = {
+    } catch (err) {
+      logger.error("[chat/evaluate-interceptor] Evaluation failed:", { error: errMsg(err) });
+      res.json({
         pass: false,
         feedback: "Error evaluating response format.",
         extractedClaims: [],
         factualOrLogicalErrors: [],
-      };
+      });
     }
-
-    res.json(responsePayload);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/evaluate-interceptor] Error:", { error: msg });
-    res.status(500).json({ message: "Failed to evaluate." });
+    fail(res, "chat/evaluate-interceptor", err, "Failed to evaluate.");
   }
 });
 
 router.post("/concept-map", async (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { history = [], model } = req.body as {
-    history?: StoredMessage[];
-    model?: string;
-  };
+  const { history = [], model } = req.body as { history?: StoredMessage[]; model?: string };
 
   if (!history || history.length === 0) {
     res.status(400).json({ message: "History is required to generate a map." });
@@ -983,16 +825,12 @@ router.post("/concept-map", async (req, res) => {
   }
 
   try {
-    const historyText = history
-      .map((msg) => `${msg.role}: ${msg.content}`)
-      .join("\n\n");
-
     const prompt = `You are an expert educational visualizer for ${kit.skeleton.identity.name}. Extract the key concepts, entities, and their relationships from the following chat history.
 Your output MUST be a valid, syntactically correct \`mermaid\` graph definition (e.g. \`graph TD\`).
 Use concise node labels and relationship labels. Only output the markdown block containing the mermaid code.
 
 Chat History:
-${historyText}`;
+${history.map((msg) => `${msg.role}: ${msg.content}`).join("\n\n")}`;
 
     let responseText = await runText({
       model,
@@ -1008,11 +846,7 @@ ${historyText}`;
 
     res.json({ response: responseText });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/concept-map] Error:", { error: msg });
-    res
-      .status(500)
-      .json({ message: msg || "Failed to generate concept map." });
+    fail(res, "chat/concept-map", err, "Failed to generate concept map.", true);
   }
 });
 
@@ -1036,39 +870,31 @@ router.post("/commit", async (req, res) => {
   };
 
   if (!messages.length || !pillarId || !topicId) {
-    res
-      .status(400)
-      .json({ message: "messages, pillarId, and topicId are required" });
+    res.status(400).json({ message: "messages, pillarId, and topicId are required" });
     return;
   }
 
   const pillar = kit.skeleton.pillars.find((p) => p.id === pillarId);
   let sections = pillar?.sections || [];
   if (sections.length === 0) {
-    res.status(400).json({
-      message: `No blueprint sections found for pillar "${pillarId}"`,
-    });
+    res.status(400).json({ message: `No blueprint sections found for pillar "${pillarId}"` });
     return;
   }
-
   if (targetSectionIds.length > 0) {
     sections = sections.filter((s) => targetSectionIds.includes(s.id));
   }
 
   try {
-    const numberedMessages = messages.map(
-      (m, i) =>
-        `[MSG ${i}][${m.role === "ai" ? "Tutor" : "Student"}]: ${m.content}`,
-    );
-    const conversationText = numberedMessages.join("\n\n");
+    const conversationText = messages
+      .map((m, i) => `[MSG ${i}][${m.role === "ai" ? "Tutor" : "Student"}]: ${m.content}`)
+      .join("\n\n");
 
+    const getExisting = db.prepare(
+      "SELECT content FROM guide_content WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?",
+    );
     const existingContentMap: Record<string, string> = {};
     for (const sec of sections) {
-      const row = db
-        .prepare(
-          "SELECT content FROM guide_content WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?",
-        )
-        .get(scope.ownerId, kit.id, pillarId, topicId, sec.id) as
+      const row = getExisting.get(scope.ownerId, kit.id, pillarId, topicId, sec.id) as
         | { content: string }
         | undefined;
       existingContentMap[sec.id] = row?.content?.trim() || "";
@@ -1076,18 +902,14 @@ router.post("/commit", async (req, res) => {
 
     const existingContentBlock = sections
       .filter((s) => existingContentMap[s.id])
-      .map(
-        (s) => `### ${s.name} (id: "${s.id}"):\n${existingContentMap[s.id]}`,
-      )
+      .map((s) => `### ${s.name} (id: "${s.id}"):\n${existingContentMap[s.id]}`)
       .join("\n\n---\n\n");
 
     const sectionList = sections
-      .map((s) => {
-        const status = existingContentMap[s.id]
-          ? "HAS EXISTING CONTENT — merge new learnings"
-          : "EMPTY — create from scratch";
-        return `- "${s.id}": ${s.name} [${status}]`;
-      })
+      .map(
+        (s) =>
+          `- "${s.id}": ${s.name} [${existingContentMap[s.id] ? "HAS EXISTING CONTENT — merge new learnings" : "EMPTY — create from scratch"}]`,
+      )
       .join("\n");
 
     const ownershipRules = sections
@@ -1097,16 +919,14 @@ router.post("/commit", async (req, res) => {
       )
       .join("\n");
 
-    let taskDescription =
-      'TASK: Analyze the conversation below and produce updated guide content for EACH section that was substantively discussed.';
-    let inclusionRule =
-      "1. Only include sections that were SUBSTANTIVELY discussed with real depth.";
-
-    if (targetSectionIds.length > 0) {
-      taskDescription = `TASK: Analyze the conversation below and produce updated guide content SPECIFICALLY for the following selected sections: ${targetSectionIds.join(", ")}.`;
-      inclusionRule =
-        "1. You MUST generate content for ALL the requested sections based on whatever was discussed.";
-    }
+    const taskDescription =
+      targetSectionIds.length > 0
+        ? `TASK: Analyze the conversation below and produce updated guide content SPECIFICALLY for the following selected sections: ${targetSectionIds.join(", ")}.`
+        : "TASK: Analyze the conversation below and produce updated guide content for EACH section that was substantively discussed.";
+    const inclusionRule =
+      targetSectionIds.length > 0
+        ? "1. You MUST generate content for ALL the requested sections based on whatever was discussed."
+        : "1. Only include sections that were SUBSTANTIVELY discussed with real depth.";
 
     const prompt = `You are a technical editor compiling guide content for a ${kit.skeleton.identity.name} study guide.
 
@@ -1131,18 +951,10 @@ ${conversationText}
 
 Return the targeted sections with their complete updated content.`;
 
-    let identifiedSections: Array<{
-      sectionId: string;
-      reason: string;
-      newContent: string;
-    }>;
+    let identifiedSections: Array<{ sectionId: string; reason: string; newContent: string }>;
     try {
       const parsed = await runStructured<{
-        sections: Array<{
-          sectionId: string;
-          reason: string;
-          newContent: string;
-        }>;
+        sections: Array<{ sectionId: string; reason: string; newContent: string }>;
       }>({
         model,
         scope,
@@ -1151,15 +963,9 @@ Return the targeted sections with their complete updated content.`;
         schema: z.object({
           sections: z.array(
             z.object({
-              sectionId: z
-                .string()
-                .describe("The section id from the provided list"),
-              reason: z
-                .string()
-                .describe("Brief reason why this section was covered"),
-              newContent: z
-                .string()
-                .describe("The complete updated section content in markdown"),
+              sectionId: z.string().describe("The section id from the provided list"),
+              reason: z.string().describe("Brief reason why this section was covered"),
+              newContent: z.string().describe("The complete updated section content in markdown"),
             }),
           ),
         }),
@@ -1168,26 +974,13 @@ Return the targeted sections with their complete updated content.`;
       });
       identifiedSections = parsed.sections || [];
     } catch (parseErr) {
-      const msg =
-        parseErr instanceof Error ? parseErr.message : String(parseErr);
-      logger.error("[chat/commit] Analysis failed:", { error: msg });
-      res
-        .status(500)
-        .json({ message: msg || "Failed to analyze conversation sections." });
+      fail(res, "chat/commit", parseErr, "Failed to analyze conversation sections.", true);
       return;
     }
 
     const validSectionIds = new Set(sections.map((s) => s.id));
-    identifiedSections = identifiedSections.filter((s) =>
-      validSectionIds.has(s.sectionId),
-    );
-
-    if (identifiedSections.length === 0) {
-      res.json({ updates: [] });
-      return;
-    }
-
     const updates = identifiedSections
+      .filter((s) => validSectionIds.has(s.sectionId))
       .map((identified) => {
         const section = sections.find((s) => s.id === identified.sectionId);
         const existingContent = existingContentMap[identified.sectionId] || "";
@@ -1200,35 +993,25 @@ Return the targeted sections with their complete updated content.`;
           isNew: !existingContent,
         };
       })
-      .filter((u) => u.newContent && u.newContent.trim());
+      .filter((u) => u.newContent?.trim());
 
     res.json({ updates });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/commit] Error:", { error: msg });
-    res
-      .status(500)
-      .json({ message: "Failed to analyze session. Please try again." });
+    fail(res, "chat/commit", err, "Failed to analyze session. Please try again.");
   }
 });
 
 router.post("/commit/save", async (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const {
-    pillarId,
-    topicId,
-    updates = [],
-  } = req.body as {
+  const { pillarId, topicId, updates = [] } = req.body as {
     pillarId?: string;
     topicId?: string;
     updates?: Array<{ sectionId?: string; content?: string }>;
   };
 
   if (!pillarId || !topicId || updates.length === 0) {
-    res
-      .status(400)
-      .json({ message: "pillarId, topicId, and updates are required" });
+    res.status(400).json({ message: "pillarId, topicId, and updates are required" });
     return;
   }
 
@@ -1240,27 +1023,16 @@ router.post("/commit/save", async (req, res) => {
        DO UPDATE SET content = excluded.content, committed_at = excluded.committed_at`,
     );
 
-    const saveAll = db.transaction(
-      (items: Array<{ sectionId?: string; content?: string }>) => {
-        let count = 0;
-        for (const item of items) {
-          if (item.sectionId && item.content) {
-            upsertStmt.run(
-              scope.ownerId,
-              kit.id,
-              pillarId,
-              topicId,
-              item.sectionId,
-              item.content,
-            );
-            count++;
-          }
+    let savedCount = 0;
+    db.transaction(() => {
+      for (const item of updates) {
+        if (item.sectionId && item.content) {
+          upsertStmt.run(scope.ownerId, kit.id, pillarId, topicId, item.sectionId, item.content);
+          savedCount++;
         }
-        return count;
-      },
-    );
+      }
+    })();
 
-    const savedCount = saveAll(updates);
     const ragInputs = updates
       .filter((u): u is { sectionId: string; content: string } =>
         Boolean(u.sectionId && u.content?.trim()),
@@ -1272,14 +1044,11 @@ router.post("/commit/save", async (req, res) => {
         title: `${topicId} — ${u.sectionId}`,
         content: u.content,
       }));
-    if (ragInputs.length > 0) {
-      await upsertRagChunksBatch(db, scope, ragInputs);
-    }
+    if (ragInputs.length > 0) await upsertRagChunksBatch(db, scope, ragInputs);
+
     res.json({ ok: true, savedCount });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/commit/save] Error:", { error: msg });
-    res.status(500).json({ message: "Failed to save guide updates." });
+    fail(res, "chat/commit/save", err, "Failed to save guide updates.");
   }
 });
 
@@ -1288,9 +1057,7 @@ router.get("/sessions", (req, res) => {
   const kit = resolveActiveKit(req, db, scope);
   try {
     const rows = db
-      .prepare(
-        "SELECT * FROM chat_sessions WHERE ownerId = ? AND kit_id = ? ORDER BY updated_at DESC",
-      )
+      .prepare("SELECT * FROM chat_sessions WHERE ownerId = ? AND kit_id = ? ORDER BY updated_at DESC")
       .all(scope.ownerId, kit.id) as Array<{
       id: string;
       name: string;
@@ -1316,114 +1083,70 @@ router.get("/sessions", (req, res) => {
     }
     res.json(sessions);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/sessions] Error:", { error: msg });
-    res.status(500).json({ message: "Failed to fetch sessions." });
+    fail(res, "chat/sessions", err, "Failed to fetch sessions.");
   }
 });
 
-interface IncomingChatSession {
-  id?: string;
-  name?: string;
-  persona?: string | null;
-  messages?: unknown[];
-  pillarId?: string | null;
-  topicId?: string | null;
-  topicName?: string | null;
-  createdAt?: string;
+function upsertChatSession(scope: Scope, kitId: string, s: IncomingChatSession): void {
+  if (!s.id) return;
+  db.prepare(
+    `INSERT INTO chat_sessions (id, ownerId, kit_id, name, persona, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+     ON CONFLICT(ownerId, id) DO UPDATE SET
+       name = excluded.name,
+       persona = excluded.persona,
+       messages = excluded.messages,
+       pillar_id = excluded.pillar_id,
+       topic_id = excluded.topic_id,
+       topic_name = excluded.topic_name,
+       updated_at = datetime('now')`,
+  ).run(
+    s.id,
+    scope.ownerId,
+    kitId,
+    s.name || "Session",
+    s.persona || "socratic",
+    JSON.stringify(s.messages || []),
+    s.pillarId || null,
+    s.topicId || null,
+    s.topicName || null,
+    s.createdAt || new Date().toISOString(),
+  );
 }
 
 router.post("/sessions", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { session } = req.body as { session?: IncomingChatSession };
-  if (!session || !session.id) {
+  if (!session?.id) {
     res.status(400).json({ message: "Session required" });
     return;
   }
-
   try {
-    db.prepare(
-      `INSERT INTO chat_sessions (id, ownerId, kit_id, name, persona, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(ownerId, id) DO UPDATE SET
-         name = excluded.name,
-         persona = excluded.persona,
-         messages = excluded.messages,
-         pillar_id = excluded.pillar_id,
-         topic_id = excluded.topic_id,
-         topic_name = excluded.topic_name,
-         updated_at = datetime('now')`,
-    ).run(
-      session.id,
-      scope.ownerId,
-      kit.id,
-      session.name || "Session",
-      session.persona || "socratic",
-      JSON.stringify(session.messages || []),
-      session.pillarId || null,
-      session.topicId || null,
-      session.topicName || null,
-      session.createdAt || new Date().toISOString(),
-    );
+    upsertChatSession(scope, kit.id, session);
     res.json({ success: true });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/sessions] POST Error:", { error: msg });
-    res.status(500).json({ message: "Failed to save session." });
+    fail(res, "chat/sessions POST", err, "Failed to save session.");
   }
 });
 
 router.post("/sessions/bulk", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { sessions } = req.body as {
-    sessions?: Record<string, IncomingChatSession>;
-  };
+  const { sessions } = req.body as { sessions?: Record<string, IncomingChatSession> };
   if (!sessions || typeof sessions !== "object") {
     res.status(400).json({ message: "Sessions object required" });
     return;
   }
-
   try {
-    const insert = db.prepare(
-      `INSERT INTO chat_sessions (id, ownerId, kit_id, name, persona, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(ownerId, id) DO UPDATE SET
-         name = excluded.name,
-         persona = excluded.persona,
-         messages = excluded.messages,
-         pillar_id = excluded.pillar_id,
-         topic_id = excluded.topic_id,
-         topic_name = excluded.topic_name,
-         updated_at = datetime('now')`,
-    );
-    const transaction = db.transaction(
-      (sessObj: Record<string, IncomingChatSession>) => {
-        for (const id of Object.keys(sessObj)) {
-          const s = sessObj[id];
-          if (!s?.id) continue;
-          insert.run(
-            s.id,
-            scope.ownerId,
-            kit.id,
-            s.name || "Session",
-            s.persona || "socratic",
-            JSON.stringify(s.messages || []),
-            s.pillarId || null,
-            s.topicId || null,
-            s.topicName || null,
-            s.createdAt || new Date().toISOString(),
-          );
-        }
-      },
-    );
-    transaction(sessions);
+    db.transaction(() => {
+      for (const s of Object.values(sessions)) {
+        if (s?.id) upsertChatSession(scope, kit.id, s);
+      }
+    })();
     res.json({ success: true });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/sessions/bulk] Error:", { error: msg });
-    res.status(500).json({ message: "Failed to save sessions in bulk." });
+    fail(res, "chat/sessions/bulk", err, "Failed to save sessions in bulk.");
   }
 });
 
@@ -1436,9 +1159,7 @@ router.delete("/sessions/:id", (req, res) => {
     );
     res.json({ success: true });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.error("[chat/sessions] DELETE Error:", { error: msg });
-    res.status(500).json({ message: "Failed to delete session." });
+    fail(res, "chat/sessions DELETE", err, "Failed to delete session.");
   }
 });
 

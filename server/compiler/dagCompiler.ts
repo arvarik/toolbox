@@ -58,26 +58,69 @@ const DEFAULT_SECTION_LENSES = [
    (ZERO .optional(), ZERO .default(), ZERO z.tuple(), ZERO .regex(), ZERO z.unknown())
    ════════════════════════════════════════════════════════════════ */
 
-const PersonaLlmSchema = z.object({
-  label: z.string(),
-  prompt: z.string(),
+const PersonaLlmSchema = z.object({ label: z.string(), prompt: z.string() });
+
+export const IdentityLlmSchema = z.object({
+  slug: z.string(),
+  name: z.string(),
+  description: z.string(),
+  icon: z.string(),
+  color: z.string(),
+  tags: z.array(z.string()),
+});
+
+export const CapabilitiesLlmSchema = z.object({
+  canvas: z.enum(["none", "concept", "architecture"]),
+  calculator: z.boolean(),
+  webResearchDefault: z.boolean(),
+  enableSvgDiagrams: z.boolean(),
+});
+
+export const TopicLlmSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  summary: z.string(),
+});
+
+export const PillarLlmSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  shortName: z.string(),
+  color: z.string(),
+  sections: z.array(
+    z.object({
+      id: z.string(),
+      name: z.string(),
+      icon: z.string(),
+      promptHint: z.string(),
+      ownershipRule: z.string(),
+    }),
+  ),
+  topics: z.array(TopicLlmSchema),
+});
+
+export const GraphNodeLlmSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  pillarId: z.string(),
+  topicId: z.string().nullable(),
+  summary: z.string(),
+  keywords: z.array(z.string()),
+  components: z.array(z.string()),
+  prereqIds: z.array(z.string()),
+});
+
+export const TrackLlmSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  emoji: z.string(),
+  description: z.string(),
+  targets: z.array(z.string()),
 });
 
 export const MacroBlueprintLlmSchema = z.object({
-  identity: z.object({
-    slug: z.string(),
-    name: z.string(),
-    description: z.string(),
-    icon: z.string(),
-    color: z.string(),
-    tags: z.array(z.string()),
-  }),
-  capabilities: z.object({
-    canvas: z.enum(["none", "concept", "architecture"]),
-    calculator: z.boolean(),
-    webResearchDefault: z.boolean(),
-    enableSvgDiagrams: z.boolean(),
-  }),
+  identity: IdentityLlmSchema,
+  capabilities: CapabilitiesLlmSchema,
   tutor: z.object({
     rolePrompt: z.string(),
     personas: z.object({
@@ -87,12 +130,7 @@ export const MacroBlueprintLlmSchema = z.object({
       devil: PersonaLlmSchema,
     }),
     starterPrompts: z.array(z.string()),
-    cardExamples: z.array(
-      z.object({
-        front: z.string(),
-        back: z.string(),
-      }),
-    ),
+    cardExamples: z.array(z.object({ front: z.string(), back: z.string() })),
   }),
   canvasConfig: z
     .object({
@@ -107,135 +145,30 @@ export const MacroBlueprintLlmSchema = z.object({
       ),
       protocols: z.array(z.string()),
       templates: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          description: z.string(),
-        }),
+        z.object({ id: z.string(), name: z.string(), description: z.string() }),
       ),
       auditRubric: z.array(z.string()),
     })
     .nullable(),
-  pillars: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      shortName: z.string(),
-      color: z.string(),
-      sections: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          icon: z.string(),
-          promptHint: z.string(),
-          ownershipRule: z.string(),
-        }),
-      ),
-      topics: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          summary: z.string(),
-        }),
-      ),
-    }),
-  ),
+  pillars: z.array(PillarLlmSchema),
 });
 
 export const ConceptGraphPassLlmSchema = z.object({
-  nodes: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      pillarId: z.string(),
-      topicId: z.string().nullable(),
-      summary: z.string(),
-      keywords: z.array(z.string()),
-      components: z.array(z.string()),
-      prereqIds: z.array(z.string()),
-    }),
-  ),
-  tracks: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      emoji: z.string(),
-      description: z.string(),
-      targets: z.array(z.string()),
-    }),
-  ),
+  nodes: z.array(GraphNodeLlmSchema),
+  tracks: z.array(TrackLlmSchema),
   citedSourceIds: z.array(z.string()),
 });
 
 export const SccCycleRepairLlmSchema = z.object({
-  repairedEdges: z.array(
-    z.object({
-      from: z.string(),
-      to: z.string(),
-    }),
-  ),
+  repairedEdges: z.array(z.object({ from: z.string(), to: z.string() })),
 });
 
 export const RefineBlueprintLlmSchema = z.object({
-  identity: z.object({
-    slug: z.string(),
-    name: z.string(),
-    description: z.string(),
-    icon: z.string(),
-    color: z.string(),
-    tags: z.array(z.string()),
-  }),
-  capabilities: z.object({
-    canvas: z.enum(["none", "concept", "architecture"]),
-    calculator: z.boolean(),
-    webResearchDefault: z.boolean(),
-    enableSvgDiagrams: z.boolean(),
-  }),
-  pillars: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      shortName: z.string(),
-      color: z.string(),
-      sections: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          icon: z.string(),
-          promptHint: z.string(),
-          ownershipRule: z.string(),
-        }),
-      ),
-      topics: z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          summary: z.string(),
-        }),
-      ),
-    }),
-  ),
-  nodes: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      pillarId: z.string(),
-      topicId: z.string().nullable(),
-      summary: z.string(),
-      keywords: z.array(z.string()),
-      components: z.array(z.string()),
-      prereqIds: z.array(z.string()),
-    }),
-  ),
-  tracks: z.array(
-    z.object({
-      id: z.string(),
-      name: z.string(),
-      emoji: z.string(),
-      description: z.string(),
-      targets: z.array(z.string()),
-    }),
-  ),
+  identity: IdentityLlmSchema,
+  capabilities: CapabilitiesLlmSchema,
+  pillars: z.array(PillarLlmSchema),
+  nodes: z.array(GraphNodeLlmSchema),
+  tracks: z.array(TrackLlmSchema),
   citedSourceIds: z.array(z.string()),
 });
 
@@ -254,7 +187,7 @@ export function toSlugId(raw: string, fallback: string): string {
   return cleaned || fallback;
 }
 
-function uniqueSlug(raw: string, fallback: string, used: Set<string>): string {
+export function uniqueSlug(raw: string, fallback: string, used: Set<string>): string {
   const base = toSlugId(raw, fallback);
   if (!used.has(base)) {
     used.add(base);
@@ -272,9 +205,7 @@ function uniqueSlug(raw: string, fallback: string, used: Set<string>): string {
   return emergency;
 }
 
-function normalizePillars(
-  rawPillars: z.infer<typeof MacroBlueprintLlmSchema>["pillars"],
-): {
+function normalizePillars(rawPillars: z.infer<typeof MacroBlueprintLlmSchema>["pillars"]): {
   pillars: Pillar[];
   pillarRawToId: Map<string, string>;
   topicRawToLocation: Map<string, { pillarId: string; topicId: string }>;
@@ -312,7 +243,6 @@ function normalizePillars(
     if (rp.id) pillarRawToId.set(rp.id.trim().toLowerCase(), pillarId);
     pillarRawToId.set(pillarId, pillarId);
 
-    // Normalize sections (2..8 required by PillarSchema; target 2..5)
     const usedSectionIds = new Set<string>();
     const sections = rp.sections.slice(0, 5).map((s, sIdx) => ({
       id: uniqueSlug(s.id || s.name, `lens-${sIdx + 1}`, usedSectionIds),
@@ -324,15 +254,11 @@ function normalizePillars(
     while (sections.length < 2) {
       const fb = DEFAULT_SECTION_LENSES[sections.length] ?? DEFAULT_SECTION_LENSES[0];
       sections.push({
+        ...fb,
         id: uniqueSlug(fb.id, `lens-${sections.length + 1}`, usedSectionIds),
-        name: fb.name,
-        icon: fb.icon,
-        promptHint: fb.promptHint,
-        ownershipRule: fb.ownershipRule,
       });
     }
 
-    // Normalize topics (min 1 required by PillarSchema)
     const usedTopicIds = new Set<string>();
     const rawTopics =
       rp.topics.length > 0
@@ -351,9 +277,7 @@ function normalizePillars(
         `${pillarId}-topic-${tIdx + 1}`,
         usedTopicIds,
       );
-      if (t.id) {
-        topicRawToLocation.set(t.id.trim().toLowerCase(), { pillarId, topicId });
-      }
+      if (t.id) topicRawToLocation.set(t.id.trim().toLowerCase(), { pillarId, topicId });
       topicRawToLocation.set(topicId, { pillarId, topicId });
       return {
         id: topicId,
@@ -362,18 +286,13 @@ function normalizePillars(
       };
     });
 
-    const color =
-      rp.color.trim() || DEFAULT_PILLAR_COLORS[idx % DEFAULT_PILLAR_COLORS.length];
     const name = rp.name.trim().slice(0, 100) || `Pillar ${idx + 1}`;
-    const shortName =
-      rp.shortName.trim().slice(0, 40) || name.slice(0, 40);
-
     return {
       id: pillarId,
       number: idx + 1,
       name,
-      shortName,
-      color,
+      shortName: rp.shortName.trim().slice(0, 40) || name.slice(0, 40),
+      color: rp.color.trim() || DEFAULT_PILLAR_COLORS[idx % DEFAULT_PILLAR_COLORS.length],
       sections,
       topics,
     };
@@ -440,11 +359,8 @@ export function findTarjanSccs(
   }
 
   for (const n of nodes) {
-    if (!indices.has(n.id)) {
-      strongConnect(n.id);
-    }
+    if (!indices.has(n.id)) strongConnect(n.id);
   }
-
   return sccs;
 }
 
@@ -456,8 +372,7 @@ export function sanitizeRawEdges(
   const seen = new Set<string>();
   const clean: GraphEdge[] = [];
   for (const e of edges) {
-    if (!validIds.has(e.from) || !validIds.has(e.to)) continue;
-    if (e.from === e.to) continue; // Strip self-loops
+    if (!validIds.has(e.from) || !validIds.has(e.to) || e.from === e.to) continue;
     const key = `${e.from}\0${e.to}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -479,17 +394,14 @@ export function applyTopologicalTieBreaker(
   protectedEdgeKeys?: ReadonlySet<string>,
 ): { edges: GraphEdge[]; droppedEdges: GraphEdge[] } {
   const cleanEdges = sanitizeRawEdges(nodes, edges);
-  const sccs = findTarjanSccs(nodes, cleanEdges);
-  const cyclicSccs = sccs.filter((scc) => scc.length > 1);
-  if (cyclicSccs.length === 0) {
-    return { edges: cleanEdges, droppedEdges: [] };
-  }
+  const cyclicSccs = findTarjanSccs(nodes, cleanEdges).filter((scc) => scc.length > 1);
+  if (cyclicSccs.length === 0) return { edges: cleanEdges, droppedEdges: [] };
 
   const pillarNumById = new Map<string, number>();
   pillars.forEach((p, idx) => pillarNumById.set(p.id, p.number || idx + 1));
 
-  // Build strict total order rank map: protected/existing nodes naturally precede newer nodes if ordered first
-  const orderedNodeIds = nodes
+  const rankById = new Map<string, number>();
+  nodes
     .map((n, arrayIdx) => ({
       id: n.id,
       pillarNumber: pillarNumById.get(n.pillarId) ?? Number.MAX_SAFE_INTEGER,
@@ -499,62 +411,42 @@ export function applyTopologicalTieBreaker(
       a.pillarNumber !== b.pillarNumber
         ? a.pillarNumber - b.pillarNumber
         : a.arrayIdx - b.arrayIdx,
-    );
+    )
+    .forEach((item, rank) => rankById.set(item.id, rank));
 
-  const rankById = new Map<string, number>();
-  orderedNodeIds.forEach((item, rank) => rankById.set(item.id, rank));
-
-  const nodeToSccId = new Map<string, number>();
-  cyclicSccs.forEach((scc, sccIdx) => {
-    for (const nodeId of scc) nodeToSccId.set(nodeId, sccIdx);
-  });
-
-  const kept: GraphEdge[] = [];
   const dropped: GraphEdge[] = [];
-
-  for (const e of cleanEdges) {
-    const sccFrom = nodeToSccId.get(e.from);
-    const sccTo = nodeToSccId.get(e.to);
-    if (sccFrom !== undefined && sccFrom === sccTo) {
-      const edgeKey = `${e.from}\0${e.to}`;
-      // If Living Kit expansion has protected existing DAG edges, keep existing edges first
-      // unless keeping them still leaves a cycle (handled in fallback check below).
-      if (protectedEdgeKeys?.has(edgeKey)) {
-        kept.push(e);
-        continue;
-      }
-      const rFrom = rankById.get(e.from) ?? 0;
-      const rTo = rankById.get(e.to) ?? 0;
-      if (rFrom >= rTo) {
-        dropped.push(e);
-        continue;
-      }
-    }
-    kept.push(e);
-  }
-
-  // Belt-and-suspenders: if protectedEdgeKeys participated in a new cycle where all new edges had rFrom < rTo,
-  // run an unprotected pass on any residual SCC so DAG acyclicity is unconditionally guaranteed.
-  const residualCyclic = findTarjanSccs(nodes, kept).filter((s) => s.length > 1);
-  if (residualCyclic.length > 0) {
-    const resMap = new Map<string, number>();
-    residualCyclic.forEach((scc, idx) => {
-      for (const id of scc) resMap.set(id, idx);
+  const dropBackEdges = (
+    inputEdges: readonly GraphEdge[],
+    sccs: string[][],
+    honorProtected: boolean,
+  ): GraphEdge[] => {
+    const sccMap = new Map<string, number>();
+    sccs.forEach((scc, idx) => {
+      for (const id of scc) sccMap.set(id, idx);
     });
-    const finalKept: GraphEdge[] = [];
-    for (const e of kept) {
-      const sf = resMap.get(e.from);
-      const st = resMap.get(e.to);
-      if (sf !== undefined && sf === st) {
+    const out: GraphEdge[] = [];
+    for (const e of inputEdges) {
+      const sf = sccMap.get(e.from);
+      if (sf !== undefined && sf === sccMap.get(e.to)) {
+        if (honorProtected && protectedEdgeKeys?.has(`${e.from}\0${e.to}`)) {
+          out.push(e);
+          continue;
+        }
         if ((rankById.get(e.from) ?? 0) >= (rankById.get(e.to) ?? 0)) {
           dropped.push(e);
           continue;
         }
       }
-      finalKept.push(e);
+      out.push(e);
     }
-    validateGraph(nodes, finalKept);
-    return { edges: finalKept, droppedEdges: dropped };
+    return out;
+  };
+
+  let kept = dropBackEdges(cleanEdges, cyclicSccs, true);
+  // Belt-and-suspenders: if protectedEdgeKeys participated in a residual cycle, drop unprotectedly.
+  const residualCyclic = findTarjanSccs(nodes, kept).filter((s) => s.length > 1);
+  if (residualCyclic.length > 0) {
+    kept = dropBackEdges(kept, residualCyclic, false);
   }
 
   validateGraph(nodes, kept);
@@ -588,9 +480,7 @@ export async function repairAndVerifyDag({
   protectedEdgeKeys?: ReadonlySet<string>;
 }): Promise<DagRepairReport> {
   let workingEdges = sanitizeRawEdges(nodes, edges);
-  const initialCyclicSccs = findTarjanSccs(nodes, workingEdges).filter(
-    (scc) => scc.length > 1,
-  );
+  const initialCyclicSccs = findTarjanSccs(nodes, workingEdges).filter((scc) => scc.length > 1);
 
   if (initialCyclicSccs.length === 0) {
     validateGraph(nodes, workingEdges);
@@ -602,11 +492,7 @@ export async function repairAndVerifyDag({
     };
   }
 
-  const cyclicNodeSet = new Set<string>();
-  for (const scc of initialCyclicSccs) {
-    for (const id of scc) cyclicNodeSet.add(id);
-  }
-
+  const cyclicNodeSet = new Set<string>(initialCyclicSccs.flat());
   const externalEdges = workingEdges.filter(
     (e) => !(cyclicNodeSet.has(e.from) && cyclicNodeSet.has(e.to)),
   );
@@ -626,9 +512,7 @@ export async function repairAndVerifyDag({
         return `- ${n.id} (Pillar ${p?.number ?? "?"}: ${p?.shortName ?? n.pillarId}): "${n.name}" — ${n.summary}`;
       })
       .join("\n");
-    const subgraphEdgesDesc = internalCyclicEdges
-      .map((e) => `${e.from} -> ${e.to}`)
-      .join("\n");
+    const subgraphEdgesDesc = internalCyclicEdges.map((e) => `${e.from} -> ${e.to}`).join("\n");
 
     const repaired = await runStructured<z.infer<typeof SccCycleRepairLlmSchema>>({
       model,
@@ -648,17 +532,10 @@ export async function repairAndVerifyDag({
     });
 
     const allowedRepaired = repaired.repairedEdges.filter(
-      (e) =>
-        cyclicNodeSet.has(e.from) &&
-        cyclicNodeSet.has(e.to) &&
-        e.from !== e.to,
+      (e) => cyclicNodeSet.has(e.from) && cyclicNodeSet.has(e.to) && e.from !== e.to,
     );
-
-    // Keep any protected existing edges intact before merging repaired internal edges
     const protectedInternal = protectedEdgeKeys
-      ? internalCyclicEdges.filter((e) =>
-          protectedEdgeKeys.has(`${e.from}\0${e.to}`),
-        )
+      ? internalCyclicEdges.filter((e) => protectedEdgeKeys.has(`${e.from}\0${e.to}`))
       : [];
 
     workingEdges = sanitizeRawEdges(nodes, [
@@ -673,13 +550,7 @@ export async function repairAndVerifyDag({
     );
   }
 
-  const tied = applyTopologicalTieBreaker(
-    pillars,
-    nodes,
-    workingEdges,
-    protectedEdgeKeys,
-  );
-
+  const tied = applyTopologicalTieBreaker(pillars, nodes, workingEdges, protectedEdgeKeys);
   return {
     edges: tied.edges,
     initialCyclicSccCount: initialCyclicSccs.length,
@@ -711,7 +582,6 @@ function normalizeNodesAndTracks({
 } {
   const pillarsById = new Map(pillars.map((p) => [p.id, p]));
   const fallbackPillar = pillars[0];
-
   const usedNodeIds = new Set<string>();
   const nodeRawToId = new Map<string, string>();
 
@@ -732,27 +602,19 @@ function normalizeNodesAndTracks({
         );
 
   const stagedNodes = sourceNodes.map((rn, idx) => {
-    const canonicalId = uniqueSlug(
-      rn.id || rn.name,
-      `concept-${idx + 1}`,
-      usedNodeIds,
-    );
+    const canonicalId = uniqueSlug(rn.id || rn.name, `concept-${idx + 1}`, usedNodeIds);
     if (rn.id) nodeRawToId.set(rn.id.trim().toLowerCase(), canonicalId);
     nodeRawToId.set(canonicalId, canonicalId);
 
-    // Resolve pillarId + topicId against canonical Pass 1 pillars
     const rawTopicKey = rn.topicId?.trim().toLowerCase() ?? "";
-    const rawPillarKey = rn.pillarId.trim().toLowerCase();
     const topicLoc = rawTopicKey ? topicRawToLocation.get(rawTopicKey) : undefined;
 
     let resolvedPillarId =
-      pillarRawToId.get(rawPillarKey) ??
+      pillarRawToId.get(rn.pillarId.trim().toLowerCase()) ??
       pillarRawToId.get(toSlugId(rn.pillarId, "")) ??
       topicLoc?.pillarId ??
       fallbackPillar.id;
-    if (!pillarsById.has(resolvedPillarId)) {
-      resolvedPillarId = fallbackPillar.id;
-    }
+    if (!pillarsById.has(resolvedPillarId)) resolvedPillarId = fallbackPillar.id;
 
     const pillarObj = pillarsById.get(resolvedPillarId)!;
     const pillarTopicSet = new Set(pillarObj.topics.map((t) => t.id));
@@ -760,43 +622,30 @@ function normalizeNodesAndTracks({
     let resolvedTopicId: string | null = null;
     if (topicLoc && topicLoc.pillarId === resolvedPillarId) {
       resolvedTopicId = topicLoc.topicId;
-    } else if (rn.topicId) {
-      const slugCandidate = toSlugId(rn.topicId, "");
-      if (pillarTopicSet.has(slugCandidate)) {
-        resolvedTopicId = slugCandidate;
-      }
-    }
-    if (!resolvedTopicId && pillarObj.topics.length > 0) {
+    } else if (rn.topicId && pillarTopicSet.has(toSlugId(rn.topicId, ""))) {
+      resolvedTopicId = toSlugId(rn.topicId, "");
+    } else if (pillarObj.topics.length > 0) {
       resolvedTopicId = pillarObj.topics[idx % pillarObj.topics.length].id;
     }
 
     const keywords = Array.from(
-      new Set(
-        rn.keywords
-          .map((k) => k.trim().toLowerCase().slice(0, 60))
-          .filter(Boolean),
-      ),
+      new Set(rn.keywords.map((k) => k.trim().toLowerCase().slice(0, 60)).filter(Boolean)),
     ).slice(0, 12);
     if (keywords.length === 0) {
       keywords.push(rn.name.trim().toLowerCase().slice(0, 60) || canonicalId);
     }
-
-    const components = Array.from(
-      new Set(rn.components.map((c) => c.trim().slice(0, 60)).filter(Boolean)),
-    ).slice(0, 8);
 
     const node: GraphNode = {
       id: canonicalId,
       name: rn.name.trim().slice(0, 100) || `Concept ${idx + 1}`,
       pillarId: resolvedPillarId,
       topicId: resolvedTopicId,
-      summary:
-        rn.summary.trim().slice(0, 500) ||
-        `Core concept in ${pillarObj.name}.`,
+      summary: rn.summary.trim().slice(0, 500) || `Core concept in ${pillarObj.name}.`,
       keywords,
-      components,
+      components: Array.from(
+        new Set(rn.components.map((c) => c.trim().slice(0, 60)).filter(Boolean)),
+      ).slice(0, 8),
     };
-
     return { node, rawPrereqs: rn.prereqIds };
   });
 
@@ -805,15 +654,11 @@ function normalizeNodesAndTracks({
   for (const item of stagedNodes) {
     for (const rawPre of item.rawPrereqs) {
       const preId =
-        nodeRawToId.get(rawPre.trim().toLowerCase()) ??
-        nodeRawToId.get(toSlugId(rawPre, ""));
-      if (preId && preId !== item.node.id) {
-        rawEdges.push({ from: preId, to: item.node.id });
-      }
+        nodeRawToId.get(rawPre.trim().toLowerCase()) ?? nodeRawToId.get(toSlugId(rawPre, ""));
+      if (preId && preId !== item.node.id) rawEdges.push({ from: preId, to: item.node.id });
     }
   }
 
-  // Normalize learning tracks
   const validNodeSet = new Set(nodes.map((n) => n.id));
   const usedTrackIds = new Set<string>();
   const tracks: LearningTrack[] = [];
@@ -823,11 +668,7 @@ function normalizeNodesAndTracks({
     const targets = Array.from(
       new Set(
         rt.targets
-          .map(
-            (t) =>
-              nodeRawToId.get(t.trim().toLowerCase()) ??
-              nodeRawToId.get(toSlugId(t, "")),
-          )
+          .map((t) => nodeRawToId.get(t.trim().toLowerCase()) ?? nodeRawToId.get(toSlugId(t, "")))
           .filter((id): id is string => Boolean(id && validNodeSet.has(id))),
       ),
     );
@@ -845,14 +686,12 @@ function normalizeNodesAndTracks({
   if (tracks.length === 0 && nodes.length > 0) {
     const outgoing = new Set(rawEdges.map((e) => e.from));
     const leaves = nodes.filter((n) => !outgoing.has(n.id)).map((n) => n.id);
-    const defaultTargets =
-      leaves.length > 0 ? leaves.slice(0, 6) : [nodes[nodes.length - 1].id];
     tracks.push({
       id: uniqueSlug("complete-mastery", "track-1", usedTrackIds),
       name: "Complete Mastery Path",
       emoji: "🧭",
       description: "End-to-end prerequisite progression across every pillar.",
-      targets: defaultTargets,
+      targets: leaves.length > 0 ? leaves.slice(0, 6) : [nodes[nodes.length - 1].id],
     });
   }
 
@@ -863,16 +702,9 @@ function normalizeNodesAndTracks({
    2-Pass Narrow-Schema DAG Compiler & Interactive Blueprint Refiner
    ════════════════════════════════════════════════════════════════ */
 
-function depthTargets(depth: CompilerDepth): {
-  pillarsRange: string;
-  nodesRange: string;
-} {
-  if (depth === "quick") {
-    return { pillarsRange: "3 to 4", nodesRange: "12 to 18" };
-  }
-  if (depth === "deep") {
-    return { pillarsRange: "5 to 7", nodesRange: "36 to 55" };
-  }
+function depthTargets(depth: CompilerDepth): { pillarsRange: string; nodesRange: string } {
+  if (depth === "quick") return { pillarsRange: "3 to 4", nodesRange: "12 to 18" };
+  if (depth === "deep") return { pillarsRange: "5 to 7", nodesRange: "36 to 55" };
   return { pillarsRange: "4 to 6", nodesRange: "24 to 36" };
 }
 
@@ -897,9 +729,7 @@ export interface CompileKitDagResult {
   dagRepair: DagRepairReport;
 }
 
-export async function compileKitDag(
-  input: CompileKitDagInput,
-): Promise<CompileKitDagResult> {
+export async function compileKitDag(input: CompileKitDagInput): Promise<CompileKitDagResult> {
   const cleanTopic = input.topicPrompt.trim();
   if (!cleanTopic) {
     throw new ValidationError("Topic prompt is required to compile a Study Kit.");
@@ -911,7 +741,7 @@ export async function compileKitDag(
 
   const calibrationLines = input.calibrationAnswers
     ? Object.entries(input.calibrationAnswers)
-        .filter(([, v]) => Boolean(v && v.trim()))
+        .filter(([, v]) => Boolean(v?.trim()))
         .map(([k, v]) => `- ${k}: ${v.trim()}`)
         .join("\n")
     : "";
@@ -921,9 +751,7 @@ export async function compileKitDag(
     `Depth Mode: ${depth} (target ${targets.pillarsRange} pillars and ${targets.nodesRange} total concept nodes)\n` +
     (input.suggestedTitle ? `Suggested Title: ${input.suggestedTitle}\n` : "") +
     (input.suggestedIcon ? `Suggested Icon: ${input.suggestedIcon}\n` : "") +
-    (input.suggestedDescription
-      ? `Suggested Description: ${input.suggestedDescription}\n`
-      : "") +
+    (input.suggestedDescription ? `Suggested Description: ${input.suggestedDescription}\n` : "") +
     (input.suggestedCapabilities
       ? `Suggested Capabilities: ${JSON.stringify(input.suggestedCapabilities)}\n`
       : "") +
@@ -952,9 +780,7 @@ export async function compileKitDag(
     feature: "compiler.pass1Macro",
   });
 
-  const { pillars, pillarRawToId, topicRawToLocation } = normalizePillars(
-    pass1.pillars,
-  );
+  const { pillars, pillarRawToId, topicRawToLocation } = normalizePillars(pass1.pillars);
 
   const canonicalOutline = pillars
     .map(
@@ -1052,7 +878,16 @@ export async function compileKitDag(
         }
       : undefined;
 
-  const candidateSkeleton: KitSkeletonV1 = {
+  const normPersona = (
+    raw: { label: string; prompt: string },
+    defLabel: string,
+    defPrompt: string,
+  ) => ({
+    label: raw.label.trim().slice(0, 60) || defLabel,
+    prompt: raw.prompt.trim() || defPrompt,
+  });
+
+  const skeleton = verifyKitSkeleton({
     format: "toolbox-kit",
     schemaVersion: 1,
     exportedAt: new Date().toISOString(),
@@ -1067,11 +902,7 @@ export async function compileKitDag(
       color: kitColor,
       version: 1,
       tags: Array.from(
-        new Set(
-          pass1.identity.tags
-            .map((t) => t.trim().toLowerCase().slice(0, 40))
-            .filter(Boolean),
-        ),
+        new Set(pass1.identity.tags.map((t) => t.trim().toLowerCase().slice(0, 40)).filter(Boolean)),
       ).slice(0, 10),
     },
     capabilities: {
@@ -1085,51 +916,38 @@ export async function compileKitDag(
         pass1.tutor.rolePrompt.trim() ||
         `You are an expert tutor guiding a learner through ${kitName}.`,
       personas: {
-        socratic: {
-          label: pass1.tutor.personas.socratic.label.trim().slice(0, 60) || "Socratic",
-          prompt:
-            pass1.tutor.personas.socratic.prompt.trim() ||
-            "Guide with probing questions before revealing answers.",
-        },
-        eli5: {
-          label: pass1.tutor.personas.eli5.label.trim().slice(0, 60) || "Intuitive",
-          prompt:
-            pass1.tutor.personas.eli5.prompt.trim() ||
-            "Explain from concrete analogies and everyday mental models first.",
-        },
-        strict: {
-          label: pass1.tutor.personas.strict.label.trim().slice(0, 60) || "Rigorous",
-          prompt:
-            pass1.tutor.personas.strict.prompt.trim() ||
-            "Insist on precise terminology, invariants, and edge-case reasoning.",
-        },
-        devil: {
-          label:
-            pass1.tutor.personas.devil.label.trim().slice(0, 60) ||
-            "Devil's Advocate",
-          prompt:
-            pass1.tutor.personas.devil.prompt.trim() ||
-            "Challenge hidden assumptions, failure modes, and naive designs.",
-        },
+        socratic: normPersona(
+          pass1.tutor.personas.socratic,
+          "Socratic",
+          "Guide with probing questions before revealing answers.",
+        ),
+        eli5: normPersona(
+          pass1.tutor.personas.eli5,
+          "Intuitive",
+          "Explain from concrete analogies and everyday mental models first.",
+        ),
+        strict: normPersona(
+          pass1.tutor.personas.strict,
+          "Rigorous",
+          "Insist on precise terminology, invariants, and edge-case reasoning.",
+        ),
+        devil: normPersona(
+          pass1.tutor.personas.devil,
+          "Devil's Advocate",
+          "Challenge hidden assumptions, failure modes, and naive designs.",
+        ),
       },
       starterPrompts: pass1.tutor.starterPrompts
         .map((p) => p.trim().slice(0, 240))
         .filter(Boolean)
         .slice(0, 12),
       cardExamples: pass1.tutor.cardExamples
-        .map((c) => ({
-          front: c.front.trim().slice(0, 300),
-          back: c.back.trim().slice(0, 500),
-        }))
+        .map((c) => ({ front: c.front.trim().slice(0, 300), back: c.back.trim().slice(0, 500) }))
         .filter((c) => c.front && c.back)
         .slice(0, 5),
     },
     pillars,
-    graph: {
-      nodes,
-      edges: dagRepair.edges,
-      tracks,
-    },
+    graph: { nodes, edges: dagRepair.edges, tracks },
     ...(canvasConfig ? { canvasConfig } : {}),
     seeds: {
       starterDeck: {
@@ -1141,14 +959,9 @@ export async function compileKitDag(
       baselineGuideNotes: [],
     },
     bibliography,
-  };
+  } satisfies KitSkeletonV1);
 
-  const skeleton = verifyKitSkeleton(candidateSkeleton);
-  return {
-    skeleton,
-    citedSourceIds: pass2.citedSourceIds,
-    dagRepair,
-  };
+  return { skeleton, citedSourceIds: pass2.citedSourceIds, dagRepair };
 }
 
 /**
@@ -1170,38 +983,22 @@ export function normalizeEditedDraftSkeleton(draft: KitSkeletonV1): KitSkeletonV
         promptHint: s.promptHint ?? "",
         ownershipRule: s.ownershipRule ?? "",
       })),
-      topics: p.topics.map((t) => ({
-        id: t.id,
-        name: t.name,
-        summary: t.summary ?? "",
-      })),
+      topics: p.topics.map((t) => ({ id: t.id, name: t.name, summary: t.summary ?? "" })),
     })),
   );
 
-  // Keep nodes whose pillar still exists (or snap to remaining pillars if all moved)
   const survivingPillarIds = new Set(pillars.map((p) => p.id));
   const filteredDraftNodes = draft.graph.nodes.filter((n) =>
     survivingPillarIds.has(pillarRawToId.get(n.pillarId.toLowerCase()) ?? n.pillarId),
   );
 
-  // Ensure every topic has at least one concept node if user added a brand-new pillar/topic in UI
   const coveredTopics = new Set(
     filteredDraftNodes.map((n) => `${n.pillarId}\0${n.topicId ?? ""}`),
   );
-  const augmentedNodes = [
-    ...filteredDraftNodes.map((n) => ({
-      id: n.id,
-      name: n.name,
-      pillarId: n.pillarId,
-      topicId: n.topicId,
-      summary: n.summary,
-      keywords: n.keywords,
-      components: n.components,
-      prereqIds: draft.graph.edges
-        .filter((e) => e.to === n.id)
-        .map((e) => e.from),
-    })),
-  ];
+  const augmentedNodes = filteredDraftNodes.map((n) => ({
+    ...n,
+    prereqIds: draft.graph.edges.filter((e) => e.to === n.id).map((e) => e.from),
+  }));
 
   for (const p of pillars) {
     for (const t of p.topics) {
@@ -1239,11 +1036,7 @@ export function normalizeEditedDraftSkeleton(draft: KitSkeletonV1): KitSkeletonV
       name: draft.identity.name.trim().slice(0, 100) || "Study Kit",
     },
     pillars,
-    graph: {
-      nodes,
-      edges: tied.edges,
-      tracks,
-    },
+    graph: { nodes, edges: tied.edges, tracks },
   });
 }
 
@@ -1314,9 +1107,7 @@ export async function refineBlueprint({
     feature: "compiler.refine",
   });
 
-  const { pillars, pillarRawToId, topicRawToLocation } = normalizePillars(
-    refined.pillars,
-  );
+  const { pillars, pillarRawToId, topicRawToLocation } = normalizePillars(refined.pillars);
   const { nodes, rawEdges, tracks } = normalizeNodesAndTracks({
     pillars,
     pillarRawToId,
@@ -1334,13 +1125,9 @@ export async function refineBlueprint({
   });
 
   const newBib = hydrateBibliography(pool, refined.citedSourceIds);
-  const mergedBibliography =
-    newBib.length > 0 ? newBib : normalizedDraft.bibliography;
+  const nextName = refined.identity.name.trim().slice(0, 100) || normalizedDraft.identity.name;
 
-  const nextName =
-    refined.identity.name.trim().slice(0, 100) || normalizedDraft.identity.name;
-
-  const candidate: KitSkeletonV1 = {
+  const skeleton = verifyKitSkeleton({
     ...normalizedDraft,
     exportedAt: new Date().toISOString(),
     identity: {
@@ -1364,18 +1151,9 @@ export async function refineBlueprint({
       enableSvgDiagrams: Boolean(refined.capabilities.enableSvgDiagrams),
     },
     pillars,
-    graph: {
-      nodes,
-      edges: dagRepair.edges,
-      tracks,
-    },
-    bibliography: mergedBibliography,
-  };
+    graph: { nodes, edges: dagRepair.edges, tracks },
+    bibliography: newBib.length > 0 ? newBib : normalizedDraft.bibliography,
+  });
 
-  const skeleton = verifyKitSkeleton(candidate);
-  return {
-    skeleton,
-    citedSourceIds: refined.citedSourceIds,
-    dagRepair,
-  };
+  return { skeleton, citedSourceIds: refined.citedSourceIds, dagRepair };
 }

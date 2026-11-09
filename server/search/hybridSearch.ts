@@ -63,6 +63,13 @@ function sha256Hex(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
 }
 
+function resolveChunkId(ownerId: string, item: UpsertRagChunkInput): string {
+  return (
+    item.chunkId ??
+    `${ownerId}:${item.kitId}:${item.kind}:${item.sourceRefId}`
+  );
+}
+
 function readVecTableDimension(db: Database.Database): number | null {
   const row = db
     .prepare(
@@ -156,9 +163,7 @@ export async function upsertRagChunksBatch(
     const trimmedContent = item.content.trim();
     if (!trimmedContent) continue;
     const title = (item.title ?? "").trim();
-    const chunkId =
-      item.chunkId ??
-      `${scope.ownerId}:${item.kitId}:${item.kind}:${item.sourceRefId}`;
+    const chunkId = resolveChunkId(scope.ownerId, item);
     const contentHash = sha256Hex(`${title}\n${trimmedContent}`);
 
     if (!item.embedding) {
@@ -305,9 +310,7 @@ export async function upsertRagChunk(
   scope: Scope,
   input: UpsertRagChunkInput,
 ): Promise<string> {
-  const chunkId =
-    input.chunkId ??
-    `${scope.ownerId}:${input.kitId}:${input.kind}:${input.sourceRefId}`;
+  const chunkId = resolveChunkId(scope.ownerId, input);
   await upsertRagChunksBatch(db, scope, [{ ...input, chunkId }]);
   return chunkId;
 }
@@ -492,76 +495,47 @@ export async function syncDomainSourcesToRag(
   kitId?: string,
   opts: { pruneStale?: boolean } = {},
 ): Promise<number> {
+  const k = kitId ?? null;
   const inputs: UpsertRagChunkInput[] = [];
 
-  const guideRows = kitId
-    ? (db
-        .prepare(
-          `SELECT kit_id, pillar_id, topic_id, section_id, content
-           FROM guide_content
-           WHERE ownerId = ? AND kit_id = ? AND content != ''`,
-        )
-        .all(scope.ownerId, kitId) as Array<{
-        kit_id: string;
-        pillar_id: string;
-        topic_id: string;
-        section_id: string;
-        content: string;
-      }>)
-    : (db
-        .prepare(
-          `SELECT kit_id, pillar_id, topic_id, section_id, content
-           FROM guide_content
-           WHERE ownerId = ? AND content != ''`,
-        )
-        .all(scope.ownerId) as Array<{
-        kit_id: string;
-        pillar_id: string;
-        topic_id: string;
-        section_id: string;
-        content: string;
-      }>);
+  const guideRows = db
+    .prepare(
+      `SELECT kit_id, pillar_id, topic_id, section_id, content
+       FROM guide_content
+       WHERE ownerId = ? AND (? IS NULL OR kit_id = ?) AND content != ''`,
+    )
+    .all(scope.ownerId, k, k) as Array<{
+    kit_id: string;
+    pillar_id: string;
+    topic_id: string;
+    section_id: string;
+    content: string;
+  }>;
 
   for (const g of guideRows) {
-    const ref = `${g.pillar_id}:${g.topic_id}:${g.section_id}`;
     inputs.push({
       kitId: g.kit_id,
       kind: "guide",
-      sourceRefId: ref,
+      sourceRefId: `${g.pillar_id}:${g.topic_id}:${g.section_id}`,
       title: `${g.topic_id} — ${g.section_id}`,
       content: g.content,
     });
   }
 
-  const cardRows = kitId
-    ? (db
-        .prepare(
-          `SELECT f.id, d.kit_id, f.node_id, f.front, f.back
-           FROM flashcards f
-           JOIN decks d ON d.id = f.deck_id AND d.ownerId = f.ownerId
-           WHERE f.ownerId = ? AND d.kit_id = ?`,
-        )
-        .all(scope.ownerId, kitId) as Array<{
-        id: string;
-        kit_id: string;
-        node_id: string | null;
-        front: string;
-        back: string;
-      }>)
-    : (db
-        .prepare(
-          `SELECT f.id, d.kit_id, f.node_id, f.front, f.back
-           FROM flashcards f
-           JOIN decks d ON d.id = f.deck_id AND d.ownerId = f.ownerId
-           WHERE f.ownerId = ?`,
-        )
-        .all(scope.ownerId) as Array<{
-        id: string;
-        kit_id: string;
-        node_id: string | null;
-        front: string;
-        back: string;
-      }>);
+  const cardRows = db
+    .prepare(
+      `SELECT f.id, d.kit_id, f.node_id, f.front, f.back
+       FROM flashcards f
+       JOIN decks d ON d.id = f.deck_id AND d.ownerId = f.ownerId
+       WHERE f.ownerId = ? AND (? IS NULL OR d.kit_id = ?)`,
+    )
+    .all(scope.ownerId, k, k) as Array<{
+    id: string;
+    kit_id: string;
+    node_id: string | null;
+    front: string;
+    back: string;
+  }>;
 
   for (const c of cardRows) {
     inputs.push({
@@ -574,33 +548,19 @@ export async function syncDomainSourcesToRag(
     });
   }
 
-  const sourceRows = kitId
-    ? (db
-        .prepare(
-          `SELECT sc.id, sc.kit_id, sc.text, s.title
-           FROM kit_source_chunks sc
-           JOIN kit_sources s ON s.id = sc.source_id AND s.ownerId = sc.ownerId
-           WHERE sc.ownerId = ? AND sc.kit_id = ?`,
-        )
-        .all(scope.ownerId, kitId) as Array<{
-        id: string;
-        kit_id: string;
-        text: string;
-        title: string;
-      }>)
-    : (db
-        .prepare(
-          `SELECT sc.id, sc.kit_id, sc.text, s.title
-           FROM kit_source_chunks sc
-           JOIN kit_sources s ON s.id = sc.source_id AND s.ownerId = sc.ownerId
-           WHERE sc.ownerId = ?`,
-        )
-        .all(scope.ownerId) as Array<{
-        id: string;
-        kit_id: string;
-        text: string;
-        title: string;
-      }>);
+  const sourceRows = db
+    .prepare(
+      `SELECT sc.id, sc.kit_id, sc.text, s.title
+       FROM kit_source_chunks sc
+       JOIN kit_sources s ON s.id = sc.source_id AND s.ownerId = sc.ownerId
+       WHERE sc.ownerId = ? AND (? IS NULL OR sc.kit_id = ?)`,
+    )
+    .all(scope.ownerId, k, k) as Array<{
+    id: string;
+    kit_id: string;
+    text: string;
+    title: string;
+  }>;
 
   for (const sr of sourceRows) {
     inputs.push({
@@ -612,29 +572,17 @@ export async function syncDomainSourcesToRag(
     });
   }
 
-  const episodicRows = kitId
-    ? (db
-        .prepare(
-          `SELECT id, kit_id, memory_text
-           FROM episodic_memory
-           WHERE ownerId = ? AND kit_id = ?`,
-        )
-        .all(scope.ownerId, kitId) as Array<{
-        id: number;
-        kit_id: string;
-        memory_text: string;
-      }>)
-    : (db
-        .prepare(
-          `SELECT id, kit_id, memory_text
-           FROM episodic_memory
-           WHERE ownerId = ?`,
-        )
-        .all(scope.ownerId) as Array<{
-        id: number;
-        kit_id: string;
-        memory_text: string;
-      }>);
+  const episodicRows = db
+    .prepare(
+      `SELECT id, kit_id, memory_text
+       FROM episodic_memory
+       WHERE ownerId = ? AND (? IS NULL OR kit_id = ?)`,
+    )
+    .all(scope.ownerId, k, k) as Array<{
+    id: number;
+    kit_id: string;
+    memory_text: string;
+  }>;
 
   for (const ep of episodicRows) {
     inputs.push({
@@ -649,21 +597,13 @@ export async function syncDomainSourcesToRag(
   if (opts.pruneStale) {
     const liveIds = new Set<string>();
     for (const item of inputs) {
-      if (!item.content.trim()) continue;
-      liveIds.add(
-        item.chunkId ??
-          `${scope.ownerId}:${item.kitId}:${item.kind}:${item.sourceRefId}`,
-      );
+      if (item.content.trim()) liveIds.add(resolveChunkId(scope.ownerId, item));
     }
-    const storedRows = kitId
-      ? (db
-          .prepare(
-            "SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND kit_id = ?",
-          )
-          .all(scope.ownerId, kitId) as Array<{ chunk_id: string }>)
-      : (db
-          .prepare("SELECT chunk_id FROM rag_chunks WHERE ownerId = ?")
-          .all(scope.ownerId) as Array<{ chunk_id: string }>);
+    const storedRows = db
+      .prepare(
+        "SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND (? IS NULL OR kit_id = ?)",
+      )
+      .all(scope.ownerId, k, k) as Array<{ chunk_id: string }>;
     const staleIds = storedRows
       .map((r) => r.chunk_id)
       .filter((id) => !liveIds.has(id));
@@ -831,26 +771,23 @@ export async function hybridSearch(
     string,
     { score: number; channels: Set<"fts" | "vec"> }
   >();
-
-  ftsHits.forEach((hit, idx) => {
-    const cur = scores.get(hit.chunk_id) ?? {
-      score: 0,
-      channels: new Set<"fts" | "vec">(),
-    };
-    cur.score += BM25_WEIGHT / (RRF_K + idx + 1);
-    cur.channels.add("fts");
-    scores.set(hit.chunk_id, cur);
-  });
-
-  vecHits.forEach((hit, idx) => {
-    const cur = scores.get(hit.chunk_id) ?? {
-      score: 0,
-      channels: new Set<"fts" | "vec">(),
-    };
-    cur.score += VEC_WEIGHT / (RRF_K + idx + 1);
-    cur.channels.add("vec");
-    scores.set(hit.chunk_id, cur);
-  });
+  const addRrf = (
+    hits: ReadonlyArray<{ chunk_id: string }>,
+    weight: number,
+    channel: "fts" | "vec",
+  ) => {
+    hits.forEach((hit, idx) => {
+      const cur = scores.get(hit.chunk_id) ?? {
+        score: 0,
+        channels: new Set<"fts" | "vec">(),
+      };
+      cur.score += weight / (RRF_K + idx + 1);
+      cur.channels.add(channel);
+      scores.set(hit.chunk_id, cur);
+    });
+  };
+  addRrf(ftsHits, BM25_WEIGHT, "fts");
+  addRrf(vecHits, VEC_WEIGHT, "vec");
 
   if (scores.size === 0) return [];
 

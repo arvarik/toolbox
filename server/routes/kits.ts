@@ -83,32 +83,46 @@ function parseCollision(raw: unknown): ImportCollisionPolicy {
   return parsed.data;
 }
 
-router.get("/", (req, res) => {
+function parseBody<T>(schema: z.ZodType<T>, raw: unknown, fallback: string): T {
+  const parsed = schema.safeParse(raw ?? {});
+  if (!parsed.success) {
+    throw new ValidationError(parsed.error.issues[0]?.message ?? fallback);
+  }
+  return parsed.data;
+}
+
+function sendAttachment(
+  res: Response,
+  contentType: string,
+  filename: string,
+  payload: string | Buffer,
+): void {
+  res.setHeader("Content-Type", contentType);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+  res.send(payload);
+}
+
+function handleSkeletonImport(
+  req: Request,
+  res: Response,
+  errMessage: string,
+): void {
   const scope = scopeOf(req);
-  const kits = listOwnedKits(db, scope);
-  res.json({ kits });
-});
-
-router.post(
-  "/import-kit",
-  asyncHandler(async (req, res) => {
-    const scope = scopeOf(req);
-    const body = req.body as Record<string, unknown> | undefined;
-    if (!body || typeof body !== "object") {
-      throw new BadRequestError("Expected JSON Kit skeleton payload");
-    }
-    const hasWrapper = "skeleton" in body && body.skeleton !== undefined;
-    const rawSkeleton = hasWrapper ? body.skeleton : body;
-    const onCollision = parseCollision(
-      (hasWrapper ? body.onCollision : undefined) ?? req.query.onCollision,
-    );
-
-    const result = importKitMode1(db, scope, rawSkeleton, { onCollision });
-    const status =
-      result.mode === "created" || result.mode === "copied" ? 201 : 200;
-    res.status(status).json(result);
-  }),
-);
+  const body = req.body as Record<string, unknown> | undefined;
+  if (!body || typeof body !== "object") {
+    throw new BadRequestError(errMessage);
+  }
+  const hasWrapper = "skeleton" in body && body.skeleton !== undefined;
+  const rawSkeleton = hasWrapper ? body.skeleton : body;
+  const onCollision = parseCollision(
+    (hasWrapper ? body.onCollision : undefined) ?? req.query.onCollision,
+  );
+  const result = importKitMode1(db, scope, rawSkeleton, { onCollision });
+  res
+    .status(result.mode === "created" || result.mode === "copied" ? 201 : 200)
+    .json(result);
+}
 
 async function handleBackupUpload(req: Request, res: Response): Promise<void> {
   const scope = scopeOf(req);
@@ -122,13 +136,24 @@ async function handleBackupUpload(req: Request, res: Response): Promise<void> {
     );
     const zipBuf = await fs.promises.readFile(file.path);
     const result = await importKitBackupZip(db, scope, zipBuf, { onCollision });
-    const status =
-      result.mode === "created" || result.mode === "copied" ? 201 : 200;
-    res.status(status).json(result);
+    res
+      .status(result.mode === "created" || result.mode === "copied" ? 201 : 200)
+      .json(result);
   } finally {
     await fs.promises.unlink(file.path).catch(() => {});
   }
 }
+
+router.get("/", (req, res) => {
+  res.json({ kits: listOwnedKits(db, scopeOf(req)) });
+});
+
+router.post(
+  "/import-kit",
+  asyncHandler(async (req, res) => {
+    handleSkeletonImport(req, res, "Expected JSON Kit skeleton payload");
+  }),
+);
 
 router.post(
   "/import-backup",
@@ -139,8 +164,7 @@ router.post(
 router.post(
   "/import",
   (req, res, next) => {
-    const ct = req.headers["content-type"] ?? "";
-    if (ct.includes("multipart/form-data")) {
+    if ((req.headers["content-type"] ?? "").includes("multipart/form-data")) {
       return uploadBackup.single("file")(req, res, next);
     }
     next();
@@ -150,73 +174,62 @@ router.post(
       await handleBackupUpload(req, res);
       return;
     }
-    const scope = scopeOf(req);
-    const body = req.body as Record<string, unknown> | undefined;
-    if (!body || typeof body !== "object") {
-      throw new BadRequestError("Expected JSON skeleton or multipart backup archive");
-    }
-    const hasWrapper = "skeleton" in body && body.skeleton !== undefined;
-    const rawSkeleton = hasWrapper ? body.skeleton : body;
-    const onCollision = parseCollision(
-      (hasWrapper ? body.onCollision : undefined) ?? req.query.onCollision,
+    handleSkeletonImport(
+      req,
+      res,
+      "Expected JSON skeleton or multipart backup archive",
     );
-    const result = importKitMode1(db, scope, rawSkeleton, { onCollision });
-    const status =
-      result.mode === "created" || result.mode === "copied" ? 201 : 200;
-    res.status(status).json(result);
   }),
 );
 
 router.get("/:id", (req, res) => {
-  const scope = scopeOf(req);
-  const kit = getOwnedKit(db, scope, String(req.params.id));
-  res.json({ kit });
+  res.json({ kit: getOwnedKit(db, scopeOf(req), String(req.params.id)) });
 });
 
 function handleUpdateKit(req: Request, res: Response): void {
-  const scope = scopeOf(req);
-  const parsed = UpdateKitPatchSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    throw new ValidationError(
-      parsed.error.issues[0]?.message ?? "Invalid kit update payload",
-    );
-  }
-  const kit = updateOwnedKit(db, scope, String(req.params.id), parsed.data);
-  res.json({ kit });
+  const patch = parseBody(
+    UpdateKitPatchSchema,
+    req.body,
+    "Invalid kit update payload",
+  );
+  res.json({
+    kit: updateOwnedKit(db, scopeOf(req), String(req.params.id), patch),
+  });
 }
 
 router.patch("/:id", handleUpdateKit);
 router.put("/:id", handleUpdateKit);
 
 router.delete("/:id", (req, res) => {
-  const scope = scopeOf(req);
-  deleteOwnedKit(db, scope, String(req.params.id));
+  deleteOwnedKit(db, scopeOf(req), String(req.params.id));
   res.json({ ok: true });
 });
 
 router.post("/:id/touch", (req, res) => {
-  const scope = scopeOf(req);
-  touchOwnedKit(db, scope, String(req.params.id));
+  touchOwnedKit(db, scopeOf(req), String(req.params.id));
   res.json({ ok: true });
 });
 
 router.get("/:id/archived-notes", (req, res) => {
-  const scope = scopeOf(req);
-  const notes = getArchivedGuideNotes(db, scope, String(req.params.id));
-  res.json({ notes });
+  res.json({
+    notes: getArchivedGuideNotes(db, scopeOf(req), String(req.params.id)),
+  });
 });
 
 router.post(
   "/:id/archived-notes/refile",
   asyncHandler(async (req, res) => {
-    const scope = scopeOf(req);
-    const parsed = RefileArchivedSchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      throw new ValidationError(
-        parsed.error.issues[0]?.message ?? "Invalid refile payload",
-      );
-    }
-    await refileArchivedGuideNote(db, scope, String(req.params.id), parsed.data);
+    const data = parseBody(
+      RefileArchivedSchema,
+      req.body,
+      "Invalid refile payload",
+    );
+    await refileArchivedGuideNote(
+      db,
+      scopeOf(req),
+      String(req.params.id),
+      data,
+    );
     res.json({ ok: true });
   }),
 );
@@ -269,91 +282,61 @@ router.post("/:id/sync", handleSyncKit);
 router.post("/:id/sync-upstream", handleSyncKit);
 
 router.post("/:id/publish", (req, res) => {
-  const scope = scopeOf(req);
   const user = currentUser(req);
   if (!user) {
     throw new AppError("Authentication required", 401, { code: "UNAUTHORIZED" });
   }
-  const parsed = PublishKitSchema.safeParse(req.body ?? {});
-  if (!parsed.success) {
-    throw new ValidationError(
-      parsed.error.issues[0]?.message ?? "Invalid publish payload",
-    );
-  }
+  const data = parseBody(PublishKitSchema, req.body, "Invalid publish payload");
   const sharedKit = publishKitToSharedLibrary(
     db,
     user,
-    scope,
+    scopeOf(req),
     String(req.params.id),
-    parsed.data,
+    data,
   );
   res.status(201).json({ sharedKit });
 });
 
-router.get(
-  "/:id/export",
-  asyncHandler(async (req, res) => {
-    const scope = scopeOf(req);
-    const id = String(req.params.id);
-    const mode = req.query.mode === "backup" ? "backup" : "kit";
-
-    if (mode === "backup") {
-      const { filename, buffer } = await exportKitBackupZip(db, scope, id);
-      res.setHeader("Content-Type", "application/zip");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${filename}"`,
-      );
-      res.send(buffer);
-      return;
-    }
-
-    const includeGuideNotes =
-      req.query.includeGuideNotes === "true" ||
-      req.query.includeGuideNotes === "1";
-    const { filename, skeleton } = exportKitMode1(db, scope, id, {
-      includeGuideNotes,
-    });
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(JSON.stringify(skeleton, null, 2));
-  }),
-);
-
-router.get("/:id/export-kit", (req, res) => {
-  const scope = scopeOf(req);
+function sendMode1Export(req: Request, res: Response): void {
   const includeGuideNotes =
     req.query.includeGuideNotes === "true" ||
     req.query.includeGuideNotes === "1";
   const { filename, skeleton } = exportKitMode1(
     db,
-    scope,
+    scopeOf(req),
     String(req.params.id),
     { includeGuideNotes },
   );
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-  res.send(JSON.stringify(skeleton, null, 2));
-});
+  sendAttachment(
+    res,
+    "application/json; charset=utf-8",
+    filename,
+    JSON.stringify(skeleton, null, 2),
+  );
+}
+
+async function sendBackupExport(req: Request, res: Response): Promise<void> {
+  const { filename, buffer } = await exportKitBackupZip(
+    db,
+    scopeOf(req),
+    String(req.params.id),
+  );
+  sendAttachment(res, "application/zip", filename, buffer);
+}
 
 router.get(
-  "/:id/export-backup",
+  "/:id/export",
   asyncHandler(async (req, res) => {
-    const scope = scopeOf(req);
-    const { filename, buffer } = await exportKitBackupZip(
-      db,
-      scope,
-      String(req.params.id),
-    );
-    res.setHeader("Content-Type", "application/zip");
-    res.setHeader("X-Content-Type-Options", "nosniff");
-    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
-    res.send(buffer);
+    if (req.query.mode === "backup") {
+      await sendBackupExport(req, res);
+      return;
+    }
+    sendMode1Export(req, res);
   }),
 );
+
+router.get("/:id/export-kit", sendMode1Export);
+router.get("/:id/export-backup", asyncHandler(sendBackupExport));
 
 router.get(
   "/:id/sources/:sourceId/file",

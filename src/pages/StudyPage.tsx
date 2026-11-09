@@ -113,6 +113,20 @@ const DEFAULT_DECK_SETTINGS: DeckSchedulerSettings = {
   easy_bonus: 1.3,
 }
 
+const errMsg = (err: unknown, fallback: string) =>
+  err instanceof Error && err.message ? err.message : fallback
+
+const tagChipStyle = (active: boolean) => ({
+  fontSize: '11px',
+  padding: '2px 10px',
+  borderRadius: 'var(--radius-full)',
+  background: active ? 'var(--color-accent-subtle)' : 'transparent',
+  color: active ? 'var(--color-accent)' : 'var(--color-text-secondary)',
+  fontWeight: active ? 600 : 400,
+})
+
+const QUICK_BTN_STYLE = { width: 28, height: 28 } as const
+
 const mapCardFromApi = (c: RawApiCard): FlashcardItem => ({
   id: c.id,
   deck_id: c.deck_id,
@@ -249,10 +263,7 @@ export default function StudyPage() {
         })
       }
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to load starter deck',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to load starter deck') })
     } finally {
       setIsLoadingStarter(false)
     }
@@ -273,31 +284,38 @@ export default function StudyPage() {
   ].sort()
 
   const filteredDecks = decks.filter((d) => {
+    const q = searchQuery.toLowerCase()
     const matchesSearch =
-      d.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      Boolean(d.tags && d.tags.toLowerCase().includes(searchQuery.toLowerCase()))
+      d.name.toLowerCase().includes(q) || Boolean(d.tags?.toLowerCase().includes(q))
     const matchesTag =
       !activeTag ||
       Boolean(
-        d.tags &&
-          d.tags
-            .split(',')
-            .map((t) => t.trim())
-            .includes(activeTag)
+        d.tags
+          ?.split(',')
+          .map((t) => t.trim())
+          .includes(activeTag)
       )
     return matchesSearch && matchesTag
   })
 
-  const handleDeckClick = async (deck: StudyDeckItem) => {
+  const openFullDeck = async (
+    deck: StudyDeckItem,
+    targetView: StudyViewMode,
+    eagerView = true
+  ) => {
     setSelectedDeck(deck)
-    setView('study')
+    if (eagerView) setView(targetView)
     try {
       const fullDeck = (await decksApi.get(deck.id)) as RawApiDeck
       setSelectedDeck(mapDeckFromApi(fullDeck))
+      if (!eagerView) setView(targetView)
     } catch {
       // Ignore
     }
   }
+
+  const handleDeckClick = (deck: StudyDeckItem) => openFullDeck(deck, 'study')
+  const handleEditDeck = (deck: StudyDeckItem) => openFullDeck(deck, 'edit')
 
   const handleReviewDeck = async (deck: StudyDeckItem) => {
     setSelectedDeck(deck)
@@ -316,17 +334,6 @@ export default function StudyPage() {
   const handleNewDeck = () => {
     setSelectedDeck(null)
     setView('new')
-  }
-
-  const handleEditDeck = async (deck: StudyDeckItem) => {
-    setSelectedDeck(deck)
-    setView('edit')
-    try {
-      const fullDeck = (await decksApi.get(deck.id)) as RawApiDeck
-      setSelectedDeck(mapDeckFromApi(fullDeck))
-    } catch {
-      // Ignore
-    }
   }
 
   const handleSaveDeck = async (data: DeckSavePayload) => {
@@ -439,10 +446,7 @@ export default function StudyPage() {
         setDecks((list as RawApiDeck[]).map(mapDeckFromApi))
       }
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to save deck',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to save deck') })
     }
   }
 
@@ -456,13 +460,22 @@ export default function StudyPage() {
     }
   }
 
+  const reloadSelectedDeck = async (deckId: string) => {
+    const fullDeck = (await decksApi.get(deckId)) as RawApiDeck
+    setSelectedDeck(mapDeckFromApi(fullDeck))
+  }
+
+  const backToList = () => {
+    setView('list')
+    setSelectedDeck(null)
+    void refreshDecks()
+  }
+
   const handleDeleteDeck = (deck: StudyDeckItem) => {
     setDecks((prev) => prev.filter((d) => d.id !== deck.id))
     setDeleteModal(null)
     const wasSelected = Boolean(selectedDeck && selectedDeck.id === deck.id)
-    if (wasSelected) {
-      setSelectedDeck(null)
-    }
+    if (wasSelected) setSelectedDeck(null)
 
     const actionId = `delete-deck-${deck.id}`
     useAppStore.getState().scheduleAction(
@@ -473,7 +486,7 @@ export default function StudyPage() {
         } catch (err) {
           useAppStore.getState().addToast({
             type: 'error',
-            message: err instanceof Error && err.message ? err.message : 'Failed to delete deck',
+            message: errMsg(err, 'Failed to delete deck'),
           })
           void refreshDecks()
         }
@@ -489,9 +502,7 @@ export default function StudyPage() {
         onClick: () => {
           if (useAppStore.getState().cancelAction(actionId)) {
             setDecks((prev) => [...prev, deck])
-            if (wasSelected) {
-              setSelectedDeck(deck)
-            }
+            if (wasSelected) setSelectedDeck(deck)
           }
         },
       },
@@ -510,17 +521,14 @@ export default function StudyPage() {
       setDecks((prev) =>
         prev.map((d) => (d.id === deckId ? { ...d, settings: nextSettings } : d))
       )
-      if (selectedDeck && selectedDeck.id === deckId) {
+      if (selectedDeck?.id === deckId) {
         setSelectedDeck((prev) => (prev ? { ...prev, settings: nextSettings } : null))
       }
       setOptionsModalDeck(null)
       addToast({ type: 'success', message: 'Deck settings saved successfully' })
       void refreshDecks()
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to save deck settings',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to save deck settings') })
     }
   }
 
@@ -531,14 +539,10 @@ export default function StudyPage() {
     if (!selectedDeck) return
     try {
       await flashcardsApi.update(selectedDeck.id, cardId, cardData)
-      const fullDeck = (await decksApi.get(selectedDeck.id)) as RawApiDeck
-      setSelectedDeck(mapDeckFromApi(fullDeck))
+      await reloadSelectedDeck(selectedDeck.id)
       addToast({ type: 'success', message: 'Card updated' })
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to update card',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to update card') })
     }
   }
 
@@ -559,10 +563,9 @@ export default function StudyPage() {
         } catch (err) {
           useAppStore.getState().addToast({
             type: 'error',
-            message: err instanceof Error && err.message ? err.message : 'Failed to delete card',
+            message: errMsg(err, 'Failed to delete card'),
           })
-          const fullDeck = (await decksApi.get(targetDeckId)) as RawApiDeck
-          setSelectedDeck(mapDeckFromApi(fullDeck))
+          await reloadSelectedDeck(targetDeckId)
         }
       },
       5000
@@ -575,13 +578,16 @@ export default function StudyPage() {
         label: 'Undo',
         onClick: () => {
           if (useAppStore.getState().cancelAction(actionId) && cardToRestore) {
-            setSelectedDeck((prev) => {
-              if (!prev) return null
-              const newCards = [...prev.cards, cardToRestore].sort(
-                (a, b) => (a.position || 0) - (b.position || 0)
-              )
-              return { ...prev, cards: newCards }
-            })
+            setSelectedDeck((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    cards: [...prev.cards, cardToRestore].sort(
+                      (a, b) => (a.position || 0) - (b.position || 0)
+                    ),
+                  }
+                : null
+            )
           }
         },
       },
@@ -592,14 +598,10 @@ export default function StudyPage() {
     if (!selectedDeck) return
     try {
       await flashcardsApi.create(selectedDeck.id, { front: 'New Front', back: 'New Back' })
-      const fullDeck = (await decksApi.get(selectedDeck.id)) as RawApiDeck
-      setSelectedDeck(mapDeckFromApi(fullDeck))
+      await reloadSelectedDeck(selectedDeck.id)
       addToast({ type: 'success', message: 'Blank card added' })
     } catch (err) {
-      addToast({
-        type: 'error',
-        message: err instanceof Error && err.message ? err.message : 'Failed to add card',
-      })
+      addToast({ type: 'error', message: errMsg(err, 'Failed to add card') })
     }
   }
 
@@ -613,11 +615,7 @@ export default function StudyPage() {
             deckName={selectedDeck.name}
             deckId={selectedDeck.id}
             reviewMode={view === 'review'}
-            onBack={() => {
-              setView('list')
-              setSelectedDeck(null)
-              void refreshDecks()
-            }}
+            onBack={backToList}
           />
         </div>
         {!isMobile && (
@@ -638,11 +636,7 @@ export default function StudyPage() {
         <div className="study-main">
           <CardBrowser
             deck={selectedDeck}
-            onBack={() => {
-              setView('list')
-              setSelectedDeck(null)
-              void refreshDecks()
-            }}
+            onBack={backToList}
             onSaveCard={handleSaveBrowserCard}
             onDeleteCard={handleDeleteBrowserCard}
             onAddCard={handleAddBrowserCard}
@@ -657,14 +651,7 @@ export default function StudyPage() {
     return (
       <div className="study-layout" id="study-page">
         <div className="study-main">
-          <StatsDashboard
-            deck={selectedDeck}
-            onBack={() => {
-              setView('list')
-              setSelectedDeck(null)
-              void refreshDecks()
-            }}
-          />
+          <StatsDashboard deck={selectedDeck} onBack={backToList} />
         </div>
       </div>
     )
@@ -778,14 +765,7 @@ export default function StudyPage() {
                       <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap', marginTop: 'var(--space-2)' }}>
                         <button
                           className="btn btn-ghost"
-                          style={{
-                            fontSize: '11px',
-                            padding: '2px 10px',
-                            borderRadius: 'var(--radius-full)',
-                            background: !activeTag ? 'var(--color-accent-subtle)' : 'transparent',
-                            color: !activeTag ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-                            fontWeight: !activeTag ? 600 : 400,
-                          }}
+                          style={tagChipStyle(!activeTag)}
                           onClick={() => setActiveTag('')}
                         >
                           All
@@ -794,14 +774,7 @@ export default function StudyPage() {
                           <button
                             key={tag}
                             className="btn btn-ghost"
-                            style={{
-                              fontSize: '11px',
-                              padding: '2px 10px',
-                              borderRadius: 'var(--radius-full)',
-                              background: activeTag === tag ? 'var(--color-accent-subtle)' : 'transparent',
-                              color: activeTag === tag ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-                              fontWeight: activeTag === tag ? 600 : 400,
-                            }}
+                            style={tagChipStyle(activeTag === tag)}
                             onClick={() => setActiveTag(activeTag === tag ? '' : tag)}
                           >
                             {tag}
@@ -863,80 +836,31 @@ export default function StudyPage() {
                                 void handleReviewDeck(deck)
                               }}
                               title="Review Due Cards"
-                              style={{ width: 28, height: 28, color: 'var(--color-accent)' }}
+                              style={{ ...QUICK_BTN_STYLE, color: 'var(--color-accent)' }}
                             >
                               <Clock size={12} />
                             </button>
                           )}
-                          <button
-                            className="btn btn-ghost btn-icon btn-sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              void handleDeckClick(deck)
-                            }}
-                            title="Study"
-                            style={{ width: 28, height: 28 }}
-                          >
-                            <Play size={12} />
-                          </button>
-                          <button
-                            className="btn btn-ghost btn-icon btn-sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setSelectedDeck(deck)
-                              decksApi
-                                .get(deck.id)
-                                .then((fullDeck) => {
-                                  setSelectedDeck(mapDeckFromApi(fullDeck as RawApiDeck))
-                                  setView('browser')
-                                })
-                                .catch(() => {})
-                            }}
-                            title="Browse Cards"
-                            style={{ width: 28, height: 28 }}
-                          >
-                            <Search size={12} />
-                          </button>
-                          <button
-                            className="btn btn-ghost btn-icon btn-sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setSelectedDeck(deck)
-                              decksApi
-                                .get(deck.id)
-                                .then((fullDeck) => {
-                                  setSelectedDeck(mapDeckFromApi(fullDeck as RawApiDeck))
-                                  setView('stats')
-                                })
-                                .catch(() => {})
-                            }}
-                            title="Deck Stats"
-                            style={{ width: 28, height: 28 }}
-                          >
-                            <BarChart2 size={12} />
-                          </button>
-                          <button
-                            className="btn btn-ghost btn-icon btn-sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              setOptionsModalDeck(deck)
-                            }}
-                            title="Deck Options"
-                            style={{ width: 28, height: 28 }}
-                          >
-                            <Settings size={12} />
-                          </button>
-                          <button
-                            className="btn btn-ghost btn-icon btn-sm"
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              void handleEditDeck(deck)
-                            }}
-                            title="Edit Metadata"
-                            style={{ width: 28, height: 28 }}
-                          >
-                            <Edit size={12} />
-                          </button>
+                          {[
+                            { title: 'Study', icon: <Play size={12} />, run: () => void handleDeckClick(deck) },
+                            { title: 'Browse Cards', icon: <Search size={12} />, run: () => void openFullDeck(deck, 'browser', false) },
+                            { title: 'Deck Stats', icon: <BarChart2 size={12} />, run: () => void openFullDeck(deck, 'stats', false) },
+                            { title: 'Deck Options', icon: <Settings size={12} />, run: () => setOptionsModalDeck(deck) },
+                            { title: 'Edit Metadata', icon: <Edit size={12} />, run: () => void handleEditDeck(deck) },
+                          ].map((act) => (
+                            <button
+                              key={act.title}
+                              className="btn btn-ghost btn-icon btn-sm"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                act.run()
+                              }}
+                              title={act.title}
+                              style={QUICK_BTN_STYLE}
+                            >
+                              {act.icon}
+                            </button>
+                          ))}
                           <button
                             className="btn btn-ghost btn-icon btn-sm"
                             onClick={(e) => {
@@ -944,7 +868,7 @@ export default function StudyPage() {
                               setDeleteModal(deck)
                             }}
                             title="Delete"
-                            style={{ width: 28, height: 28, color: 'var(--color-error)' }}
+                            style={{ ...QUICK_BTN_STYLE, color: 'var(--color-error)' }}
                           >
                             <Trash2 size={12} />
                           </button>
