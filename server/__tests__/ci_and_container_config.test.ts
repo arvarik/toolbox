@@ -122,10 +122,16 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
 
   it("verifies multi-arch publish, exact vX.X.X release titling, and container smoke probes", () => {
     const ci = workflows.find((w) => w.file === "ci.yml")?.body ?? "";
-    expect(ci).toContain("http://127.0.0.1:3100/api/health");
-    expect(ci).toContain("http://127.0.0.1:3100/api/auth/status");
-
     const publish = workflows.find((w) => w.file === "docker-publish.yml")?.body ?? "";
+    const smoke = fs.readFileSync(path.join(ROOT, ".github", "scripts", "smoke-image.sh"), "utf8");
+    expect(smoke).toContain("/api/health");
+    expect(smoke).toContain("/api/auth/status");
+    expect(ci).toContain("bash .github/scripts/smoke-image.sh toolbox:smoke");
+
+    // Each arch is probed in build-image, before merge-image tags the index.
+    const probe = publish.indexOf("bash .github/scripts/smoke-image.sh");
+    expect(probe).toBeGreaterThan(0);
+    expect(probe).toBeLessThan(publish.indexOf("merge-image:"));
     expect(publish).toContain("platform: linux/amd64");
     expect(publish).toContain("platform: linux/arm64");
     expect(publish).toContain('--title "$TAG"');
