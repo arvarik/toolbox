@@ -34,6 +34,7 @@
     "dev:client": "vite",
     "dev:server": "node --watch server/index.ts",
     "build": "vite build",
+    "check:bundle": "node scripts/check-bundle.ts",
     "start": "NODE_ENV=production node server/index.ts",
     "reset-password": "node scripts/reset-password.ts",
     "lint": "oxlint && tsc --noEmit && npm run lint:tenant",
