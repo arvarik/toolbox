@@ -66,8 +66,12 @@ npm run audit:contrast # Static WCAG 2.1 AA contrast audit across src/
 npm test               # Vitest unit + Supertest API/security integration tests
 npm run test:coverage  # Vitest with v8 coverage
 npm run build          # Production Vite frontend build (also writes dist/THIRD-PARTY-LICENSES.md)
+npm run check:bundle   # Gzip size budget for the built bundle (needs npm run build)
 npm run test:e2e       # Playwright end-to-end browser suite (needs npm run build)
+npm run test:load      # 45-second load and soak test against a production server (needs npm run build)
 ```
+
+`npm run test:coverage` fails when coverage drops below the thresholds in `vite.config.ts`. Add tests instead of lowering them.
 
 Before the first `npm run test:e2e`, install the Playwright browser once with `npx playwright install chromium`.
 

@@ -36,7 +36,7 @@ docker compose logs -f toolbox
 
 Both `Dockerfile` and `docker-compose.yml` run a zero-dependency Node `fetch` healthcheck against `http://127.0.0.1:3100/api/health` (no `curl` or `wget` binary required in `trixie-slim`, and `127.0.0.1` avoids IPv6 loopback quirks in LXC).
 
-Docker Compose passes only the variables listed under `environment:` in `docker-compose.yml` into the container. To use another variable from [section 6](#6-environment-variables-reference), such as `OIDC_ISSUER` or `TRANSFORMERS_OFFLINE`, add it to that list.
+Docker Compose passes every variable in `.env` into the container, so variables from [section 6](#6-environment-variables-reference), such as `OIDC_ISSUER` or `TRANSFORMERS_OFFLINE`, work there too. The values under `environment:` in `docker-compose.yml` take precedence.
 
 The `latest` image tag follows the `main` branch. Each release tag `vX.Y.Z` also publishes the image as `X.Y.Z`.
 
@@ -158,13 +158,13 @@ docker exec toolbox node scripts/fetch-models.ts /app/data/models
 docker exec toolbox node scripts/fetch-models.ts --check /app/data/models
 ```
 
-Then set `TRANSFORMERS_OFFLINE=1` so the worker never attempts runtime HuggingFace downloads (in `.env` for a source install, or under `environment:` in `docker-compose.yml`).
+Then set `TRANSFORMERS_OFFLINE=1` so the worker never attempts runtime HuggingFace downloads (in `.env`, which both a source install and Docker Compose read).
 
 ---
 
 ## 6. Environment Variables Reference
 
-A source install reads these from `.env` (see [`.env.example`](../.env.example)). Docker Compose passes only the variables listed under `environment:` in `docker-compose.yml`.
+A source install reads these from `.env` (see [`.env.example`](../.env.example)). Docker Compose also passes `.env` to the container, and the values under `environment:` in `docker-compose.yml` take precedence.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -182,14 +182,14 @@ A source install reads these from `.env` (see [`.env.example`](../.env.example))
 | `GEMINI_API_KEY` | — | Instance Gemini API key |
 | `OPENAI_API_KEY` | — | Instance OpenAI API key |
 | `CLAUDE_API_KEY` | — | Instance Anthropic Claude API key |
-| `ALLOW_PRIVATE_BYOK_ENDPOINTS` | `false` | Set `true` to let every user, not only admins, add OpenAI-compatible endpoints on private network addresses (for example a LAN Ollama server). This turns off an SSRF guard, so use it only when you trust every account |
+| `ALLOW_PRIVATE_BYOK_ENDPOINTS` | `false` | Set `true` to let every user, not only admins, add OpenAI-compatible endpoints on private network addresses (for example a LAN Ollama server). This turns off an SSRF guard, so use it only when you trust every account. Toolbox checks the target on every call, so removing the variable also blocks private endpoints that users saved earlier |
 | `SEARXNG_URL` | — | SearXNG base URL for grounded web search |
 | `MODELS_DIR` | `${DATA_DIR}/models` | Directory for local ONNX embedding models |
 | `TRANSFORMERS_OFFLINE` | — | Set `1` to forbid runtime HuggingFace network fetches |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | — | Optional OIDC SSO credentials (`OIDC_NAME`, `OIDC_MATCH_BY_EMAIL`) |
 | `SMTP_URL` / `MAIL_FROM` / `MAIL_REPLY_TO` | — | Optional SMTP transport for invitations. Password-reset, sign-in, and email-change emails link to pages the web app does not have yet |
 | `BACKUP_KEEP` | `7` | Number of SQLite backups to keep (`1`–`50`); older ones are deleted after each new backup |
-| `BACKUP_INTERVAL_HOURS` | `24` | Saved and shown in the admin settings API (`0`–`168`). No scheduler runs backups yet, see [section 7](#7-data-persistence-backups--upgrading) |
+| `BACKUP_INTERVAL_HOURS` | `24` | Hours between automatic SQLite backups (`0`–`168`, `0` turns them off). When unset, the admin setting applies. See [section 7](#7-data-persistence-backups--upgrading) |
 
 ---
 
@@ -202,7 +202,13 @@ All persistent state lives inside `${DATA_DIR}` (`/app/data` in Docker):
 - `uploads/` (uploaded PDFs/files attached to Kits)
 - `models/` (cached ONNX weights)
 
-Toolbox does not schedule backups yet. Create them from the admin page, or stop Toolbox and copy `${DATA_DIR}`.
+Toolbox takes an automatic backup when the newest snapshot in `backups/` is older than `BACKUP_INTERVAL_HOURS` (default 24). It checks 15 minutes after start and then every 15 minutes, so a restart neither skips nor repeats a backup. Each backup is verified, and snapshots beyond `BACKUP_KEEP` are deleted, oldest first. A failed backup is logged and retried at the next check.
+
+To restore a snapshot:
+1. Stop Toolbox.
+2. Copy the snapshot over `${DATA_DIR}/toolbox.db`.
+3. Delete `toolbox.db-wal` and `toolbox.db-shm` if they exist. A stale WAL file corrupts the restored database.
+4. Start Toolbox.
 
 ### Per-Kit Portable Backups
 Individual users can export any Kit from the Library without admin access:

@@ -37,6 +37,8 @@ on the first start.
   and CodeQL, OpenSSF Scorecard, and Dependabot checks.
 - Contributor and community files: contributing guide, code of conduct,
   security policy, and issue and pull request templates.
+- Automatic SQLite backups every `BACKUP_INTERVAL_HOURS` (default 24), and
+  Docker Compose now passes every variable in `.env` to the container.
 
 ### Changed
 
@@ -46,11 +48,15 @@ on the first start.
 - SM-2 review progress from v1 changes to FSRS-6 the next time you review
   each card.
 - The Docker image uses Debian trixie-slim and runs as the non-root `node` user.
+- AI provider failures return `502`, `503`, or `504` instead of `500`, and a
+  chat stream that stalls for 120 seconds ends with an error.
+- A **Low** confidence rating caps a Good or Easy review at Hard.
 
 ### Fixed
 
 - The Docker image keeps the license files of its dependencies, and the web
   bundle includes `THIRD-PARTY-LICENSES.md`.
+- The per-user AI budget now covers every route that calls an AI model.
 
 ### Security
 
@@ -60,5 +66,7 @@ on the first start.
 - API keys and other stored secrets are encrypted at rest with AES-256-GCM.
 - Backup imports reject unsafe ZIP files, such as path traversal, symbolic
   links, and decompression bombs.
+- Custom AI endpoints are checked on every call, Kit imports have size caps,
+  and untrusted SVG, URL, and path input is parsed in linear time.
 
 [2.0.0-alpha.1]: https://github.com/arvarik/toolbox/compare/v1.4.0...HEAD

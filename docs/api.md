@@ -14,6 +14,7 @@ Complete reference for Toolbox v2's HTTP REST API (`/api/*`) and Stateless Strea
   3. **Personal Bearer Token (`Authorization: Bearer tbk_<secret>`)**: Created in **Settings → Model Context Protocol (MCP) Server** (`/api/auth/tokens`). Tokens created with `readOnly: true` cannot execute mutating HTTP verbs (`guardReadOnlyToken`) or mutating MCP tools.
 - **Kit Context Selection**: Kit-scoped workspace endpoints (`/api/decks`, `/api/boards`, `/api/guide-content`, `/api/chat`, `/api/graph`, `/api/drills`, `/api/feynman`) resolve the target Kit from `X-Toolbox-Kit: <kitId-or-slug>`, `?kitId=`, `?kit=`, or a body `kitId`, defaulting to the caller's System Design Starter Kit. `/api/search` and `/api/decks/all/cards/due` cover every Kit the caller owns when no Kit is selected.
 - **Standard Error Shape**: `{ "message": "...", "error": { "code": "...", "message": "...", "requestId": "...", "details": ... } }` (`details` is optional). Legacy routes send `{ "message": "..." }`.
+- **AI Budget & Provider Errors**: Routes that call an AI model share a budget of 30 requests per minute per account and 60 per minute per IP address. Over the budget they return `429` with code `RATE_LIMITED`. Routes with the standard error shape return `503` `AI_PROVIDER_RATE_LIMITED` (with `Retry-After`) when the provider rate-limits, `502` `AI_PROVIDER_ERROR` for another provider failure, and `504` `UPSTREAM_TIMEOUT` on a timeout.
 
 ---
 
@@ -119,6 +120,8 @@ Requires `role === "admin"` and a session cookie (or the implicit local owner wh
 | `POST` | `/api/kits/:id/sync` | With no body, pull upstream skeleton updates from `shared_kits` while preserving personal SRS & notes (alias `POST /:id/sync-upstream`). With `{ skeleton }`, apply a local skeleton update and soft-archive orphaned `guide_content`. |
 | `GET` | `/api/kits/:id/sources/:sourceId/file` | Download an uploaded source document attached to the Kit. |
 
+Kit skeletons are capped at 64 pillars, 256 topics per pillar, 2,000 graph nodes, 10,000 edges, 32 tracks, 32 targets per track, and 64 keywords per node. Toolbox rejects an import over these caps. Multipart uploads accept at most 8 text fields, and an upload over a size or field limit returns `413`.
+
 ### Shared Library (`/api/shared-kits`)
 
 | Method | Endpoint | Description |
@@ -155,6 +158,8 @@ Requires `role === "admin"` and a session cookie (or the implicit local owner wh
 | `POST` | `/api/ai-settings/test-key` | Test a provider API key (`{ provider, key }`) and save it as a BYOK key if the test passes. |
 | `POST` | `/api/ai-settings/endpoints/test` | Test an OpenAI-compatible BYOM base URL (SSRF-checked in multi-tenant mode). |
 | `POST` / `PUT` / `DELETE` | `/api/ai-settings/endpoints` (`/:id`) | Manage user-scoped OpenAI-compatible endpoints (Ollama, vLLM, OpenRouter, etc.). |
+
+Endpoint base URLs are capped at 2,048 characters. Toolbox checks the target address on every call and every redirect, not only when the endpoint is saved.
 
 ### Instance AI Router & Embeddings (`/api/admin/ai-settings`)
 
