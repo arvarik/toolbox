@@ -5,9 +5,9 @@ import { z } from "zod";
 import db from "../db.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import {
-  ensureDefaultSystemDesignKit,
+  resolveActiveKit,
   type ActiveKitContext,
-} from "../kits/kitsSchema.ts";
+} from "../kits/kitContext.ts";
 import logger from "../utils/logger.ts";
 import { generateEmbedding, cosineSimilarity } from "../utils/embeddings.ts";
 import { runText, runStructured, chatStream } from "../ai/engine.ts";
@@ -64,7 +64,7 @@ function tutorSystemPrompt(rolePrompt: string, context?: string): string {
 
 router.get("/starters", async (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const pillarId = String(req.query.pillarId || "");
   const topicId = String(req.query.topicId || "");
   const topicName = req.query.topicName ? String(req.query.topicName) : undefined;
@@ -213,7 +213,7 @@ Generate 12 to 15 targeted, short, actionable starter questions the learner coul
 
 router.post("/", async (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const {
     message,
     context,
@@ -389,7 +389,7 @@ model: ${generatedText}`;
 
 router.post("/stream", async (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const {
     message,
     context,
@@ -525,7 +525,7 @@ router.post("/stream", async (req, res) => {
 
 router.post("/generate-flashcards", async (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const {
     text,
     topicName,
@@ -686,7 +686,7 @@ Generate one reverse card per input card.`;
 
 router.post("/summarize", async (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const {
     excerpts = [],
     sectionId,
@@ -836,7 +836,7 @@ ${historyText}`;
 
 router.post("/commit", async (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const {
     messages = [],
     pillarId,
@@ -1030,7 +1030,7 @@ Return the targeted sections with their complete updated content.`;
 
 router.post("/commit/save", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const {
     pillarId,
     topicId,
@@ -1087,7 +1087,7 @@ router.post("/commit/save", (req, res) => {
 
 router.get("/sessions", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   try {
     const rows = db
       .prepare(
@@ -1134,7 +1134,7 @@ interface IncomingChatSession {
 
 router.post("/sessions", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { session } = req.body as { session?: IncomingChatSession };
   if (!session || !session.id) {
     res.status(400).json({ message: "Session required" });
@@ -1173,7 +1173,7 @@ router.post("/sessions", (req, res) => {
 
 router.post("/sessions/bulk", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { sessions } = req.body as {
     sessions?: Record<string, IncomingChatSession>;
   };

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import useAppStore from '../stores/appStore'
+import useKitStore, { extractKitSlugFromPathname } from '../stores/useKitStore'
 
 /**
  * Global keyboard shortcuts hook.
@@ -45,39 +46,49 @@ export default function useKeyboardShortcuts() {
       // Skip if user is typing in an input/textarea
       const tag = e.target?.tagName ? e.target.tagName.toLowerCase() : ''
       const isEditable = tag === 'input' || tag === 'textarea' || Boolean(e.target?.isContentEditable)
-      
+      const slug = extractKitSlugFromPathname(location.pathname)
+      const prefix = slug ? `/k/${encodeURIComponent(slug)}` : ''
+      const subPath = location.pathname.replace(/^\/k\/[^/]+/, '') || '/'
+      const caps = slug ? useKitStore.getState().activeKit?.capabilities : null
+
       switch (e.key) {
         case '1':
           e.preventDefault()
-          navigate('/chat')
+          navigate(`${prefix}/chat`)
           break
         case '2':
           e.preventDefault()
-          navigate('/guide')
+          navigate(`${prefix}/guide`)
           break
         case '3':
           e.preventDefault()
-          navigate('/builder')
+          if (slug && caps?.canvas === 'none') break
+          navigate(
+            slug && caps?.canvas === 'concept'
+              ? `${prefix}/canvas`
+              : `${prefix}/builder`,
+          )
           break
         case '4':
           e.preventDefault()
-          navigate('/study')
+          navigate(`${prefix}/study`)
           break
         case '5':
           e.preventDefault()
-          navigate('/feynman')
+          navigate(`${prefix}/feynman`)
           break
         case '6':
           e.preventDefault()
-          navigate('/interleaved')
+          navigate(`${prefix}/interleaved`)
           break
         case '7':
           e.preventDefault()
-          navigate('/graph')
+          navigate(`${prefix}/graph`)
           break
         case '8':
           e.preventDefault()
-          navigate('/calculator')
+          if (slug && caps?.calculator === false) break
+          navigate(`${prefix}/calculator`)
           break
         case '9':
           e.preventDefault()
@@ -85,7 +96,7 @@ export default function useKeyboardShortcuts() {
           break
         case 'e':
         case 'E':
-          if (!isEditable) {
+          if (!isEditable && !(slug && caps?.calculator === false)) {
             e.preventDefault()
             toggleCalcModal()
           }
@@ -103,9 +114,9 @@ export default function useKeyboardShortcuts() {
         case 'j':
         case 'J':
           e.preventDefault()
-          if (location.pathname.startsWith('/guide')) toggleChat('guide')
-          else if (location.pathname.startsWith('/builder')) toggleChat('builder')
-          else if (location.pathname.startsWith('/study')) toggleChat('study')
+          if (subPath.startsWith('/guide')) toggleChat('guide')
+          else if (subPath.startsWith('/builder') || subPath.startsWith('/canvas')) toggleChat('builder')
+          else if (subPath.startsWith('/study')) toggleChat('study')
           break
         case 'b':
         case 'B':
@@ -123,7 +134,7 @@ export default function useKeyboardShortcuts() {
           break
         case 's':
         case 'S':
-          if (location.pathname.startsWith('/builder')) {
+          if (subPath.startsWith('/builder') || subPath.startsWith('/canvas')) {
             e.preventDefault()
             // Trigger the save button programmatically
             document.getElementById('save-board-btn')?.click()

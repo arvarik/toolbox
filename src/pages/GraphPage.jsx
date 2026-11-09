@@ -6,7 +6,7 @@ import GraphCanvas from '../components/graph/GraphCanvas'
 import NodePanel from '../components/graph/NodePanel'
 import FlashcardView from '../components/study/FlashcardView'
 import { HEALTH_COLORS, HEALTH_LABELS } from '../components/graph/graphLayout'
-import { PILLARS } from '../utils/constants'
+import { useActiveKit } from '../stores/useKitStore'
 
 const READINESS_FILTERS = [
   { id: 'all', label: 'All' },
@@ -22,6 +22,7 @@ const READINESS_FILTERS = [
 export default function GraphPage() {
   const addToast = useAppStore((s) => s.addToast)
   const srsVersion = useAppStore((s) => s.srsVersion)
+  const { pillars, kitSlug } = useActiveKit()
 
   const [graph, setGraph] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -52,7 +53,7 @@ export default function GraphPage() {
 
   // Load on mount; refresh whenever a card is graded anywhere in the
   // app (srsVersion) and when the window regains focus.
-  useEffect(() => { fetchGraph() }, [fetchGraph, srsVersion])
+  useEffect(() => { fetchGraph() }, [fetchGraph, srsVersion, kitSlug])
   useEffect(() => {
     const onFocus = () => fetchGraph()
     window.addEventListener('focus', onFocus)
@@ -196,7 +197,7 @@ export default function GraphPage() {
         </div>
 
         <div className="graph-pillar-chips" role="group" aria-label="Pillar filter">
-          {PILLARS.map((p) => (
+          {pillars.map((p) => (
             <button
               key={p.id}
               className={`graph-pillar-chip${pillarFilter === p.id ? ' active' : ''}`}

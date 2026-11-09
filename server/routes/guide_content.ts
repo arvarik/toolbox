@@ -1,14 +1,14 @@
 import { Router } from "express";
 import db from "../db.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
-import { ensureDefaultSystemDesignKit } from "../kits/kitsSchema.ts";
+import { resolveActiveKit } from "../kits/kitContext.ts";
 import logger from "../utils/logger.ts";
 
 const router = Router();
 
 router.get("/export", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
 
   try {
     const rows = db
@@ -62,7 +62,7 @@ router.get("/export", (req, res) => {
 
 router.get("/progress", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
 
   const rows = db
     .prepare(
@@ -88,7 +88,7 @@ router.get("/progress", (req, res) => {
 
 router.get("/:pillarId/:topicId", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { pillarId, topicId } = req.params;
 
   const rows = db
@@ -116,7 +116,7 @@ router.get("/:pillarId/:topicId", (req, res) => {
 
 router.get("/:pillarId/:topicId/:sectionId", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { pillarId, topicId, sectionId } = req.params;
 
   const row = db
@@ -138,7 +138,7 @@ router.get("/:pillarId/:topicId/:sectionId", (req, res) => {
 
 router.put("/:pillarId/:topicId/:sectionId", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { pillarId, topicId, sectionId } = req.params;
   const { content } = req.body as { content?: string };
 
@@ -159,7 +159,7 @@ router.put("/:pillarId/:topicId/:sectionId", (req, res) => {
 
 router.delete("/:pillarId/:topicId/:sectionId", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { pillarId, topicId, sectionId } = req.params;
 
   db.prepare(

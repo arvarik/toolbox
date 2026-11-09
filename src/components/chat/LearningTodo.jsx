@@ -1,9 +1,8 @@
 import { useState, useEffect } from 'react'
 import { CheckCircle2, Circle, ChevronRight, ChevronDown, BookOpen, Sparkles } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { BLUEPRINT_SECTIONS, PILLARS } from '../../utils/constants'
-
 import { guideContentApi } from '../../utils/api'
+import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 import Skeleton from '../shared/Skeleton'
 
 /**
@@ -18,6 +17,8 @@ export default function LearningTodo({ onStudyTopic }) {
   const [isLoading, setIsLoading] = useState(true)
   const [expandedPillars, setExpandedPillars] = useState({})
   const navigate = useNavigate()
+  const { pillars, sectionsByPillar, kitSlug } = useActiveKit()
+  const prefix = useKitRoutePrefix()
 
   const fetchProgress = () => {
     guideContentApi.progress()
@@ -30,15 +31,15 @@ export default function LearningTodo({ onStudyTopic }) {
     fetchProgress()
     window.addEventListener('guide-progress-updated', fetchProgress)
     return () => window.removeEventListener('guide-progress-updated', fetchProgress)
-  }, [])
+  }, [kitSlug])
 
   const togglePillar = (pillarId) => {
     setExpandedPillars((prev) => ({ ...prev, [pillarId]: !prev[pillarId] }))
   }
 
   // Compute totals
-  const totalSections = PILLARS.reduce((acc, p) => {
-    const sections = BLUEPRINT_SECTIONS[p.id] || []
+  const totalSections = pillars.reduce((acc, p) => {
+    const sections = sectionsByPillar[p.id] || []
     return acc + p.topics.length * sections.length
   }, 0)
 
@@ -51,8 +52,8 @@ export default function LearningTodo({ onStudyTopic }) {
   // Find the first incomplete topic to highlight as "Start Here"
   let suggestedTopic = null
   let suggestedPillar = null
-  outer: for (const pillar of PILLARS) {
-    const sections = BLUEPRINT_SECTIONS[pillar.id] || []
+  outer: for (const pillar of pillars) {
+    const sections = sectionsByPillar[pillar.id] || []
     for (const topic of pillar.topics) {
       const filledCount = sections.filter(
         (s) => progress[`${pillar.id}__${topic.id}__${s.id}`]
@@ -135,8 +136,8 @@ export default function LearningTodo({ onStudyTopic }) {
             ))}
           </div>
         ) : (
-          PILLARS.map((pillar) => {
-            const sections = BLUEPRINT_SECTIONS[pillar.id] || []
+          pillars.map((pillar) => {
+            const sections = sectionsByPillar[pillar.id] || []
             const isExpanded = expandedPillars[pillar.id]
 
             const pillarFilled = pillar.topics.reduce((acc, topic) => {
@@ -217,7 +218,7 @@ export default function LearningTodo({ onStudyTopic }) {
                               className="btn btn-ghost btn-sm"
                               onClick={(e) => {
                                 e.stopPropagation()
-                                navigate(`/guide/${pillar.id}/${topic.id}`)
+                                navigate(`${prefix}/guide/${pillar.id}/${topic.id}`)
                               }}
                               title="View in Guide"
                               style={{ fontSize: '10px', padding: '2px 6px', color: 'var(--color-text-tertiary)', flexShrink: 0 }}

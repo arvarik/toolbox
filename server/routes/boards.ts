@@ -2,7 +2,7 @@ import { Router } from "express";
 import { v4 as uuid } from "uuid";
 import db from "../db.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
-import { ensureDefaultSystemDesignKit } from "../kits/kitsSchema.ts";
+import { resolveActiveKit } from "../kits/kitContext.ts";
 
 const router = Router();
 
@@ -19,7 +19,7 @@ interface BoardRow {
 
 router.get("/", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const boards = db
     .prepare(
       "SELECT id, name, position, created_at, updated_at FROM boards WHERE ownerId = ? AND kit_id = ? ORDER BY position ASC, updated_at DESC",
@@ -45,7 +45,7 @@ router.get("/:id", (req, res) => {
 
 router.post("/", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { name, data } = req.body as { name?: string; data?: unknown };
   const id = uuid();
 
@@ -111,7 +111,7 @@ router.put("/:id", (req, res) => {
 
 router.patch("/reorder", (req, res) => {
   const scope = scopeOf(req);
-  const kit = ensureDefaultSystemDesignKit(db, scope);
+  const kit = resolveActiveKit(req, db, scope);
   const { ids } = req.body as { ids?: unknown };
   if (!Array.isArray(ids)) {
     res.status(400).json({ message: "ids must be an array" });

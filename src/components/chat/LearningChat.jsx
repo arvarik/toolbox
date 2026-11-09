@@ -7,11 +7,11 @@ import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import Skeleton from '../shared/Skeleton'
 import PersonaPicker from './PersonaPicker'
-import { PERSONAS } from './personas'
+import { buildPersonasForKit, getStarterPromptsForKit } from './personas'
 import SessionPicker from './SessionPicker'
 import useAppStore from '../../stores/appStore'
+import { getActiveKitSlugForRequest, useActiveKit } from '../../stores/useKitStore'
 import { chatApi, guideContentApi } from '../../utils/api'
-import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 
 // ─── Session storage ──────────────────────────────────────────────────────────
 const SESSIONS_KEY = 'toolbox_learning_sessions'
@@ -75,15 +75,6 @@ const MdContent = memo(function MdContent({ text }) {
   return <MarkdownRenderer content={text} />
 })
 
-const STARTER_PROMPTS = [
-  'Explain consistent hashing with a concrete example and when I should use it',
-  'Walk me through the tradeoffs of SQL vs NoSQL for a social feed at scale',
-  'How do circuit breakers work and what are the most common misconfiguration mistakes?',
-  'Explain the CAP theorem — which real systems sacrifice C vs A and why?',
-  'Compare Kafka, RabbitMQ, and SQS: when does each shine?',
-  'What separates a Senior from a Principal answer in a system design interview?',
-]
-
 // ─── Main Component ───────────────────────────────────────────────────────────
 /**
  * LearningChat — full-page AI chat with named, per-session history.
@@ -96,6 +87,16 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   const apiKeyConfigured = useAppStore((s) => s.apiKeyConfigured)
   const selectedModel = useAppStore((s) => s.model)
   const addToast = useAppStore((s) => s.addToast)
+  const { kit, skeleton, sectionsByPillar, capabilities, tutor } = useActiveKit()
+  const isCustomKit = Boolean(kit && skeleton.identity.slug !== 'system-design')
+  const activePersonas = useMemo(
+    () => buildPersonasForKit(tutor, isCustomKit),
+    [tutor, isCustomKit],
+  )
+  const defaultStarters = useMemo(
+    () => getStarterPromptsForKit(tutor, isCustomKit),
+    [tutor, isCustomKit],
+  )
 
   // Sessions state
   const [sessions, setSessions] = useState({})
@@ -111,7 +112,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
   const [isLoading, setIsLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState(null)
 
-  const [starters, setStarters] = useState(STARTER_PROMPTS)
+  const [starters, setStarters] = useState(() => getStarterPromptsForKit(tutor, isCustomKit))
   const [loadingStarters, setLoadingStarters] = useState(false)
   const [generatingMap, setGeneratingMap] = useState(false)
   const [personaId, setPersonaId] = useState('socratic')
@@ -392,7 +393,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     if (!text || isLoading) return
 
     const currentHistory = overrideHistory || messages
-    const currentPersonaObj = PERSONAS[personaId]
+    const currentPersonaObj = activePersonas[personaId] || activePersonas.socratic
     const userMessage = { role: 'user', content: text, model: selectedModel, persona: currentPersonaObj }
     const newMessages = [...currentHistory, userMessage]
     setMessages(newMessages)
@@ -448,12 +449,12 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       setIsLoading(false)
     }
      
-  }, [input, isLoading, messages, selectedModel, setMessages, personaId, sectionStatus, activeTopic, currentSession])
+  }, [input, isLoading, messages, selectedModel, setMessages, personaId, activePersonas, sectionStatus, activeTopic, currentSession])
 
   // Handle activeTopic changes (from to-do panel clicks)
   useEffect(() => {
     if (!activeTopic) {
-      setTimeout(() => setStarters(STARTER_PROMPTS), 0)
+      setTimeout(() => setStarters(defaultStarters), 0)
       return
     }
 
@@ -488,7 +489,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
     }
 
     // Fetch section status for smart persona steering
-    const pillarSections = BLUEPRINT_SECTIONS[activeTopic.pillar.id] || []
+    const pillarSections = sectionsByPillar[activeTopic.pillar.id] || []
     if (pillarSections.length > 0) {
       guideContentApi.getForTopic(activeTopic.pillar.id, activeTopic.topic.id)
         .then((data) => {
@@ -510,7 +511,14 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
 
     let active = true
     setTimeout(() => setLoadingStarters(true), 0)
-    fetch(`/api/chat/starters?pillarId=${activeTopic.pillar.id}&topicId=${activeTopic.topic.id}&topicName=${encodeURIComponent(activeTopic.topic.name)}&model=${selectedModel}`, { cache: 'no-store' })
+    const activeSlug = getActiveKitSlugForRequest()
+    fetch(
+      `/api/chat/starters?pillarId=${activeTopic.pillar.id}&topicId=${activeTopic.topic.id}&topicName=${encodeURIComponent(activeTopic.topic.name)}&model=${selectedModel}`,
+      {
+        cache: 'no-store',
+        headers: activeSlug ? { 'X-Toolbox-Kit': activeSlug } : undefined,
+      },
+    )
       .then(res => res.json())
       .then(data => {
         if (active && data.suggestions) {
@@ -521,7 +529,7 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
       .finally(() => { if (active) setLoadingStarters(false) })
 
     return () => { active = false }
-  }, [activeTopic, selectedModel])
+  }, [activeTopic, selectedModel, sectionsByPillar, defaultStarters])
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
@@ -650,15 +658,17 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
-          <button
-            className="btn btn-ghost btn-icon"
-            onClick={() => useAppStore.getState().setCalcModalOpen(true)}
-            title="BotE Calculator (⌘E)"
-            aria-label="Open BotE Calculator"
-            id="chat-calc-btn"
-          >
-            <Calculator size={16} />
-          </button>
+          {capabilities.calculator !== false && (
+            <button
+              className="btn btn-ghost btn-icon"
+              onClick={() => useAppStore.getState().setCalcModalOpen(true)}
+              title="BotE Calculator (⌘E)"
+              aria-label="Open BotE Calculator"
+              id="chat-calc-btn"
+            >
+              <Calculator size={16} />
+            </button>
+          )}
           {messages.length > 0 && (
             <div style={{ position: 'relative' }} ref={actionsMenuRef}>
               <button

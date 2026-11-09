@@ -8,6 +8,10 @@ import ToastContainer from '../shared/ToastContainer'
 import ErrorBoundary from '../shared/ErrorBoundary'
 import SearchDialog from '../shared/SearchDialog'
 import useAppStore from '../../stores/appStore'
+import useKitStore, {
+  extractKitSlugFromPathname,
+  useActiveKit,
+} from '../../stores/useKitStore'
 import useTimerStore from '../../stores/useTimerStore'
 import useKeyboardShortcuts from '../../hooks/useKeyboardShortcuts'
 import useIsMobile from '../../hooks/useIsMobile'
@@ -23,6 +27,20 @@ export default function Layout() {
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const setApiKeyConfigured = useAppStore((s) => s.setApiKeyConfigured)
   const addToast = useAppStore((s) => s.addToast)
+  const selectKitBySlug = useKitStore((s) => s.selectKitBySlug)
+  const { skeleton } = useActiveKit()
+
+  useEffect(() => {
+    const slug = extractKitSlugFromPathname(location.pathname)
+    if (slug) {
+      void selectKitBySlug(slug)
+    } else if (
+      location.pathname === '/' ||
+      location.pathname.startsWith('/shared')
+    ) {
+      void selectKitBySlug(null)
+    }
+  }, [location.pathname, selectKitBySlug])
 
   // Pomodoro timer state
   const tick = useTimerStore((s) => s.tick)
@@ -82,10 +100,11 @@ export default function Layout() {
   }, [setApiKeyConfigured])
 
   const getPageKey = () => {
-    if (location.pathname.startsWith('/chat')) return 'chat'
-    if (location.pathname.startsWith('/guide')) return 'guide'
-    if (location.pathname.startsWith('/builder')) return 'builder'
-    if (location.pathname.startsWith('/study')) return 'study'
+    const subPath = location.pathname.replace(/^\/k\/[^/]+/, '') || '/'
+    if (subPath.startsWith('/chat')) return 'chat'
+    if (subPath.startsWith('/guide')) return 'guide'
+    if (subPath.startsWith('/builder') || subPath.startsWith('/canvas')) return 'builder'
+    if (subPath.startsWith('/study')) return 'study'
     return null
   }
 
@@ -115,7 +134,7 @@ export default function Layout() {
       {showMobileChatPanel && (
         <ChatPanel
           page={pageKey}
-          title={pageKey === 'guide' ? 'Ask about System Design' : pageKey === 'builder' ? 'Verify Architecture' : 'AI Card Generator'}
+          title={pageKey === 'guide' ? `Ask about ${skeleton.identity.name}` : pageKey === 'builder' ? 'Verify Architecture' : 'AI Card Generator'}
         />
       )}
       <ToastContainer />

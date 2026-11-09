@@ -28,3 +28,67 @@ export const PERSONAS = {
     steeringStyle: 'When the current topic is exhausted, challenge the user about their gaps: "You\'ve been suspiciously silent about [next section]. What happens when [failure scenario related to that section]? I bet your design falls apart." Provoke them into exploring the uncovered section. Only raise ONE new section at a time.'
   }
 }
+
+export const DEFAULT_STARTER_PROMPTS = [
+  'Explain consistent hashing with a concrete example and when I should use it',
+  'Walk me through the tradeoffs of SQL vs NoSQL for a social feed at scale',
+  'How do circuit breakers work and what are the most common misconfiguration mistakes?',
+  'Explain the CAP theorem — which real systems sacrifice C vs A and why?',
+  'Compare Kafka, RabbitMQ, and SQS: when does each shine?',
+  'What separates a Senior from a Principal answer in a system design interview?',
+]
+
+function resolvePersonaPrompt(entry, fallback) {
+  if (!entry) return fallback
+  if (typeof entry === 'string') return entry
+  if (typeof entry === 'object' && typeof entry.prompt === 'string' && entry.prompt.trim()) {
+    return entry.prompt
+  }
+  return fallback
+}
+
+function resolvePersonaLabel(entry, fallback) {
+  if (entry && typeof entry === 'object' && typeof entry.label === 'string' && entry.label.trim()) {
+    return entry.label
+  }
+  return fallback
+}
+
+/**
+ * Builds active tutor personas from a Kit's `skeleton.tutor` while preserving
+ * exact legacy System Design personas when no custom Kit is active.
+ */
+export function buildPersonasForKit(tutor, isCustomKit) {
+  if (!isCustomKit || !tutor) return PERSONAS
+  const base = tutor.rolePrompt ? `${tutor.rolePrompt.trim()}\n\n` : ''
+  const custom = tutor.personas || {}
+  return {
+    socratic: {
+      ...PERSONAS.socratic,
+      name: resolvePersonaLabel(custom.socratic, PERSONAS.socratic.name),
+      context: `${base}${resolvePersonaPrompt(custom.socratic, PERSONAS.socratic.context)}`,
+    },
+    eli5: {
+      ...PERSONAS.eli5,
+      name: resolvePersonaLabel(custom.eli5, PERSONAS.eli5.name),
+      context: `${base}${resolvePersonaPrompt(custom.eli5, PERSONAS.eli5.context)}`,
+    },
+    gordon: {
+      ...PERSONAS.gordon,
+      name: resolvePersonaLabel(custom.strict, PERSONAS.gordon.name),
+      context: `${base}${resolvePersonaPrompt(custom.strict, PERSONAS.gordon.context)}`,
+    },
+    devil: {
+      ...PERSONAS.devil,
+      name: resolvePersonaLabel(custom.devil, PERSONAS.devil.name),
+      context: `${base}${resolvePersonaPrompt(custom.devil, PERSONAS.devil.context)}`,
+    },
+  }
+}
+
+export function getStarterPromptsForKit(tutor, isCustomKit) {
+  if (isCustomKit && Array.isArray(tutor?.starterPrompts) && tutor.starterPrompts.length > 0) {
+    return tutor.starterPrompts
+  }
+  return DEFAULT_STARTER_PROMPTS
+}

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { graphApi } from '../../utils/api'
 import { HEALTH_COLORS, HEALTH_LABELS } from './graphLayout'
+import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 
 const STATE_LABELS = { 0: 'New', 1: 'Learning', 2: 'Review', 3: 'Relearning' }
 
@@ -34,6 +35,12 @@ export default function NodePanel({ nodeId, onClose, onSelectNode, onStartSessio
   const [detail, setDetail] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
   const [isStarting, setIsStarting] = useState(false)
+  const { capabilities } = useActiveKit()
+  const prefix = useKitRoutePrefix()
+  const canvasRoute =
+    prefix && capabilities.canvas === 'concept'
+      ? `${prefix}/canvas`
+      : `${prefix}/builder`
 
   useEffect(() => {
     let cancelled = false
@@ -117,7 +124,7 @@ export default function NodePanel({ nodeId, onClose, onSelectNode, onStartSessio
               Study {studyableCount > 0 ? `${studyableCount} card${studyableCount === 1 ? '' : 's'}` : 'cards'}
             </button>
             {detail.guide && (
-              <Link className="btn btn-secondary btn-sm" to={`/guide/${detail.guide.pillarId}/${detail.guide.topicId}`}>
+              <Link className="btn btn-secondary btn-sm" to={`${prefix}/guide/${detail.guide.pillarId}/${detail.guide.topicId}`}>
                 <BookOpen size={13} />
                 Guide: {detail.guide.topicName}
                 {detail.guide.filledSections > 0 && (
@@ -125,13 +132,13 @@ export default function NodePanel({ nodeId, onClose, onSelectNode, onStartSessio
                 )}
               </Link>
             )}
-            {detail.node.id === 'capacity-estimation' && (
-              <Link className="btn btn-secondary btn-sm" to="/calculator">
+            {detail.node.id === 'capacity-estimation' && capabilities.calculator !== false && (
+              <Link className="btn btn-secondary btn-sm" to={`${prefix}/calculator`}>
                 <Calculator size={13} /> Open BotE Calculator
               </Link>
             )}
-            {detail.boards.map((board) => (
-              <Link key={board.id} className="btn btn-secondary btn-sm" to={`/builder?board=${board.id}`}>
+            {capabilities.canvas !== 'none' && detail.boards.map((board) => (
+              <Link key={board.id} className="btn btn-secondary btn-sm" to={`${canvasRoute}?board=${board.id}`}>
                 <PenTool size={13} /> {board.name}
               </Link>
             ))}
