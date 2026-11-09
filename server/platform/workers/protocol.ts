@@ -4,6 +4,11 @@ import path from "node:path";
 export const EMBEDDING_MODEL_ID = "Xenova/all-MiniLM-L6-v2";
 export const LOCAL_EMBEDDING_DIM = 384;
 
+export const MAX_PDF_UPLOAD_BYTES = 25 * 1024 * 1024;
+export const DEFAULT_PDF_TIMEOUT_MS = 15_000;
+export const DEFAULT_PDF_MAX_PAGES = 200;
+export const DEFAULT_PDF_MAX_CHARS = 500_000;
+
 export interface PinnedModelSpec {
   id: string;
   revision: string;
@@ -61,7 +66,15 @@ export interface EmbedJob {
   texts: string[];
 }
 
-export type WorkerJob = EmbedJob;
+export interface ExtractPdfJob {
+  id: number;
+  kind: "extract_pdf";
+  bytes: Uint8Array;
+  maxPages: number;
+  maxChars: number;
+}
+
+export type WorkerJob = EmbedJob | ExtractPdfJob;
 
 export type WorkerReply =
   | {
@@ -71,6 +84,15 @@ export type WorkerReply =
       flat: Float32Array;
       count: number;
       dims: number;
+    }
+  | {
+      id: number;
+      ok: true;
+      kind: "extract_pdf";
+      text: string;
+      totalPages: number;
+      extractedPages: number;
+      truncated: boolean;
     }
   | { id: number; ok: false; error: string; stage: "load" | "run" };
 

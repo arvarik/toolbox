@@ -9,6 +9,7 @@ import {
   Flame,
   Globe,
   Layers,
+  Plus,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -21,6 +22,7 @@ import {
   ImportKitModal,
   PublishKitModal,
 } from "../components/kits/KitModals";
+import { ExpandKitModal } from "../components/kits/ExpandKitModal";
 import useAppStore from "../stores/appStore";
 import useKitStore, { type KitSummaryItem } from "../stores/useKitStore";
 import { kitsApi, sharedKitsApi, studySessionsApi } from "../utils/api";
@@ -54,8 +56,14 @@ export default function LibraryHomePage() {
   const [importOpen, setImportOpen] = useState(false);
   const [exportTarget, setExportTarget] = useState<KitSummaryItem | null>(null);
   const [publishTarget, setPublishTarget] = useState<KitSummaryItem | null>(null);
+  const [expandTarget, setExpandTarget] = useState<KitSummaryItem | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<KitSummaryItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const hasSeedingKit = useMemo(
+    () => kits.some((k) => k.status === "seeding"),
+    [kits],
+  );
 
   const loadLibrary = useCallback(async () => {
     await fetchKits();
@@ -72,6 +80,14 @@ export default function LibraryHomePage() {
   useEffect(() => {
     void loadLibrary();
   }, [loadLibrary]);
+
+  useEffect(() => {
+    if (!hasSeedingKit) return undefined;
+    const timer = window.setInterval(() => {
+      void fetchKits();
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [hasSeedingKit, fetchKits]);
 
   const totals = useMemo(() => {
     let due = 0;
@@ -176,9 +192,17 @@ export default function LibraryHomePage() {
             <Upload size={16} />
             Import Kit / Backup
           </button>
-          <Link to="/shared" className="btn btn-primary">
+          <Link to="/shared" className="btn btn-ghost">
             <Globe size={16} />
             Shared Library
+          </Link>
+          <Link
+            to="/new"
+            className="btn btn-primary"
+            data-testid="create-kit-btn"
+          >
+            <Sparkles size={16} />
+            Create Kit
           </Link>
         </div>
       </div>
@@ -268,9 +292,17 @@ export default function LibraryHomePage() {
             <code>.toolbox-kit.json</code> / <code>.toolbox-backup.zip</code> archive.
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <Link
+              to="/new"
+              className="btn btn-primary"
+              data-testid="empty-create-kit-btn"
+            >
+              <Sparkles size={16} />
+              Create Custom Kit
+            </Link>
             <button
               type="button"
-              className="btn btn-primary"
+              className="btn btn-ghost"
               onClick={handleForkStarter}
               disabled={forkingStarter}
             >
@@ -350,6 +382,23 @@ export default function LibraryHomePage() {
                     </p>
                   )}
 
+                  {/* Live Background Seeder Status Pill */}
+                  {kit.status === "seeding" && (
+                    <div
+                      data-testid={`kit-seeding-pill-${kit.slug}`}
+                      className="rounded-xl border border-ai/40 bg-ai/12 px-3 py-2 flex items-center gap-2 text-xs font-medium text-on-ai-wash"
+                    >
+                      <RefreshCw
+                        size={13}
+                        className="animate-spin shrink-0"
+                        aria-hidden="true"
+                      />
+                      <span className="truncate">
+                        {kit.statusDetail || "Seeding starter cards & drills…"}
+                      </span>
+                    </div>
+                  )}
+
                   {/* Upstream Update Available Banner */}
                   {kit.hasUpstreamUpdate && (
                     <div className="rounded-xl border border-primary/40 bg-primary/12 p-2.5 flex items-center justify-between gap-2">
@@ -417,6 +466,17 @@ export default function LibraryHomePage() {
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
+                      className="btn btn-ghost btn-sm"
+                      title="Expand Kit with new topics or sources"
+                      aria-label={`Expand ${kit.name}`}
+                      data-testid={`expand-kit-btn-${kit.slug}`}
+                      onClick={() => setExpandTarget(kit)}
+                    >
+                      <Plus size={14} />
+                      Expand Kit
+                    </button>
+                    <button
+                      type="button"
                       className="btn btn-ghost btn-icon btn-sm"
                       title="Export Kit or Backup"
                       aria-label={`Export ${kit.name}`}
@@ -481,6 +541,13 @@ export default function LibraryHomePage() {
         open={Boolean(publishTarget)}
         onClose={() => setPublishTarget(null)}
         onPublished={() => void fetchKits()}
+      />
+
+      <ExpandKitModal
+        kit={expandTarget}
+        open={Boolean(expandTarget)}
+        onClose={() => setExpandTarget(null)}
+        onExpanded={() => void fetchKits()}
       />
 
       <Modal

@@ -3,14 +3,26 @@ import { Worker } from "node:worker_threads";
 import { log } from "../net/errors.ts";
 import {
   CANCELLED,
+  DEFAULT_PDF_MAX_CHARS,
+  DEFAULT_PDF_MAX_PAGES,
+  DEFAULT_PDF_TIMEOUT_MS,
   EMBEDDING_MODEL_ID,
   LOCAL_EMBEDDING_DIM,
+  MAX_PDF_UPLOAD_BYTES,
   unflatten,
   type WorkerJob,
   type WorkerReply,
 } from "./protocol.ts";
 
-export { EMBEDDING_MODEL_ID, LOCAL_EMBEDDING_DIM, CANCELLED };
+export {
+  EMBEDDING_MODEL_ID,
+  LOCAL_EMBEDDING_DIM,
+  CANCELLED,
+  DEFAULT_PDF_MAX_CHARS,
+  DEFAULT_PDF_MAX_PAGES,
+  DEFAULT_PDF_TIMEOUT_MS,
+  MAX_PDF_UPLOAD_BYTES,
+};
 
 const JOB_TIMEOUT_MS = 120_000;
 
@@ -74,6 +86,8 @@ function shouldUseMockEmbedder(): boolean {
 
 interface Pending {
   job: WorkerJob;
+  transfer?: ArrayBuffer[];
+  timeoutMs: number;
   signal?: AbortSignal;
   resolve: (reply: WorkerReply) => void;
   reject: (err: unknown) => void;
@@ -92,12 +106,12 @@ let nextId = 1;
 
 function spawnPersistentWorker(): Worker {
   const w = new Worker(new URL("./cpuWorker.ts", import.meta.url));
-  w.unref();
   w.on("message", (reply: WorkerReply) => {
     if (!active || active.job.id !== reply.id) return;
     const done = active;
     active = null;
     done.cleanup?.();
+    w.unref();
     done.resolve(reply);
     pump();
   });
@@ -108,6 +122,7 @@ function spawnPersistentWorker(): Worker {
     if (w !== worker) return;
     failWorker(w, new Error(`cpuWorker exited (code ${code})`));
   });
+  w.unref();
   return w;
 }
 
@@ -153,41 +168,58 @@ function pump(): void {
         continue;
       }
     }
-    modelSpent = true;
+    if (next.job.kind === "embed") {
+      modelSpent = true;
+    }
     active = next;
+    const timeoutMs = next.timeoutMs;
     const timer = setTimeout(() => {
       if (active !== next) return;
       log.warn("cpuHost", `cpuWorker job ${next.job.id} timed out`);
       active = null;
       next.cleanup?.();
       next.reject(
-        new Error(`cpuWorker ${next.job.kind} timed out after ${JOB_TIMEOUT_MS}ms`),
+        new Error(`cpuWorker ${next.job.kind} timed out after ${timeoutMs}ms`),
       );
+      if (w && !modelSpent) {
+        if (w === worker) worker = null;
+        void w.terminate().catch(() => {});
+      }
       pump();
-    }, JOB_TIMEOUT_MS);
+    }, timeoutMs);
     timer.unref();
-    next.cleanup = () => clearTimeout(timer);
-    w.postMessage(next.job);
+    next.cleanup = () => {
+      clearTimeout(timer);
+      w?.unref();
+    };
+    w.ref();
+    w.postMessage(next.job, next.transfer ?? []);
     return;
   }
 }
 
-function submitEmbedJob(
-  texts: string[],
-  signal?: AbortSignal,
+function submitJob(
+  job: WorkerJob,
+  opts: {
+    transfer?: ArrayBuffer[];
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<WorkerReply> {
-  if (signal?.aborted) return Promise.reject(CANCELLED);
+  if (opts.signal?.aborted) return Promise.reject(CANCELLED);
   if (unavailableReason) {
     return Promise.reject(new Error(`cpuWorker unavailable: ${unavailableReason}`));
   }
   return new Promise<WorkerReply>((resolve, reject) => {
     const entry: Pending = {
-      job: { id: nextId++, kind: "embed", texts },
-      signal,
+      job,
+      transfer: opts.transfer,
+      timeoutMs: opts.timeoutMs ?? JOB_TIMEOUT_MS,
+      signal: opts.signal,
       resolve,
       reject,
     };
-    if (signal) {
+    if (opts.signal) {
       const onAbort = () => {
         const idx = queue.indexOf(entry);
         if (idx === -1) return;
@@ -195,12 +227,85 @@ function submitEmbedJob(
         entry.cleanup?.();
         reject(CANCELLED);
       };
-      signal.addEventListener("abort", onAbort, { once: true });
-      entry.cleanup = () => signal.removeEventListener("abort", onAbort);
+      opts.signal.addEventListener("abort", onAbort, { once: true });
+      entry.cleanup = () => opts.signal?.removeEventListener("abort", onAbort);
     }
     queue.push(entry);
     pump();
   });
+}
+
+function submitEmbedJob(
+  texts: string[],
+  signal?: AbortSignal,
+): Promise<WorkerReply> {
+  return submitJob(
+    { id: nextId++, kind: "embed", texts },
+    { timeoutMs: JOB_TIMEOUT_MS, signal },
+  );
+}
+
+export interface ExtractPdfOptions {
+  timeoutMs?: number;
+  maxPages?: number;
+  maxChars?: number;
+  signal?: AbortSignal;
+}
+
+export interface ExtractPdfResult {
+  text: string;
+  totalPages: number;
+  extractedPages: number;
+  truncated: boolean;
+}
+
+export async function extractPdfText(
+  bytes: Uint8Array,
+  opts: ExtractPdfOptions = {},
+): Promise<ExtractPdfResult> {
+  opts.signal?.throwIfAborted();
+  if (!bytes || bytes.byteLength === 0) {
+    throw new Error("PDF file is empty");
+  }
+  if (bytes.byteLength > MAX_PDF_UPLOAD_BYTES) {
+    throw new Error(
+      `PDF exceeds maximum size of ${Math.round(MAX_PDF_UPLOAD_BYTES / (1024 * 1024))} MB`,
+    );
+  }
+
+  // Copy into a standalone ArrayBuffer so transferring ownership to the worker
+  // never detaches a caller's Buffer or shared Node slab pool.
+  const owned = new Uint8Array(bytes.byteLength);
+  owned.set(bytes);
+  const transferBuf = owned.buffer as ArrayBuffer;
+
+  const reply = await submitJob(
+    {
+      id: nextId++,
+      kind: "extract_pdf",
+      bytes: owned,
+      maxPages: opts.maxPages ?? DEFAULT_PDF_MAX_PAGES,
+      maxChars: opts.maxChars ?? DEFAULT_PDF_MAX_CHARS,
+    },
+    {
+      transfer: [transferBuf],
+      timeoutMs: opts.timeoutMs ?? DEFAULT_PDF_TIMEOUT_MS,
+      signal: opts.signal,
+    },
+  );
+
+  if (!reply.ok) {
+    throw new Error(`PDF extraction failed (${reply.stage}): ${reply.error}`);
+  }
+  if (reply.kind !== "extract_pdf") {
+    throw new Error("Unexpected worker reply kind for extract_pdf");
+  }
+  return {
+    text: reply.text,
+    totalPages: reply.totalPages,
+    extractedPages: reply.extractedPages,
+    truncated: reply.truncated,
+  };
 }
 
 export async function embedTextsLocal(
@@ -222,6 +327,9 @@ export async function embedTextsLocal(
     const reply = await submitEmbedJob(texts, opts.signal);
     if (!reply.ok) {
       throw new Error(`Embed (${reply.stage}): ${reply.error}`);
+    }
+    if (reply.kind !== "embed") {
+      throw new Error("Unexpected worker reply kind for embed");
     }
     return unflatten(reply.flat, reply.count, reply.dims);
   } catch (err) {
