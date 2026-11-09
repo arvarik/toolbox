@@ -370,7 +370,6 @@ describe("Wave 1C — Sanitized SVG, Math, Currency & Mermaid Security Suite", (
           topicName=""
           pillarId="compute"
           topicId="algos"
-          onSaveSuccess={vi.fn()}
         />,
       );
       expect(modalContainer.querySelectorAll(".katex").length).toBeGreaterThanOrEqual(2);

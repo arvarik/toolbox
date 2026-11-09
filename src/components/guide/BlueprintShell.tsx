@@ -464,7 +464,6 @@ export default function BlueprintShell() {
         topicName={topic.name}
         pillarId={pillarId}
         topicId={topicId}
-        onSaveSuccess={() => {}}
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>

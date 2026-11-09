@@ -21,7 +21,7 @@ import SessionPicker, { type ChatMessage, type ChatSession } from './SessionPick
 import type { CommitTopicContext } from '../../stores/useCommitStore'
 import useAppStore from '../../stores/appStore'
 import { getActiveKitSlugForRequest, useActiveKit } from '../../stores/useKitStore'
-import { chatApi, guideContentApi } from '../../utils/api'
+import { chatApi, guideContentApi, type GeneratedFlashcardDraft } from '../../utils/api'
 
 // ─── Session storage (scoped per Kit slug) ────────────────────────────────────
 const SESSIONS_KEY = 'toolbox_learning_sessions'
@@ -112,11 +112,6 @@ export interface ActiveStudyTopic {
   topic: Pillar['topics'][number]
 }
 
-interface GeneratedCard {
-  front: string
-  back: string
-}
-
 interface PopupState {
   text: string
   top: number
@@ -180,7 +175,7 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
   // Flashcards state
   const [popupState, setPopupState] = useState<PopupState | null>(null)
   const [showReviewModal, setShowReviewModal] = useState(false)
-  const [generatedCards, setGeneratedCards] = useState<GeneratedCard[]>([])
+  const [generatedCards, setGeneratedCards] = useState<GeneratedFlashcardDraft[]>([])
   const [isGeneratingCards, setIsGeneratingCards] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -403,12 +398,12 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
           .join('\n')
       }
 
-      const res = (await chatApi.generateFlashcards({
+      const res = await chatApi.generateFlashcards({
         text: textToGen,
         topicName,
         model: selectedModel,
         sessionContext,
-      })) as { cards?: GeneratedCard[] }
+      })
       if (res.cards && res.cards.length > 0) {
         setGeneratedCards(res.cards)
         setShowReviewModal(true)
@@ -434,12 +429,12 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
         .map((m) => `${m.role === 'user' ? 'Student' : 'Tutor'}: ${m.content}`)
         .join('\n\n')
 
-      const res = (await chatApi.generateFlashcards({
+      const res = await chatApi.generateFlashcards({
         text: fullSessionText,
         topicName,
         model: selectedModel,
         sessionContext: '',
-      })) as { cards?: GeneratedCard[] }
+      })
 
       if (res.cards && res.cards.length > 0) {
         setGeneratedCards(res.cards)
@@ -753,7 +748,7 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
             onRename={renameSession}
             onDelete={deleteSession}
           />
-          <PersonaPicker activeId={personaId} onSelect={setPersonaId} />
+          <PersonaPicker personas={activePersonas} activeId={personaId} onSelect={setPersonaId} />
           {messages.length > 0 && (
             <span className="hide-on-mobile" style={{
               fontSize: '10px', color: 'var(--color-text-tertiary)',
@@ -914,9 +909,6 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
         topicName={activeTopic?.topic?.name || currentSession?.topicName || undefined}
         pillarId={activeTopic?.pillar?.id || currentSession?.pillarId || undefined}
         topicId={activeTopic?.topic?.id || currentSession?.topicId || undefined}
-        onSaveSuccess={() => {
-          // Toast is handled inside the modal
-        }}
       />
 
       {/* ── Messages ── */}

@@ -25,7 +25,6 @@ export default function StatsDashboard({ deck, onBack }: StatsDashboardProps) {
 
     // 2. Mastery / Mature count (Anki definition: interval >= 21 days)
     const matureCount = cards.filter((c) => c.state === 2 && (c.interval || 0) >= 21).length
-    const youngCount = cards.filter((c) => c.state === 2 && (c.interval || 0) < 21).length
     const masteryPercentage = total > 0 ? Math.round((matureCount / total) * 100) : 0
 
     // 3. Ease factor distribution
@@ -73,7 +72,6 @@ export default function StatsDashboard({ deck, onBack }: StatsDashboardProps) {
       learnCount,
       reviewCount,
       matureCount,
-      youngCount,
       masteryPercentage,
       avgEase,
       easeBuckets,

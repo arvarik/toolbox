@@ -76,10 +76,6 @@ export interface FlashcardViewProps {
   reviewMode?: boolean
 }
 
-function getCurrentTime(): number {
-  return Date.now()
-}
-
 export default function FlashcardView({
   cards = [],
   onBack,
@@ -120,7 +116,7 @@ export default function FlashcardView({
       setIsReviewing(false)
       setReviewedCount(0)
       setSessionStats(null)
-      startTimeRef.current = getCurrentTime()
+      startTimeRef.current = Date.now()
       ratingsRef.current = {}
       correctCountRef.current = 0
       setInterceptorActive(false)
@@ -281,7 +277,7 @@ export default function FlashcardView({
         const finalStats: StudySessionStats = {
           totalCards: newReviewedCount,
           correctCards: correctCountRef.current,
-          totalTimeMs: getCurrentTime() - (startTimeRef.current || getCurrentTime()),
+          totalTimeMs: Date.now() - (startTimeRef.current || Date.now()),
           ratings: { ...ratingsRef.current },
         }
         setSessionStats(finalStats)
@@ -400,7 +396,7 @@ export default function FlashcardView({
             setSessionQueue([...cards])
             setCurrentIndex(0)
             setReviewedCount(0)
-            startTimeRef.current = getCurrentTime()
+            startTimeRef.current = Date.now()
             ratingsRef.current = {}
             correctCountRef.current = 0
             setSessionStats(null)

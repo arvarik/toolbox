@@ -10,12 +10,12 @@ export interface StudySessionStats {
 export interface StudySessionSummaryProps {
   stats: StudySessionStats
   onBack?: () => void
-  onStudyAgain?: () => void
+  onStudyAgain: () => void
 }
 
 /**
  * StudySessionSummary — displayed after completing a study/review session.
- * Shows performance metrics: total cards, accuracy, time, and streak info.
+ * Shows performance metrics: total cards, accuracy, time, and the rating distribution.
  */
 export default function StudySessionSummary({
   stats,
@@ -32,14 +32,12 @@ export default function StudySessionSummary({
   // Rating distribution
   const ratingLabels: Record<number, string> = {
     0: 'Again',
-    1: 'Again',
     3: 'Hard',
     4: 'Good',
     5: 'Easy',
   }
   const ratingColors: Record<number, string> = {
     0: 'var(--color-error)',
-    1: 'var(--color-error)',
     3: 'var(--color-warning)',
     4: 'var(--color-success)',
     5: 'var(--color-info)',
@@ -142,12 +140,10 @@ export default function StudySessionSummary({
           <ArrowLeft size={14} />
           Back to Decks
         </button>
-        {onStudyAgain && (
-          <button className="btn btn-primary" onClick={onStudyAgain}>
-            <Brain size={14} />
-            Study Again
-          </button>
-        )}
+        <button className="btn btn-primary" onClick={onStudyAgain}>
+          <Brain size={14} />
+          Study Again
+        </button>
       </div>
     </div>
   )
