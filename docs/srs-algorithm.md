@@ -13,11 +13,11 @@ Toolbox v2 replaces v1's SM-2 formula with a pure-TypeScript implementation of *
 | `state` | Name | Scheduling Behavior |
 |---------|------|---------------------|
 | `0` | **New** | Never reviewed; initializes $(S_0, D_0)$ on first review |
-| `1` | **Learning** | Intraday minute-based steps (`learning_steps`, default `[1, 10]`) before graduating to Review |
+| `1` | **Learning** | Intraday minute-based steps (deck setting `steps`, default `1m 10m`) before graduating to Review |
 | `2` | **Review** | Day-based intervals computed from Stability $S$ and `desired_retention` $R_d$ |
-| `3` | **Relearning** | Lapsed Review card stepping through `relearning_steps` (default `[10]`) |
+| `3` | **Relearning** | Lapsed Review card stepping through `lapse_steps` (default `10m`) |
 
-Review endpoints accept either FSRS grades (`1..4`) or legacy SM-2 `quality` (`0..5`), normalized via `ratingToGrade`:
+The REST review endpoint accepts SM-2 `quality` (`0..5`). The MCP `review_card` tool also accepts an FSRS `rating` (`1..4`). `qualityToFsrsGrade` maps quality to a grade:
 - **Again (`1`)**: `quality <= 2`
 - **Hard (`2`)**: `quality === 3`
 - **Good (`3`)**: `quality === 4`
@@ -43,14 +43,14 @@ Given elapsed time $t \ge 0$ (in days) since `last_reviewed` and Stability $S > 
 
 $$\text{factor} = 0.9^{-1/w_{20}} - 1, \qquad R(t, S) = \left(1 + \text{factor} \cdot \frac{t}{S}\right)^{-w_{20}}$$
 
-For a deck's target `desired_retention` $R_d \in [0.75, 0.97]$ (default $0.90$), the next Review interval in days (clamped to `[1, maximum_interval]`, default max `36500`) is:
+For a deck's target `desired_retention` $R_d \in [0.75, 0.97]$ (default $0.90$, set through the deck settings API), the next Review interval in days (at least 1, then scaled by the deck's `interval_modifier`, default `1.0`) is:
 
 $$I(S, R_d) = \max\left(1,\; \text{round}\left(\frac{S}{\text{factor}} \left(R_d^{-1/w_{20}} - 1\right)\right)\right)$$
 
 ### DSR State Transitions
 
 1. **Initial State (`New` card, grade $G \in \{1,2,3,4\}$)**:
-   $$S_0(G) = \max(0.05, w_{G-1}), \qquad D_0(G) = \text{clamp}_{[1,10]}\!\left(w_4 - e^{w_5 (G - 1)} + 1\right)$$
+   $$S_0(G) = \max(0.01, w_{G-1}), \qquad D_0(G) = \text{clamp}_{[1,10]}\!\left(w_4 - e^{w_5 (G - 1)} + 1\right)$$
 
 2. **Difficulty Update (linear damping + mean reversion toward $D_0(4)$)**:
    $$\Delta D = -w_6 (G - 3), \qquad D' = D + \Delta D \cdot \frac{10 - D}{9}$$
@@ -76,28 +76,29 @@ Legacy v1 cards (`stability == null` or `difficulty == null`) are migrated lazil
 
 ### Metacognitive Confidence & Hypercorrection
 
-- **Guessed Pass Cap**: Submitting `confidence: "guessed"` on a passing rating (`quality > 3`, i.e., Good or Easy) caps the effective grade to **Hard (`G = 2`)** so lucky guesses do not inflate stability.
+- **Guessed Pass Cap**: Submitting `confidence: "guessed"` on a passing rating (`quality > 3`, i.e., Good or Easy) caps the effective grade to **Hard (`G = 2`)** so lucky guesses do not inflate stability. Only API clients send `guessed` today. The web app's **Low** option and the MCP tool send `low`, which the scheduler treats like `medium`.
 - **High-Confidence Lapse (Hypercorrection)**: Failing (`G = 1`) while declaring `confidence: "high"` halves the initial learning/relearning step (`Math.max(1, steps[0] / 2)` minutes) to force immediate error correction.
 
 ---
 
 ## 2. Knowledge Graph Health (`server/graph/health.ts`)
 
-Each Kit's curriculum forms a validated DAG (`KitSkeleton`). Node health is computed purely from the live FSRS-6 retrievability $R(t, S)$ of cards mapped to that `node_id`:
-- Unreviewed cards (`state = 0`) contribute $R = 0$; active cards contribute $R(t, S) \in (0, 1]$.
-- Nodes are classified into readiness states (`mastered`, `ready`, `due`, `weak`, `blocked`, `new`) by combining the node's mean retrievability, due card count, and whether all direct prerequisite nodes meet mastery thresholds.
+Each Kit's curriculum forms a validated DAG (`KitSkeleton`). Node health comes from the cards mapped to that `node_id`:
+- Review cards contribute their live FSRS-6 retrievability $R(t, S)$ as strength. Other cards use fixed scores, from `0` for new cards to `1` for mastered cards.
+- Each node gets a health bucket (`mastered`, `due`, `decayed`, or `unseen`) and the flags `locked` and `ready`. A node is `locked` while a direct prerequisite is unsatisfied, and `ready` when it is `unseen` and not locked.
+- A prerequisite counts as satisfied when at least 60% of its cards have graduated (`PREREQ_SATISFIED_RATIO = 0.6`).
 
 ---
 
 ## 3. FIRe-Lite Upward Prerequisite Credit (`server/graph/encompassing.ts`)
 
-Inspired by **Fractional Implicit Repetition (FIRe)**, demonstrating recall on an advanced node implicitly exercises its prerequisites. When a learner passes a flashcard review (`quality >= 3`) or passes an **unassisted** drill (`pass && !assisted`), Toolbox propagates fractional stability credit up the Kit's prerequisite DAG:
+Inspired by **Fractional Implicit Repetition (FIRe)**, demonstrating recall on an advanced node implicitly exercises its prerequisites. When a learner rates a Review flashcard Good or Easy (`quality >= 4`) or passes an **unassisted** drill (`masteryEligible && score >= 0.8`), Toolbox propagates fractional stability credit up the Kit's prerequisite DAG:
 
 - **Hop Decay**: Direct prerequisites (1 hop) receive $\alpha_1 = 0.50$; 2-hop ancestors receive $\alpha_2 = 0.25$.
 - **Eligible Targets**: Only graduated cards (`state = 2`) on ancestor nodes that are **not** currently queued in `remediation_queue`.
 - **Spacing Discount**: Credit scales by how much forgetting has actually occurred so rapid back-to-back drills cannot spam stability:
   $$\Delta = \alpha_{\text{hop}} \cdot \text{weight} \cdot (1 - R(t, S))$$
-  Cards with $\Delta < 0.05$ (`MIN_EFFECTIVE_CREDIT`) are skipped.
+  Cards with $\Delta < 0.05$ (`MIN_IMPLICIT_DELTA`) are skipped.
 - **Stability Interpolation**:
   $$S_{\text{new}} = S + \Delta \cdot \left(S_{\text{recall}}(D, S, R, 3) - S\right)$$
   `next_review` is only pushed forward (never pulled earlier than its existing timestamp).
@@ -106,20 +107,20 @@ Inspired by **Fractional Implicit Repetition (FIRe)**, demonstrating recall on a
 
 ## 4. Downward Prerequisite Remediation (`server/graph/remediation.ts`)
 
-When a learner fails a flashcard (`quality < 3`) or fails a drill (`score < 0.60`), `planRemediation` inspects cards belonging to direct prerequisite nodes (or explicit `card.prerequisite_id`) and selects up to **3 shaky foundation cards** (`MAX_REMEDIATION_CARDS = 3`) matching any weakness signal:
+When a learner fails a flashcard (`quality < 3`), `planRemediation` inspects cards belonging to direct prerequisite nodes (or explicit `card.prerequisite_id`). When a learner fails a drill (`score < 0.60`), `planNodeFailureRemediation` does the same for the drill's node, and falls back to shaky cards on that node when no prerequisite card qualifies. Both select up to **3 shaky foundation cards** (`MAX_REMEDIATION_CARDS = 3`) matching any weakness signal:
 - Not yet graduated (`state !== 2`),
 - Low ease / high difficulty (`ease_factor < 2.3`),
 - Short stability/interval (`interval < 4` days), or
 - Currently overdue (`next_review <= now`).
 
-Queued cards are inserted into `remediation_queue` (`ownerId`, `kitId`, `card_id`, `triggered_by`) and surfaced at the front of the learner's due review queue until passed (`quality >= 3`).
+Queued cards are inserted into `remediation_queue` (`ownerId`, `kit_id`, `card_id`, `source_card_id`, `node_id`, `node_name`, `reason`) and surfaced at the front of the learner's due review queue. The entry resolves on the card's next review, whatever the grade.
 
 ---
 
 ## 5. Attempt-Gated Drills & Anti-Sycophancy (`server/srs/antiSycophancy.ts`)
 
 ### Progressive Hints & Attempt Gate
-Drills (`recall`, `apply`, `synthesize`, `critique`) require a substantive learner submission before feedback or worked solutions unlock:
+Drills (difficulty `1`–`3`) require a substantive learner submission before feedback unlocks. The web app also keeps the worked solution hidden until then:
 - **Hint 1** (conceptual nudge): no score cap.
 - **Hint 2** (structural scaffold): caps `score <= 0.80`.
 - **Hint 3** (near-complete walkthrough) or **Reveal Worked Solution**: marks the attempt `assisted = true` and `masteryEligible = false` (suppresses upward FIRe credit).
@@ -127,17 +128,17 @@ Drills (`recall`, `apply`, `synthesize`, `critique`) require a substantive learn
 ### Errors-First Grading Guardrails
 To prevent LLM praise inflation:
 1. Learner text is isolated inside `<untrusted_submission>...</untrusted_submission>` tags with explicit system instructions to ignore embedded grading directives.
-2. The structured Zod output schema (`AntiSycophancyEvaluationSchema`) forces the model to enumerate `extractedClaims`, `factualOrLogicalErrors`, `unexplainedJargon`, and per-item `rubricChecks` **before** emitting `score` and `pass`.
-3. `enforceAntiSycophancyGuardrails` applies deterministic server-side overrides:
+2. The structured Zod output schema (`EvaluationResultLlmSchema`) forces the model to enumerate `extractedClaims`, `factualOrLogicalErrors`, `unexplainedJargon`, and per-item `rubricChecks` **before** emitting `score` and `pass`.
+3. `enforceAntiSycophancy` applies deterministic server-side overrides:
    - Any non-empty `factualOrLogicalErrors` **hard-caps `score <= 0.59` and forces `pass = false`**, regardless of what raw score the LLM proposed.
-   - `pass` is recomputed strictly as `factualOrLogicalErrors.length === 0 && score >= passThreshold && !assisted`.
+   - `pass` is recomputed as `raw.pass && factualOrLogicalErrors.length === 0 && score >= passThreshold` (default `passThreshold = 0.75`), and `masteryEligible = pass && !assisted`.
 
 ---
 
 ## 6. `⚡ Challenge Node` Diagnostic Fast-Track (`server/routes/drills.ts`)
 
 Experienced learners can skip basic repetition on a topic they already know via `GET /api/drills/challenge/:nodeId` and `POST /api/drills/challenge/:nodeId`:
-1. Generates (or reuses) a **difficulty-3** scenario drill paired with a mandatory **first-principles Feynman explanation** prompt (`explainPrompt`).
+1. Generates (or reuses) a **difficulty-3** scenario drill paired with a mandatory **first-principles Feynman explanation** prompt (`feynmanPrompt`).
 2. Evaluates the combined response through the anti-sycophancy rubric with a strict threshold: **`passThreshold = 0.85`**, zero `factualOrLogicalErrors`, and `assisted = false`.
 3. On pass:
    - Commits the learner's Feynman explanation into the node's first empty `guide_content` section (never overwriting existing notes).

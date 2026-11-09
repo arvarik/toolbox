@@ -9,11 +9,11 @@ Production self-hosting guide covering Docker Compose, multi-tenant security, re
 | Requirement | Minimum / Notes |
 |-------------|-----------------|
 | **Container Runtime** | Docker 24+ with Docker Compose v2 |
-| **Bare-Metal Runtime** | Node.js ≥ 24 on a **glibc** OS (Debian 12/13, Ubuntu 22.04+, macOS) |
+| **Bare-Metal Runtime** | Node.js ≥ 26 on Linux with **glibc** (Debian 12/13, Ubuntu 22.04+) or macOS |
 | **Memory & CPU** | **1 GB RAM** and **1.0 vCPU** (`sqlite-vec` + quantized ONNX embedding worker) |
 | **Disk** | ~500 MB for container image + `${DATA_DIR}` for SQLite, backups, uploads, and ~90 MB ONNX model cache |
 
-> **Why Debian `node:24-trixie-slim` instead of Alpine?** Native prebuilds for `better-sqlite3`, `sqlite-vec`, and `onnxruntime-node` require `glibc`. Running on `trixie-slim` avoids slow source compilation and musl runtime crashes.
+> **Why Debian `node:26-trixie-slim` instead of Alpine?** Native prebuilds for `better-sqlite3`, `sqlite-vec`, and `onnxruntime-node` require `glibc`. Running on `trixie-slim` avoids slow source compilation and musl runtime crashes.
 
 ---
 
@@ -36,6 +36,23 @@ docker compose logs -f toolbox
 
 Both `Dockerfile` and `docker-compose.yml` run a zero-dependency Node `fetch` healthcheck against `http://127.0.0.1:3100/api/health` (no `curl` or `wget` binary required in `trixie-slim`, and `127.0.0.1` avoids IPv6 loopback quirks in LXC).
 
+Docker Compose passes only the variables listed under `environment:` in `docker-compose.yml` into the container. To use another variable from [section 6](#6-environment-variables-reference), such as `OIDC_ISSUER` or `TRANSFORMERS_OFFLINE`, add it to that list.
+
+The `latest` image tag follows the `main` branch. Each release tag `vX.Y.Z` also publishes the image as `X.Y.Z`.
+
+### Run without Docker
+
+```bash
+git clone https://github.com/arvarik/toolbox.git
+cd toolbox
+cp .env.example .env   # npm start reads .env
+npm ci
+npm run build
+npm start              # http://127.0.0.1:3100
+```
+
+`HOST` defaults to `127.0.0.1`, so only this machine can connect. To accept other machines, set `HOST=0.0.0.0` and `AUTH_REQUIRED=true`, or put a reverse proxy in front.
+
 ---
 
 ## 2. Securing a Multi-Tenant Instance
@@ -44,14 +61,26 @@ By default (`AUTH_REQUIRED=false`), Toolbox starts in frictionless single-user m
 
 To run a shared or internet-facing instance:
 1. Set `AUTH_REQUIRED=true` and `PUBLIC_URL=https://toolbox.example.com` in `.env` (or open **Settings → Instance Admin → Secure This Instance** in the UI to create the first admin account; creating any password account permanently enables auth).
-2. Set an explicit 32-byte `TOOLBOX_SECRET_KEY` (`openssl rand -hex 32`) in `.env` **or** ensure `${DATA_DIR}/secret.key` is persisted on your volume. `secretBox` uses this key (`AES-256-GCM`) to encrypt provider API keys, user BYOK keys, OIDC client secrets, and SMTP passwords at rest.
+2. Set an explicit `TOOLBOX_SECRET_KEY` of 64 hex characters (`openssl rand -hex 32`; other formats stop the server at startup) in `.env` **or** ensure `${DATA_DIR}/secret.key` is persisted on your volume. `secretBox` uses this key (`AES-256-GCM`) to encrypt provider API keys, user BYOK keys, OIDC client secrets, and SMTP passwords at rest.
 3. **Passkeys (WebAuthn) & OIDC SSO**: Both derive the Relying Party ID and callback URLs from `PUBLIC_URL`. Set `PUBLIC_URL` to your exact external origin (no trailing path) and configure `TRUST_PROXY_HOPS=1` when behind Nginx/Caddy/Traefik.
+
+### Recover a Locked-Out Account
+
+The command prints a temporary password, signs the account out everywhere, and requires a new password at the next sign-in:
+
+```bash
+# Docker (the image has no npm)
+docker exec -it toolbox node scripts/reset-password.ts <username-or-email>
+
+# Source install
+npm run reset-password -- <username-or-email>
+```
 
 ---
 
 ## 3. Reverse Proxy Configuration
 
-Streaming AI chat (`POST /api/chat/stream`) and Kit compilation (`POST /api/compiler/compile`) use **Server-Sent Events (SSE)**. Disable response buffering on your proxy.
+Streaming AI chat (`POST /api/chat/stream`) uses **Server-Sent Events (SSE)**, and Kit compilation (`POST /api/compiler/compile`) can run for minutes. Disable response buffering and allow long reads on your proxy.
 
 ### Nginx
 
@@ -114,7 +143,7 @@ To enable live web citations in AI Chat and Stage 3 of the Deep Research Kit Com
 
 ## 5. Airgapped / Offline Local Embeddings
 
-Toolbox runs `Xenova/all-MiniLM-L6-v2` (quantized ONNX, 384 dimensions) locally inside a persistent worker thread. Weights are pinned by HuggingFace commit revision and verified by SHA-256 (`scripts/fetch-models.ts`).
+Toolbox runs `Xenova/all-MiniLM-L6-v2` (quantized ONNX, 384 dimensions) locally inside a persistent worker thread. Weights are pinned by HuggingFace commit revision. `scripts/fetch-models.ts` records each file's SHA-256 on first download and verifies it on later runs.
 
 To pre-populate weights for an airgapped environment:
 
@@ -129,20 +158,22 @@ docker exec toolbox node scripts/fetch-models.ts /app/data/models
 docker exec toolbox node scripts/fetch-models.ts --check /app/data/models
 ```
 
-Then set `TRANSFORMERS_OFFLINE=1` in `.env` so the worker never attempts runtime HuggingFace downloads.
+Then set `TRANSFORMERS_OFFLINE=1` so the worker never attempts runtime HuggingFace downloads (in `.env` for a source install, or under `environment:` in `docker-compose.yml`).
 
 ---
 
 ## 6. Environment Variables Reference
 
+A source install reads these from `.env` (see [`.env.example`](../.env.example)). Docker Compose passes only the variables listed under `environment:` in `docker-compose.yml`.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `3100` | HTTP listen port |
-| `HOST` | `0.0.0.0` | Bind address |
-| `NODE_ENV` | `production` | Serves built `dist/` SPA when `production` |
-| `DATA_DIR` | `./data` | Root directory for DB, `secret.key`, `backups/`, `models/`, and uploads |
+| `HOST` | `127.0.0.1` (`0.0.0.0` in the Docker image) | Bind address |
+| `NODE_ENV` | — (`npm start` and the Docker image set `production`) | Serves built `dist/` SPA when `production` |
+| `DATA_DIR` | `./data` | Root directory for DB, `secret.key`, `backups/`, `models/`, and `uploads/` |
 | `DB_PATH` | `${DATA_DIR}/toolbox.db` | SQLite database file path |
-| `TOOLBOX_SECRET_KEY` | auto (`${DATA_DIR}/secret.key`) | 32-byte hex or base64 key for `AES-256-GCM` encryption at rest |
+| `TOOLBOX_SECRET_KEY` | auto (`${DATA_DIR}/secret.key`) | 64 hex characters (32 bytes) for `AES-256-GCM` encryption at rest |
 | `AUTH_REQUIRED` | `false` | Require login before any password account exists |
 | `PUBLIC_URL` | — | Canonical `http(s)://host` origin for Passkeys, OIDC, and email links |
 | `TRUST_PROXY_HOPS` | `0` | Trusted reverse-proxy hop count (`0`–`10`) |
@@ -151,12 +182,14 @@ Then set `TRANSFORMERS_OFFLINE=1` in `.env` so the worker never attempts runtime
 | `GEMINI_API_KEY` | — | Instance Gemini API key |
 | `OPENAI_API_KEY` | — | Instance OpenAI API key |
 | `CLAUDE_API_KEY` | — | Instance Anthropic Claude API key |
+| `ALLOW_PRIVATE_BYOK_ENDPOINTS` | `false` | Set `true` to let every user, not only admins, add OpenAI-compatible endpoints on private network addresses (for example a LAN Ollama server). This turns off an SSRF guard, so use it only when you trust every account |
 | `SEARXNG_URL` | — | SearXNG base URL for grounded web search |
 | `MODELS_DIR` | `${DATA_DIR}/models` | Directory for local ONNX embedding models |
 | `TRANSFORMERS_OFFLINE` | — | Set `1` to forbid runtime HuggingFace network fetches |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | — | Optional OIDC SSO credentials (`OIDC_NAME`, `OIDC_MATCH_BY_EMAIL`) |
 | `SMTP_URL` / `MAIL_FROM` / `MAIL_REPLY_TO` | — | Optional SMTP transport for invites, magic links, and resets |
-| `BACKUP_INTERVAL_HOURS` / `BACKUP_KEEP` | `24` / `14` | Automated online SQLite snapshot cadence and retention count |
+| `BACKUP_KEEP` | `7` | Number of SQLite backups to keep (`1`–`50`); older ones are deleted after each new backup |
+| `BACKUP_INTERVAL_HOURS` | `24` | Saved and shown in the admin settings API (`0`–`168`). No scheduler runs backups yet, see [section 7](#7-data-persistence-backups--upgrading) |
 
 ---
 
@@ -165,9 +198,11 @@ Then set `TRANSFORMERS_OFFLINE=1` in `.env` so the worker never attempts runtime
 All persistent state lives inside `${DATA_DIR}` (`/app/data` in Docker):
 - `toolbox.db` (plus `-wal` / `-shm` journals while running)
 - `secret.key` (critical if `TOOLBOX_SECRET_KEY` is not set in `.env` — back this up alongside `toolbox.db` so encrypted keys remain decryptable!)
-- `backups/` (online SQLite snapshots created automatically or via **Settings → Instance Admin → Backups**)
-- `sources/` (uploaded PDFs/files attached to Kits)
+- `backups/` (verified online SQLite backups created with **Create Verified Backup** in **Settings → Instance Admin**, or `POST /api/admin/backups`)
+- `uploads/` (uploaded PDFs/files attached to Kits)
 - `models/` (cached ONNX weights)
+
+Toolbox does not schedule backups yet. Create them from the admin page, or stop Toolbox and copy `${DATA_DIR}`.
 
 ### Per-Kit Portable Backups
 Individual users can export any Kit from the Library without admin access:

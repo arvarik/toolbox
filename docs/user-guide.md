@@ -8,7 +8,7 @@ Practical guide to Toolbox v2's workflows, multi-Kit Library, Deep Research Kit 
 
 Toolbox organizes every subject into a self-contained **Kit** — a curriculum prerequisite graph (`KitSkeleton`), Guide blueprint sections, Flashcard decks, Guided Drills, Canvas boards, AI Tutor persona prompts, and uploaded reference sources.
 
-- **System Design Starter Kit**: Provisioned automatically on first launch so you can start studying immediately.
+- **System Design Starter Kit**: On a new instance the Library is empty. Click **Add System Design Kit** to add the official starter Kit in one click. Kit pages such as `/chat` also create it on first use.
 - **Personal Library (`/`)**: Switch between Kits, resume where you left off, or click **Import** to load either:
   - `<slug>.toolbox-kit.json` (**Mode 1**): A clean curriculum skeleton shared by another learner or instructor.
   - `<slug>.toolbox-backup.zip` (**Mode 2**): A complete backup restoring your flashcards, FSRS-6 scheduling state, Guide notes, boards, chat history, and uploaded PDFs.
@@ -18,21 +18,20 @@ Toolbox organizes every subject into a self-contained **Kit** — a curriculum p
 
 ## 2. New Kit Studio & Living Kits (`/new`)
 
-Click **+ New Kit** (`/new`) to compile a structured Kit on any technical or academic subject through 4 stages:
+Click **Create Kit** (`/new`) to compile a structured Kit on any technical or academic subject in 3 steps:
 
-1. **Ingest Sources (Optional)**: Upload PDFs (parsed locally via `unpdf`), Markdown/text files, or paste reference URLs.
-2. **Calibrate**: Enter your topic and learning goal. Toolbox generates 3–5 quick diagnostic questions to calibrate depth, prior knowledge, and workspace capabilities (`Architecture` whiteboard, Novakian `Concept` map, or `None`; BotE Calculator on/off).
-3. **Synthesize**: Streams grounded web research (when SearXNG is configured) and compiles an acyclic prerequisite DAG of pillars, topics, blueprint sections, and learning tracks.
-4. **Refine & Commit**: Request natural-language adjustments (*"Add a pillar on consensus protocols"*, *"Split Raft and Paxos"*) and commit the Kit to your Library.
+1. **Sources & Topic**: Enter your topic and learning goal. Optionally upload PDFs (parsed locally via `unpdf`), Markdown/text files, or paste reference URLs.
+2. **Calibrate Scope**: Answer 3 quick scoping questions that calibrate depth, prior knowledge, and workspace capabilities (`Architecture` whiteboard, Novakian `Concept` map, or `None`; BotE Calculator on/off).
+3. **Blueprint & DAG**: Toolbox runs grounded web research (when SearXNG is configured) and compiles an acyclic prerequisite DAG of pillars, topics, blueprint sections, and learning tracks. Request natural-language adjustments (*"Add a pillar on consensus protocols"*, *"Split Raft and Paxos"*) and commit the Kit to your Library.
 
 ### Living Kit Expansion
-Inside any existing Kit's Mastery Path (`/k/:slug`) or Knowledge Graph (`/k/:slug/graph`), trigger **Expand Kit** to research and splice 1–6 new sub-DAG nodes into your curriculum without disturbing existing notes or flashcard progress.
+On a Kit card in the Library (`/`), click **Expand Kit** to research and splice new sub-DAG nodes (usually 4–12) into your curriculum without disturbing existing notes or flashcard progress.
 
 ---
 
 ## 3. Kit Mastery Path & Knowledge Graph (`/k/:slug`, `/k/:slug/graph`)
 
-- **Mastery Path (`/k/:slug`)**: Displays pillars, node readiness (`Ready`, `Due`, `Weak`, `Mastered`, `Blocked`), due flashcard counts, and quick actions into Guide, Drills, Chat, or `⚡ Challenge Node`.
+- **Mastery Path (`/k/:slug`)**: Displays pillars, node status (`Mastered`, `Needs Remediation`, `In Progress`, `Ready / Unlocked`, `Locked`), due flashcard counts, and quick actions into Guide, Drills, Chat, or `⚡ Challenge Node`.
 - **Knowledge Graph (`/k/:slug/graph`)**: Interactive React Flow + `dagre` prerequisite DAG colored by live FSRS-6 retrievability $R(t, S)$. Hover or select any node to highlight upstream prerequisites and downstream dependents, filter by readiness or learning track, and launch targeted study sessions.
 
 ---
@@ -41,7 +40,7 @@ Inside any existing Kit's Mastery Path (`/k/:slug`) or Knowledge Graph (`/k/:slu
 
 Guided Drills test active generation rather than passive recognition:
 
-- **4 Drill Modes**: `Recall`, `Apply` (scenario problem-solving), `Synthesize` (connecting multiple nodes), and `Critique` (finding flaws in a proposed design or argument).
+- **3 Difficulty Levels**: Generate a drill for any node at Level 1, 2, or 3, and filter the drill list by level.
 - **Attempt-Gated Workflow**: Worked solutions stay locked until you submit an earnest attempt. Up to **3 progressive hints** are available:
   - *Hint 1* (conceptual nudge): no score penalty.
   - *Hint 2* (structural scaffold): caps score at `80%`.
@@ -53,10 +52,10 @@ Guided Drills test active generation rather than passive recognition:
 
 ## 5. Spaced Repetition Flashcards (`/k/:slug/study`, `/review`)
 
-- **FSRS-6 Scheduling**: Rate each card **Again**, **Hard**, **Good**, or **Easy** (`1`–`4` or keyboard shortcuts). Adjust per-deck **Desired Retention** (`75%`–`97%`, default `90%`) in Deck Settings to trade review workload against recall probability.
-- **Confidence Calibration**: Tag reviews as *Guessed* (caps passing grades to Hard so lucky guesses don't inflate intervals) or *High Confidence* (halves relearning delay on a miss via Hypercorrection).
+- **FSRS-6 Scheduling**: Rate each card **Again**, **Hard**, **Good**, or **Easy** (`1`–`4` or keyboard shortcuts). Each deck targets 90% recall by default. Deck Options set daily limits and learning steps.
+- **Confidence Calibration**: Before revealing a card, pick **Low**, **Medium**, or **High** confidence. **High** halves the first relearning step after a miss (hypercorrection). **Low** and **Medium** do not change the schedule.
 - **FIRe Graph Credit & Adaptive Remediation**:
-  - Passing advanced cards or unassisted drills propagates fractional stability credit 1–2 hops **up** your prerequisite graph, reducing redundant basic reviews.
+  - Rating a Review card Good or Easy, or scoring 80% or more on an unassisted drill, propagates fractional stability credit 1–2 hops **up** your prerequisite graph, reducing redundant basic reviews.
   - Failing a card or drill automatically queues up to 3 shaky prerequisite cards into the front of your review queue (`Remediation`).
 - **Global Review (`/review`) & Kit Interleaved (`/k/:slug/interleaved`)**: Study all due cards across your active Kit or across every Kit in your Library in one shuffled session.
 
@@ -84,20 +83,20 @@ Guided Drills test active generation rather than passive recognition:
 
 - **AI Capability Router & BYOK**: Choose models per task tier — **Quick** (fast starters/classification), **Deep** (tutoring, grading, critique), and **Research** (Kit synthesis & expansion). Supply personal encrypted **BYOK** keys (`Gemini`, `OpenAI`, `Claude`) or custom OpenAI-compatible endpoints (`Ollama`, `vLLM`, `LM Studio`, `OpenRouter`).
 - **Account & Security**: Manage password, active sessions, **Passkeys**, and linked **OIDC** accounts.
-- **Personal `tbk_` Tokens & MCP**: Mint read-write or **read-only** `tbk_` tokens under **API & MCP Tokens** to connect Claude Desktop, Cursor, or Claude Code to `POST /api/mcp` — letting external AI assistants search your Kits, inspect due cards, record reviews, or commit study notes.
+- **Personal `tbk_` Tokens & MCP**: Mint read-write or **read-only** `tbk_` tokens under **Model Context Protocol (MCP) Server** to connect Claude Desktop, Cursor, or Claude Code to `POST /api/mcp` — letting external AI assistants search your Kits, inspect due cards, record reviews, or commit study notes.
 
 ---
 
 ## 9. Keyboard Shortcuts
 
-Use `⌘` on macOS or `Ctrl` on Windows/Linux (`src/hooks/useKeyboardShortcuts.js`):
+Use `⌘` on macOS or `Ctrl` on Windows/Linux (`src/hooks/useKeyboardShortcuts.ts`):
 
 | Shortcut | Action |
 |----------|--------|
 | `⌘K` or `⌘/` | Open Global Hybrid Search / Command Palette |
 | `⌘1` | AI Chat (`/chat` or `/k/:slug/chat`) |
 | `⌘2` | Knowledge Guide (`/guide` or `/k/:slug/guide`) |
-| `⌘3` | Canvas (`/builder` or `/k/:slug/canvas`, if enabled on Kit) |
+| `⌘3` | Canvas (`/k/:slug/builder` for architecture Kits, `/k/:slug/canvas` for concept Kits) |
 | `⌘4` | Flashcards (`/study` or `/k/:slug/study`) |
 | `⌘5` | Feynman Evaluator (`/feynman` or `/k/:slug/feynman`) |
 | `⌘6` | Interleaved Review (`/interleaved` or `/k/:slug/interleaved`) |
@@ -110,3 +109,4 @@ Use `⌘` on macOS or `Ctrl` on Windows/Linux (`src/hooks/useKeyboardShortcuts.j
 | `⌘D` | Toggle Dark / Light theme (outside text inputs) |
 | `⌘S` | Save active Canvas board |
 | `⌘,` | Open Settings (`/settings`) |
+| `⌘?` (`⌘⇧/`) | Open the keyboard shortcuts cheat sheet |

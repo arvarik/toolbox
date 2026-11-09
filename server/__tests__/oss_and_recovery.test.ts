@@ -25,6 +25,8 @@ describe("OSS Community Hygiene, Build Metadata & Operator Password Recovery CLI
       "LICENSE",
       "SECURITY.md",
       "CODE_OF_CONDUCT.md",
+      "CONTRIBUTING.md",
+      "CHANGELOG.md",
       ".github/dependabot.yml",
       ".github/pull_request_template.md",
       ".github/ISSUE_TEMPLATE/bug_report.yml",
@@ -90,6 +92,73 @@ describe("OSS Community Hygiene, Build Metadata & Operator Password Recovery CLI
     expect(settingsText).toContain("importBackupZip");
     expect(settingsText).toContain(
       "Toolbox is a self-hosted, multi-domain active learning and mastery platform.",
+    );
+  });
+
+  it("keeps docs, .env.example, and shipped artifacts in step with the code", () => {
+    const read = (rel: string) =>
+      fs.readFileSync(path.join(REPO_ROOT, rel), "utf8");
+    const pkg = JSON.parse(read("package.json")) as {
+      version: string;
+      engines: { node: string };
+      scripts: Record<string, string>;
+    };
+
+    // Documented Node.js majors and `npm run` scripts match package.json
+    const nodeMajor = pkg.engines.node.match(/\d+/)?.[0];
+    const docs = [
+      "README.md",
+      "CONTRIBUTING.md",
+      ".github/pull_request_template.md",
+      ...fs
+        .readdirSync(path.join(REPO_ROOT, "docs"))
+        .filter((f) => f.endsWith(".md"))
+        .map((f) => `docs/${f}`),
+    ];
+    for (const doc of docs) {
+      const text = read(doc);
+      for (const m of text.matchAll(/\bNode(?:\.js)?\s*(?:≥|>=)?\s*(\d+)\b|\bnode:(\d+)-/g)) {
+        expect(m[1] ?? m[2], `${doc}: "${m[0]}"`).toBe(nodeMajor);
+      }
+      for (const [, script] of text.matchAll(/npm run ([\w:-]+)/g)) {
+        expect(Object.keys(pkg.scripts), `${doc}: npm run ${script}`).toContain(script);
+      }
+    }
+    expect(read("CHANGELOG.md")).toContain(`## [${pkg.version}]`);
+
+    // Every variable the server reads is documented, and .env.example lists only real ones
+    const internalEnv = new Set([
+      "VITEST",
+      "TOOLBOX_EMBEDDINGS_MOCK",
+      "DISABLE_BACKGROUND_JOBS",
+      "PUBLIC_ORIGIN",
+    ]);
+    const serverSource = ["server", "scripts"]
+      .flatMap((dir) =>
+        fs
+          .readdirSync(path.join(REPO_ROOT, dir), { recursive: true, encoding: "utf8" })
+          .filter((f) => /\.(?:ts|mjs)$/.test(f) && !f.includes("__tests__"))
+          .map((f) => read(path.join(dir, f))),
+      )
+      .join("\n");
+    const deployment = read("docs/deployment.md");
+    for (const [, name] of serverSource.matchAll(/process\.env\.([A-Z][A-Z0-9_]*)/g)) {
+      if (internalEnv.has(name)) continue;
+      expect(deployment, `docs/deployment.md should document ${name}`).toContain(`\`${name}\``);
+    }
+    for (const [, name] of read(".env.example").matchAll(/^#?\s*([A-Z][A-Z0-9_]*)=/gm)) {
+      expect(deployment, `docs/deployment.md should document ${name}`).toContain(`\`${name}\``);
+      expect(serverSource, `.env.example lists ${name}, which nothing reads`).toContain(name);
+    }
+
+    // Shipped artifacts keep third-party notices and load nothing the CSP blocks
+    expect(pkg.scripts.build).toBe("node scripts/build.ts");
+    expect(read("scripts/build.ts")).toContain(
+      'license: { fileName: "THIRD-PARTY-LICENSES.md" }',
+    );
+    expect(read("Dockerfile")).toContain("! -iname '*licen[cs]e*' ! -iname '*notice*'");
+    expect(read("index.html")).not.toMatch(
+      /<(?:link|script)\b[^>]*\b(?:href|src)="(?:https?:)?\/\//,
     );
   });
 
