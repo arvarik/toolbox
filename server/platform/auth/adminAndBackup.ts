@@ -677,3 +677,40 @@ export async function runBackup(): Promise<BackupInfo> {
   })();
   return activeBackupPromise;
 }
+
+/**
+ * Takes a backup when the newest snapshot is older than BACKUP_INTERVAL_HOURS
+ * (0 disables). Snapshot file times survive restarts, so a restart neither
+ * skips nor repeats a backup.
+ */
+export async function runScheduledBackup(now = Date.now()): Promise<BackupInfo | null> {
+  const hours = getBackupIntervalHours().value;
+  const newest = listBackups()[0];
+  if (hours === 0 || (newest && now - Date.parse(newest.createdAt) < hours * 3_600_000)) {
+    return null;
+  }
+  return runBackup();
+}
+
+const BACKUP_CHECK_INTERVAL_MS = 15 * 60_000;
+
+/**
+ * Checks for a due backup every `checkEveryMs` on an unref'd timer. runBackup()
+ * joins a run already in flight and rotates to BACKUP_KEEP snapshots. A failed
+ * run is logged and retried at the next check. Returns stop().
+ */
+export function startBackupScheduler(checkEveryMs = BACKUP_CHECK_INTERVAL_MS): () => void {
+  const timer = setInterval(() => {
+    runScheduledBackup()
+      .then((backup) => {
+        if (backup?.verification?.ok === false) {
+          log.warn("Backup", `Scheduled backup ${backup.filename} failed verification: ${backup.verification.problem}`);
+        }
+      })
+      .catch((err: unknown) => {
+        log.warn("Backup", `Scheduled backup failed, retrying at the next check: ${getErrorMessage(err)}`);
+      });
+  }, checkEveryMs);
+  timer.unref();
+  return () => clearInterval(timer);
+}

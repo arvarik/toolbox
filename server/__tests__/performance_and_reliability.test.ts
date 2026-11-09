@@ -5,10 +5,12 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
+import type Database from "better-sqlite3";
 import express, { type Express } from "express";
 import request from "supertest";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
+import { BACKUPS_DIR } from "../appConfig.ts";
 import { createApp } from "../app.ts";
 import {
   ORPHANED_JOB_RESTART_ERROR,
@@ -24,8 +26,15 @@ import {
   shutdownServer,
 } from "../index.ts";
 import { listOwnedKits } from "../kits/kitService.ts";
-import { kitTokFor, ownerTokFor } from "../kits/kitsSchema.ts";
+import { initKitsSchema, kitTokFor, ownerTokFor } from "../kits/kitsSchema.ts";
+import {
+  listBackups,
+  runBackup,
+  runScheduledBackup,
+  startBackupScheduler,
+} from "../platform/auth/adminAndBackup.ts";
 import { openDatabase, sqlite } from "../platform/db/connection.ts";
+import { initPlatformSchema } from "../platform/db/platformSchema.ts";
 import { gzipCompression } from "../platform/net/compression.ts";
 import { __resetHostGuard } from "../platform/net/hostGuard.ts";
 import { createRateLimiter, MAX_BUCKETS } from "../platform/net/rateLimit.ts";
@@ -197,6 +206,38 @@ function rawHttpGet(
   });
 }
 
+async function withEnv<T>(name: string, value: string, fn: () => Promise<T>): Promise<T> {
+  const previous = process.env[name];
+  process.env[name] = value;
+  try {
+    return await fn();
+  } finally {
+    if (previous === undefined) delete process.env[name];
+    else process.env[name] = previous;
+  }
+}
+
+/** One SHA-256 per ordinary table (FTS5 and vec0 shadow tables included), order-independent. */
+function tableDigests(handle: Database.Database): Record<string, string> {
+  const tables = handle
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND sql NOT LIKE 'CREATE VIRTUAL TABLE%'",
+    )
+    .pluck()
+    .all() as string[];
+  return Object.fromEntries(
+    tables.map((name) => {
+      const rows = handle
+        .prepare(`SELECT * FROM "${name}"`)
+        .raw()
+        .all()
+        .map((row) => JSON.stringify(row))
+        .sort();
+      return [name, crypto.createHash("sha256").update(rows.join("\n")).digest("hex")];
+    }),
+  );
+}
+
 describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
   let app: Express;
   let agent: ReturnType<typeof request.agent>;
@@ -311,6 +352,7 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       const firstShutdown = shutdownServer(server, {
         signal: "SIGTERM",
         db: mockDb,
+        stopTimers: () => ops.push("timers:stop"),
         stopWorker: async () => {
           ops.push("worker:stop");
         },
@@ -334,6 +376,7 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       expect(server.listening).toBe(false);
       expect(exitCodes).toEqual([0]);
       expect(ops).toEqual([
+        "timers:stop",
         "worker:stop",
         "pragma:optimize",
         "pragma:wal_checkpoint(PASSIVE)",
@@ -810,6 +853,60 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("7. schedules online backups (logs and retries a failed check, joins an in-flight run during concurrent writes, skips while fresh or disabled, rotates to BACKUP_KEEP, stops on demand) and restores to an identical database", async () => {
+    fs.rmSync(BACKUPS_DIR, { recursive: true, force: true });
+    fs.writeFileSync(BACKUPS_DIR, "not a directory");
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const stop = startBackupScheduler(60_000);
+      expect(vi.getTimerCount()).toBe(1);
+
+      // Check 1 fails (BACKUPS_DIR is a file): logged, no unhandled rejection, timer keeps running.
+      vi.advanceTimersByTime(60_000);
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(vi.getTimerCount()).toBe(1);
+      fs.rmSync(BACKUPS_DIR);
+
+      // Check 2 finds no snapshot and starts one; runBackup() joins it instead of overlapping.
+      const writes = Array.from({ length: 30 }, (_, i) =>
+        agent
+          .put(`/api/guide-content/backup-p/backup-t/s${i}`)
+          .set("X-Toolbox-Kit", "system-design")
+          .send({ content: `Note ${i} written while the backup runs.` })
+          .expect(200),
+      );
+      vi.advanceTimersByTime(60_000);
+      const [scheduled] = await Promise.all([runBackup(), ...writes]);
+      expect(scheduled.verification?.ok).toBe(true);
+      expect(listBackups().map((b) => b.filename)).toEqual([scheduled.filename]);
+
+      expect(await runScheduledBackup()).toBeNull();
+      const stale = Date.now() + 48 * 3_600_000;
+      expect(await withEnv("BACKUP_INTERVAL_HOURS", "0", () => runScheduledBackup(stale))).toBeNull();
+
+      stop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const quiet = await withEnv("BACKUP_KEEP", "1", () => runBackup());
+    expect(listBackups().map((b) => b.filename)).toEqual([quiet.filename]);
+    const restoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolbox-restore-"));
+    const restoredPath = path.join(restoreDir, "toolbox.db");
+    fs.copyFileSync(path.join(BACKUPS_DIR, quiet.filename), restoredPath);
+    const restored = openDatabase(restoredPath);
+    try {
+      initPlatformSchema(restored);
+      initKitsSchema(restored);
+      expect(tableDigests(restored)).toEqual(tableDigests(sqlite));
+    } finally {
+      restored.close();
+      initKitsSchema(sqlite);
+      fs.rmSync(restoreDir, { recursive: true, force: true });
     }
   });
 });

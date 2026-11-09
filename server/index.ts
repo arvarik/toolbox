@@ -4,8 +4,9 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Express } from "express";
-import { DB_PATH, DEFAULT_PORT } from "./appConfig.ts";
+import { DB_PATH, DEFAULT_PORT, isBackgroundJobsDisabled } from "./appConfig.ts";
 import { createApp } from "./app.ts";
+import { startBackupScheduler } from "./platform/auth/adminAndBackup.ts";
 import { isAuthRequired } from "./platform/auth/authMiddleware.ts";
 import { validateSecretKey } from "./platform/crypto/secretBox.ts";
 import { sqlite } from "./platform/db/connection.ts";
@@ -37,6 +38,8 @@ export interface ShutdownOptions {
     close: () => unknown;
   };
   stopWorker?: () => Promise<void> | void;
+  /** Stops background timers (the backup scheduler) before connections drain. */
+  stopTimers?: () => void;
   exit?: (code: number) => void;
 }
 
@@ -58,6 +61,7 @@ export async function shutdownServer(
   }
   shuttingDownServers.add(server);
   logger.info(`${signal} received — draining connections`);
+  options.stopTimers?.();
 
   const failsafe = setTimeout(() => {
     logger.warn("Shutdown deadline reached — forcing close");
@@ -165,5 +169,7 @@ if (isDirectEntrypoint()) {
       `Toolbox v2 server running at http://${HOST}:${PORT} (${isProduction ? "production" : "development"}, db=${DB_PATH})`,
     );
   });
-  registerShutdownHandlers(server);
+  registerShutdownHandlers(server, {
+    stopTimers: isBackgroundJobsDisabled() ? undefined : startBackupScheduler(),
+  });
 }
