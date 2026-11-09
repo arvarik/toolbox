@@ -96,9 +96,109 @@ async function runEmbed(id: number, texts: string[]): Promise<void> {
   }
 }
 
+async function runExtractPdf(
+  id: number,
+  bytes: Uint8Array,
+  maxPages: number,
+  maxChars: number,
+): Promise<void> {
+  if (!bytes || bytes.byteLength === 0) {
+    post({ id, ok: false, stage: "run", error: "PDF buffer is empty" });
+    return;
+  }
+
+  let getDocumentProxy: typeof import("unpdf").getDocumentProxy;
+  try {
+    ({ getDocumentProxy } = await import("unpdf"));
+  } catch (err) {
+    post({
+      id,
+      ok: false,
+      stage: "load",
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+
+  try {
+    const hardenOpts = {
+      isEvalSupported: false,
+      enableScripting: false,
+      verbosity: 0,
+    } as Parameters<typeof getDocumentProxy>[1];
+
+    const doc = await getDocumentProxy(bytes, hardenOpts);
+    try {
+      const totalPages = doc.numPages;
+      const pageLimit = Math.min(totalPages, Math.max(1, maxPages));
+      const charCap = Math.max(1, maxChars);
+      const pageTexts: string[] = [];
+      let accumulatedChars = 0;
+      let extractedPages = 0;
+      let hitCharCap = false;
+
+      for (let pageNo = 1; pageNo <= pageLimit; pageNo++) {
+        const page = await doc.getPage(pageNo);
+        try {
+          const content = await page.getTextContent();
+          const pageStr = content.items
+            .map((item) =>
+              "str" in item && typeof item.str === "string"
+                ? item.str + (item.hasEOL ? "\n" : " ")
+                : "",
+            )
+            .join("")
+            .replace(/[^\S\n]+/g, " ")
+            .replace(/ ?\n ?/g, "\n")
+            .trim();
+          extractedPages++;
+          if (pageStr) {
+            pageTexts.push(pageStr);
+            accumulatedChars += pageStr.length + 2;
+            if (accumulatedChars >= charCap) {
+              hitCharCap = true;
+              break;
+            }
+          }
+        } finally {
+          page.cleanup();
+        }
+      }
+
+      const merged = pageTexts.join("\n\n").replace(/\n{3,}/g, "\n\n").trim();
+      const truncated =
+        totalPages > pageLimit || hitCharCap || merged.length > charCap;
+      const finalText =
+        merged.length > charCap ? merged.slice(0, charCap) : merged;
+
+      post({
+        id,
+        ok: true,
+        kind: "extract_pdf",
+        text: finalText,
+        totalPages,
+        extractedPages,
+        truncated,
+      });
+    } finally {
+      await doc.loadingTask.destroy().catch(() => {});
+    }
+  } catch (err) {
+    post({
+      id,
+      ok: false,
+      stage: "run",
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 let chain: Promise<void> = Promise.resolve();
 port.on("message", (job: WorkerJob) => {
   chain = chain.then(() => {
     if (job.kind === "embed") return runEmbed(job.id, job.texts);
+    if (job.kind === "extract_pdf") {
+      return runExtractPdf(job.id, job.bytes, job.maxPages, job.maxChars);
+    }
   });
 });

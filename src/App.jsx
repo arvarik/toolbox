@@ -18,6 +18,7 @@ const FeynmanPage = lazy(() => import('./pages/FeynmanPage'))
 const InterleavedPage = lazy(() => import('./pages/InterleavedPage'))
 const CalculatorPage = lazy(() => import('./pages/CalculatorPage'))
 const GraphPage = lazy(() => import('./pages/GraphPage'))
+const NewKitStudioPage = lazy(() => import('./pages/NewKitStudioPage'))
 
 function PageFallback() {
   return (
@@ -96,6 +97,7 @@ export default function App() {
             <Route path="/calculator" element={<CalculatorPage />} />
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/new" element={<NewKitStudioPage />} />
           </Route>
         </Routes>
       </Suspense>
