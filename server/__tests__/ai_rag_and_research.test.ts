@@ -4,22 +4,16 @@ import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { z } from "zod";
 import type { Express } from "express";
-import { scopeForOwnerId, type Scope } from "../platform/tenancy/scope.ts";
+import type { Scope } from "../platform/tenancy/scope.ts";
+import { setupTwoTenants } from "./testHelpers.ts";
 
 const { default: db } = await import("../db.ts");
 const { createApp } = await import("../app.ts");
-const { __resetAuthRateLimits } = await import(
-  "../platform/routes/authRoutes.ts"
+const { __resetAuthRateLimits } = await import("../platform/routes/authRoutes.ts");
+const { __resetHostGuard, isHostAllowed } = await import("../platform/net/hostGuard.ts");
+const { isPrivateAddress, readBodyCapped, readBytesCapped } = await import(
+  "../platform/net/originAndFetch.ts"
 );
-const {
-  __resetHostGuard,
-  isHostAllowed,
-} = await import("../platform/net/hostGuard.ts");
-const {
-  isPrivateAddress,
-  readBodyCapped,
-  readBytesCapped,
-} = await import("../platform/net/originAndFetch.ts");
 const { AppError } = await import("../platform/net/errors.ts");
 const {
   resolveModel,
@@ -28,10 +22,9 @@ const {
   __getStructuredModeFor,
   __resetStructuredModeCache,
 } = await import("../ai/engine.ts");
-const {
-  setEmbeddingsConfig,
-  resolveModelDescriptor,
-} = await import("../platform/ai/aiSettingsService.ts");
+const { setEmbeddingsConfig, resolveModelDescriptor } = await import(
+  "../platform/ai/aiSettingsService.ts"
+);
 const {
   deleteRagChunksBySource,
   ensureEmbeddingStore,
@@ -41,10 +34,9 @@ const {
 } = await import("../search/hybridSearch.ts");
 const { buildStudyTools } = await import("../routes/chat.ts");
 const { runWebResearch } = await import("../platform/research/webResearch.ts");
-const {
-  isGroundingRedirectUrl,
-  resolveRedirects,
-} = await import("../platform/research/citations.ts");
+const { isGroundingRedirectUrl, resolveRedirects } = await import(
+  "../platform/research/citations.ts"
+);
 const { ensureDefaultSystemDesignKit } = await import("../kits/kitsSchema.ts");
 
 function listenLocal(
@@ -57,16 +49,34 @@ function listenLocal(
       resolve({
         server,
         baseUrl: `http://127.0.0.1:${addr.port}`,
-        close: () =>
-          new Promise<void>((done) => {
-            server.close(() => done());
-          }),
+        close: () => new Promise<void>((done) => server.close(() => done())),
       });
     });
   });
 }
 
-describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), Structured Ladder & SSRF Research", () => {
+async function withEnv<T>(vars: Record<string, string>, fn: () => Promise<T> | T): Promise<T> {
+  const prev = new Map<string, string | undefined>();
+  for (const [k, v] of Object.entries(vars)) {
+    prev.set(k, process.env[k]);
+    process.env[k] = v;
+  }
+  try {
+    return await fn();
+  } finally {
+    for (const [k, v] of prev.entries()) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+}
+
+function sendJson(res: http.ServerResponse, status: number, payload: unknown): void {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(payload));
+}
+
+describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), Structured Ladder & SSRF Research", () => {
   let app: Express;
   let aliceAgent: ReturnType<typeof request.agent>;
   let bobAgent: ReturnType<typeof request.agent>;
@@ -84,44 +94,14 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
     __resetStructuredModeCache();
     app = createApp();
 
-    // Bootstrap Admin Alice via /api/auth/setup
-    aliceAgent = request.agent(app);
-    const aliceSetup = await aliceAgent
-      .post("/api/auth/setup")
-      .send({
-        email: "alice@toolbox.test",
-        username: "alice",
-        displayName: "Alice Admin",
-        password: "correct-horse-battery-staple",
-      })
-      .expect(201);
-    aliceId = aliceSetup.body.user.id as string;
+    const tenants = await setupTwoTenants(app, "rag");
+    aliceAgent = tenants.aliceAgent;
+    bobAgent = tenants.bobAgent;
+    aliceId = tenants.aliceId;
+    bobId = tenants.bobId;
+    aliceScope = tenants.aliceScope;
+    bobScope = tenants.bobScope;
 
-    // Invite Member Bob
-    const invRes = await aliceAgent
-      .post("/api/admin/invitations")
-      .send({ email: "bob@toolbox.test", role: "member" })
-      .expect(201);
-    const invToken = new URL(invRes.body.link as string).searchParams.get(
-      "token",
-    )!;
-
-    bobAgent = request.agent(app);
-    const bobAccept = await bobAgent
-      .post("/api/auth/accept-invitation")
-      .send({
-        token: invToken,
-        email: "bob@toolbox.test",
-        username: "bob",
-        displayName: "Bob Learner",
-        password: "correct-horse-battery-staple-bob",
-      })
-      .expect(201);
-    bobId = bobAccept.body.user.id as string;
-    aliceScope = scopeForOwnerId(aliceId);
-    bobScope = scopeForOwnerId(bobId);
-
-    // Provision Kits for Alice (Kit 1 & Kit 2) and Bob (Kit 3)
     const aliceDefaultKit = ensureDefaultSystemDesignKit(db, aliceScope);
     aliceKit1Id = aliceDefaultKit.id;
 
@@ -131,8 +111,7 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
        VALUES (?, ?, 'ml-systems', 'ML Systems', 'Alice ML Kit', 'ready', ?)`,
     ).run(aliceKit2Id, aliceId, JSON.stringify(aliceDefaultKit.skeleton));
 
-    const bobDefaultKit = ensureDefaultSystemDesignKit(db, bobScope);
-    bobKitId = bobDefaultKit.id;
+    bobKitId = ensureDefaultSystemDesignKit(db, bobScope).id;
   });
 
   afterAll(() => {
@@ -148,27 +127,21 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
       content:
         "Consistent hashing places storage nodes and virtual tokens on a hash ring to minimize key remapping when servers join or leave.",
     });
-
     await upsertRagChunk(db, aliceScope, {
       kitId: aliceKit1Id,
       kind: "flashcard",
       sourceRefId: "card-raft-term",
       nodeId: "consensus",
       title: "What prevents split-brain elections in Raft?",
-      content:
-        "Monotonically increasing election terms combined with strict majority quorum votes.",
+      content: "Monotonically increasing election terms combined with strict majority quorum votes.",
     });
-
     await upsertRagChunk(db, aliceScope, {
       kitId: aliceKit2Id,
       kind: "source_chunk",
       sourceRefId: "src-flash-attention",
       title: "FlashAttention Tiling Paper",
-      content:
-        "IO-aware SRAM tiling avoids materializing the quadratic attention matrix in HBM.",
+      content: "IO-aware SRAM tiling avoids materializing the quadratic attention matrix in HBM.",
     });
-
-    // Bob indexes a secret chunk containing the EXACT same keywords ("consistent hashing virtual nodes")
     await upsertRagChunk(db, bobScope, {
       kitId: bobKitId,
       kind: "guide",
@@ -178,126 +151,80 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
         "Consistent hashing places storage nodes and virtual tokens on a hash ring. BOB_TOP_SECRET_MARKER_999",
     });
 
-    // Alice searches across all her kits for "consistent hashing ring"
-    const aliceHits = await hybridSearch(
-      db,
-      aliceScope,
-      "consistent hashing ring",
-      { limit: 10 },
-    );
+    const aliceHits = await hybridSearch(db, aliceScope, "consistent hashing ring", { limit: 10 });
     expect(aliceHits.length).toBeGreaterThanOrEqual(1);
-    expect(aliceHits[0].sourceRefId).toBe(
-      "storage:consistent-hashing:internals",
-    );
-    expect(aliceHits[0].channels).toContain("fts");
-    expect(aliceHits[0].channels).toContain("vec");
-
-    // ZERO hits from Bob may ever appear in Alice's results
+    expect(aliceHits[0].sourceRefId).toBe("storage:consistent-hashing:internals");
+    expect(aliceHits[0].channels).toEqual(expect.arrayContaining(["fts", "vec"]));
     expect(
       aliceHits.some(
-        (h) =>
-          h.content.includes("BOB_TOP_SECRET_MARKER_999") ||
-          h.sourceRefId === "bob-secret-ref",
+        (h) => h.content.includes("BOB_TOP_SECRET_MARKER_999") || h.sourceRefId === "bob-secret-ref",
       ),
     ).toBe(false);
 
-    // Filter by kitId: querying Kit 2 only returns ML Systems chunks
-    const kit2Only = await hybridSearch(
-      db,
-      aliceScope,
-      "SRAM tiling attention matrix",
-      { kitId: aliceKit2Id, limit: 10 },
-    );
-    expect(kit2Only.length).toBe(1);
-    expect(kit2Only[0].kitId).toBe(aliceKit2Id);
-    expect(kit2Only[0].kind).toBe("source_chunk");
+    const kit2Only = await hybridSearch(db, aliceScope, "SRAM tiling attention matrix", {
+      kitId: aliceKit2Id,
+      limit: 10,
+    });
+    expect(kit2Only).toHaveLength(1);
+    expect(kit2Only[0]).toMatchObject({ kitId: aliceKit2Id, kind: "source_chunk" });
 
-    // Filter by kind: querying kinds=["flashcard"] excludes guide & source_chunk
-    const flashcardsOnly = await hybridSearch(
-      db,
-      aliceScope,
-      "quorum split brain raft",
-      { kitId: aliceKit1Id, kinds: ["flashcard"], limit: 10 },
-    );
-    expect(flashcardsOnly.length).toBe(1);
-    expect(flashcardsOnly[0].kind).toBe("flashcard");
-    expect(flashcardsOnly[0].sourceRefId).toBe("card-raft-term");
+    const flashcardsOnly = await hybridSearch(db, aliceScope, "quorum split brain raft", {
+      kitId: aliceKit1Id,
+      kinds: ["flashcard"],
+      limit: 10,
+    });
+    expect(flashcardsOnly).toHaveLength(1);
+    expect(flashcardsOnly[0]).toMatchObject({ kind: "flashcard", sourceRefId: "card-raft-term" });
 
-    // HTTP /api/search route also enforces tenant isolation and returns hybrid chunks
     const bobHttpSearch = await bobAgent
       .get("/api/search")
       .query({ q: "consistent hashing" })
       .expect(200);
-    expect(Array.isArray(bobHttpSearch.body.chunks)).toBe(true);
-    expect(bobHttpSearch.body.chunks.length).toBe(1);
+    expect(bobHttpSearch.body.chunks).toHaveLength(1);
     expect(bobHttpSearch.body.chunks[0].sourceRefId).toBe("bob-secret-ref");
   });
 
   it("2. rebuilds rag_chunks_vec cleanly on dimension change (384 -> 768) while FTS5 BM25 serves uninterrupted", async () => {
-    // Verify initial vec0 table is FLOAT[384]
-    const initialSql = db
-      .prepare(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rag_chunks_vec'",
-      )
-      .get() as { sql: string };
-    expect(initialSql.sql).toContain("FLOAT[384]");
+    const getVecDdl = () =>
+      (
+        db
+          .prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rag_chunks_vec'")
+          .get() as { sql: string }
+      ).sql;
 
-    // Switch instance embeddings config to 768 dimensions and run ensureEmbeddingStore(db, 768)
+    expect(getVecDdl()).toContain("FLOAT[384]");
+
     setEmbeddingsConfig({
       provider: "local",
       modelId: "Xenova/all-MiniLM-L6-v2",
       dimension: 768,
       endpointId: null,
     });
-    const rebuild = ensureEmbeddingStore(db, 768);
-    expect(rebuild.recreated).toBe(true);
-    expect(rebuild.dimension).toBe(768);
+    expect(ensureEmbeddingStore(db, 768)).toMatchObject({ recreated: true, dimension: 768 });
+    expect(getVecDdl()).toContain("FLOAT[768]");
 
-    // Verify rag_chunks_vec DDL is now FLOAT[768]
-    const updatedSql = db
-      .prepare(
-        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'rag_chunks_vec'",
-      )
-      .get() as { sql: string };
-    expect(updatedSql.sql).toContain("FLOAT[768]");
-
-    // Verify all rag_chunks.embedding_gen were reset to NULL
     const nonNullCount = (
       db
-        .prepare(
-          "SELECT COUNT(*) AS c FROM rag_chunks WHERE ownerId = ? AND embedding_gen IS NOT NULL",
-        )
+        .prepare("SELECT COUNT(*) AS c FROM rag_chunks WHERE ownerId = ? AND embedding_gen IS NOT NULL")
         .get(aliceId) as { c: number }
     ).c;
     expect(nonNullCount).toBe(0);
 
-    // Immediately query BEFORE re-embedding: FTS5 BM25 serves uninterrupted!
-    const bm25Hits = await hybridSearch(
-      db,
-      aliceScope,
-      "consistent hashing virtual",
-      { kitId: aliceKit1Id },
-    );
+    const bm25Hits = await hybridSearch(db, aliceScope, "consistent hashing virtual", {
+      kitId: aliceKit1Id,
+    });
     expect(bm25Hits.length).toBeGreaterThanOrEqual(1);
-    expect(bm25Hits[0].sourceRefId).toBe(
-      "storage:consistent-hashing:internals",
-    );
-    expect(bm25Hits[0].channels).toEqual(["fts"]);
+    expect(bm25Hits[0]).toMatchObject({
+      sourceRefId: "storage:consistent-hashing:internals",
+      channels: ["fts"],
+    });
 
-    // Now reindex missing embeddings at 768d and confirm both fts + vec channels fire
-    const reindexed = await reindexMissingEmbeddings(db);
-    expect(reindexed).toBeGreaterThanOrEqual(4);
+    expect(await reindexMissingEmbeddings(db)).toBeGreaterThanOrEqual(4);
+    const fusedHits = await hybridSearch(db, aliceScope, "consistent hashing virtual", {
+      kitId: aliceKit1Id,
+    });
+    expect(fusedHits[0].channels).toEqual(expect.arrayContaining(["fts", "vec"]));
 
-    const fusedHits = await hybridSearch(
-      db,
-      aliceScope,
-      "consistent hashing virtual",
-      { kitId: aliceKit1Id },
-    );
-    expect(fusedHits[0].channels).toContain("fts");
-    expect(fusedHits[0].channels).toContain("vec");
-
-    // Restore standard 384d local embeddings for subsequent tests
     setEmbeddingsConfig({
       provider: "local",
       modelId: "Xenova/all-MiniLM-L6-v2",
@@ -309,7 +236,6 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
   });
 
   it("3. seals per-user BYOK keys & endpoints, routes capabilities per user, and locks embeddings to Admin", async () => {
-    // Seed an instance Gemini key via Admin AI settings
     await aliceAgent
       .put("/api/admin/ai-settings")
       .send({
@@ -321,22 +247,15 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
       })
       .expect(200);
 
-    // Stand up a mock OpenAI-compatible /v1/models endpoint for Bob's personal BYOK server
     const bobMockServer = await listenLocal((req, res) => {
       if (req.url === "/v1/models") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            data: [{ id: "qwen3-coder-30b", created: 1_760_000_000 }],
-          }),
-        );
+        sendJson(res, 200, { data: [{ id: "qwen3-coder-30b", created: 1_760_000_000 }] });
         return;
       }
       res.writeHead(404).end();
     });
 
     try {
-      // Bob saves personal Claude + OpenAI BYOK keys and overrides quick & deep capabilities
       const bobUpdate = await bobAgent
         .put("/api/ai-settings")
         .send({
@@ -353,19 +272,13 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
         .expect(200);
 
       expect(bobUpdate.body.providerKeysConfigured.claude).toBe(true);
-      expect(bobUpdate.body.resolvedCapabilities.quick.resolvedModelId).toBe(
-        "claude-haiku-4-5",
-      );
-      expect(bobUpdate.body.resolvedCapabilities.quick.source).toBe(
-        "user_override",
-      );
+      expect(bobUpdate.body.resolvedCapabilities.quick).toMatchObject({
+        resolvedModelId: "claude-haiku-4-5",
+        source: "user_override",
+      });
 
-      // Bob adds a personal custom endpoint (explicitly opted-in via ALLOW_PRIVATE_BYOK_ENDPOINTS for local mock server)
-      const prevAllowPrivateByok = process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS;
-      process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS = "true";
-      let bobEpId: string;
-      try {
-        const bobEpRes = await bobAgent
+      const bobEpId = await withEnv({ ALLOW_PRIVATE_BYOK_ENDPOINTS: "true" }, async () => {
+        const res = await bobAgent
           .post("/api/ai-settings/endpoints")
           .send({
             name: "Bob Homelab vLLM",
@@ -373,82 +286,44 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
             apiKey: "bob-vllm-token-secret",
           })
           .expect(201);
-        bobEpId = bobEpRes.body.id as string;
-      } finally {
-        if (prevAllowPrivateByok === undefined) {
-          delete process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS;
-        } else {
-          process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS = prevAllowPrivateByok;
-        }
-      }
+        return res.body.id as string;
+      });
       expect(bobEpId.startsWith("u_")).toBe(true);
 
-      // Inspect raw SQLite row: ZERO plaintext secrets in user_ai_settings!
       const rawRow = db
-        .prepare(
-          "SELECT provider_keys_sealed, custom_endpoints_json FROM user_ai_settings WHERE ownerId = ?",
-        )
-        .get(bobId) as {
-        provider_keys_sealed: string;
-        custom_endpoints_json: string;
-      };
-      expect(rawRow.provider_keys_sealed).not.toContain(
-        "sk-ant-bob-personal-secret-9876",
-      );
-      expect(rawRow.custom_endpoints_json).not.toContain(
-        "bob-vllm-token-secret",
-      );
-      const parsedSealedKeys = JSON.parse(
-        rawRow.provider_keys_sealed,
-      ) as Record<string, string>;
-      expect(parsedSealedKeys.claude.startsWith("v1:")).toBe(true);
+        .prepare("SELECT provider_keys_sealed, custom_endpoints_json FROM user_ai_settings WHERE ownerId = ?")
+        .get(bobId) as { provider_keys_sealed: string; custom_endpoints_json: string };
+      expect(rawRow.provider_keys_sealed).not.toContain("sk-ant-bob-personal-secret-9876");
+      expect(rawRow.custom_endpoints_json).not.toContain("bob-vllm-token-secret");
+      expect(
+        (JSON.parse(rawRow.provider_keys_sealed) as Record<string, string>).claude.startsWith("v1:"),
+      ).toBe(true);
 
-      // Verify resolveModelDescriptor resolves Bob's BYOK credentials FIRST, while Alice uses instance defaults!
-      const bobDeep = resolveModelDescriptor(undefined, {
-        scope: bobScope,
-        capability: "deep",
+      const bobDeep = resolveModelDescriptor(undefined, { scope: bobScope, capability: "deep" });
+      expect(bobDeep).toMatchObject({
+        kind: "builtin",
+        modelId: "gpt-5.6-sol",
+        keySource: "byok",
+        apiKey: "sk-proj-bob-personal-openai-5555",
       });
-      expect(bobDeep.kind).toBe("builtin");
-      if (bobDeep.kind === "builtin") {
-        expect(bobDeep.modelId).toBe("gpt-5.6-sol");
-        expect(bobDeep.keySource).toBe("byok");
-        expect(bobDeep.apiKey).toBe("sk-proj-bob-personal-openai-5555");
-      }
+      expect(resolveModelDescriptor(undefined, { scope: aliceScope, capability: "deep" })).toMatchObject(
+        { modelId: "gemini-3.1-pro", keySource: "instance" },
+      );
 
-      const aliceDeep = resolveModelDescriptor(undefined, {
-        scope: aliceScope,
-        capability: "deep",
-      });
-      expect(aliceDeep.modelId).toBe("gemini-3.1-pro");
-      expect(aliceDeep.keySource).toBe("instance");
-
-      // Bob can resolve his personal custom endpoint; Alice CANNOT resolve Bob's personal endpoint!
       const bobCustomModelId = `custom:${bobEpId}:qwen3-coder-30b`;
-      const resolvedBobCustom = resolveModel(bobCustomModelId, {
-        scope: bobScope,
-      });
-      expect(resolvedBobCustom.modelId).toBe(bobCustomModelId);
-      expect(() =>
-        resolveModel(bobCustomModelId, { scope: aliceScope }),
-      ).toThrow(/Custom endpoint not found/);
-
-      // Bob CANNOT override `embeddings` via `/api/ai-settings` or access `/api/admin/ai-settings`
-      await bobAgent
-        .put("/api/ai-settings")
-        .send({
-          embeddings: { provider: "openai", modelId: "text-embedding-3-large" },
-        })
-        .expect(403);
+      expect(resolveModel(bobCustomModelId, { scope: bobScope }).modelId).toBe(bobCustomModelId);
+      expect(() => resolveModel(bobCustomModelId, { scope: aliceScope })).toThrow(
+        /Custom endpoint not found/,
+      );
 
       await bobAgent
         .put("/api/ai-settings")
-        .send({
-          capabilities: {
-            embeddings: { mode: "pinned", modelId: "text-embedding-3-large" },
-          },
-        })
+        .send({ embeddings: { provider: "openai", modelId: "text-embedding-3-large" } })
         .expect(403);
-
+      await bobAgent
+        .put("/api/ai-settings")
+        .send({ capabilities: { embeddings: { mode: "pinned", modelId: "text-embedding-3-large" } } })
+        .expect(403);
       await bobAgent.get("/api/admin/ai-settings").expect(403);
     } finally {
       await bobMockServer.close();
@@ -458,24 +333,32 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
   it("4. executes the 3-rung OpenAI-compatible structured-output fallback ladder, detects reasoning exhaustion, and blocks sycophantic interceptor passes", async () => {
     const wireFormatsSeen: Array<string | undefined> = [];
     const maxTokensSeen: number[] = [];
-    let mode: "reject_schema_only" | "reject_both_formats" | "exhaust_once" | "exhaust_always" | "sycophantic_eval" =
-      "reject_schema_only";
+    let mode:
+      | "reject_schema_only"
+      | "reject_both_formats"
+      | "exhaust_once"
+      | "exhaust_always"
+      | "sycophantic_eval" = "reject_schema_only";
+
+    const cmpl = (model: string | undefined, content: string, finish_reason: "stop" | "length") => ({
+      id: "cmpl-test",
+      object: "chat.completion",
+      created: 1,
+      model,
+      choices: [{ index: 0, message: { role: "assistant", content }, finish_reason }],
+      usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+    });
 
     const mockLlm = await listenLocal(async (req, res) => {
       if (req.url === "/v1/models") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            data: [
-              { id: "ollama-rung2", created: 1_760_000_000 },
-              { id: "lmstudio-rung3", created: 1_760_000_000 },
-              { id: "deepseek-reasoner", created: 1_760_000_000 },
-            ],
-          }),
-        );
+        sendJson(res, 200, {
+          data: ["ollama-rung2", "lmstudio-rung3", "deepseek-reasoner"].map((id) => ({
+            id,
+            created: 1_760_000_000,
+          })),
+        });
         return;
       }
-
       if (req.url === "/v1/chat/completions" && req.method === "POST") {
         let raw = "";
         for await (const chunk of req) raw += chunk;
@@ -487,84 +370,25 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
         };
         const rfType = body.response_format?.type;
         wireFormatsSeen.push(rfType);
-        maxTokensSeen.push(
-          body.max_completion_tokens ?? body.max_tokens ?? 0,
-        );
+        maxTokensSeen.push(body.max_completion_tokens ?? body.max_tokens ?? 0);
 
         if (mode === "reject_schema_only" && rfType === "json_schema") {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: { message: "response_format json_schema is not supported" },
-            }),
-          );
+          sendJson(res, 400, { error: { message: "response_format json_schema is not supported" } });
           return;
         }
-
-        if (
-          mode === "reject_both_formats" &&
-          (rfType === "json_schema" || rfType === "json_object")
-        ) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              error: {
-                message:
-                  "'response_format.type' must be 'json_schema' or 'text'",
-              },
-            }),
-          );
+        if (mode === "reject_both_formats" && (rfType === "json_schema" || rfType === "json_object")) {
+          sendJson(res, 400, {
+            error: { message: "'response_format.type' must be 'json_schema' or 'text'" },
+          });
           return;
         }
-
         if (mode === "exhaust_once") {
-          mode = "reject_schema_only"; // succeed on retry
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              id: "cmpl-exhaust-1",
-              object: "chat.completion",
-              created: 1,
-              model: body.model,
-              choices: [
-                {
-                  index: 0,
-                  message: { role: "assistant", content: "" },
-                  finish_reason: "length",
-                },
-              ],
-              usage: {
-                prompt_tokens: 12,
-                completion_tokens: 512,
-                total_tokens: 524,
-              },
-            }),
-          );
+          mode = "reject_schema_only";
+          sendJson(res, 200, cmpl(body.model, "", "length"));
           return;
         }
-
         if (mode === "exhaust_always") {
-          res.writeHead(200, { "Content-Type": "application/json" });
-          res.end(
-            JSON.stringify({
-              id: "cmpl-exhaust-always",
-              object: "chat.completion",
-              created: 1,
-              model: body.model,
-              choices: [
-                {
-                  index: 0,
-                  message: { role: "assistant", content: "" },
-                  finish_reason: "length",
-                },
-              ],
-              usage: {
-                prompt_tokens: 12,
-                completion_tokens: 1024,
-                total_tokens: 1036,
-              },
-            }),
-          );
+          sendJson(res, 200, cmpl(body.model, "", "length"));
           return;
         }
 
@@ -572,117 +396,68 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
           mode === "sycophantic_eval"
             ? JSON.stringify({
                 extractedClaims: ["TCP operates at Layer 7"],
-                factualOrLogicalErrors: [
-                  "TCP is a Layer 4 transport protocol, not Layer 7.",
-                ],
+                factualOrLogicalErrors: ["TCP is a Layer 4 transport protocol, not Layer 7."],
                 feedback: "Good effort, though TCP is Layer 4.",
-                pass: true, // Sycophantic model tries to pass despite listing an error!
+                pass: true,
               })
             : mode === "reject_both_formats"
               ? '```json\n{"concept":"Write-Ahead Log","durability":true}\n```'
               : rfType === "json_object"
                 ? '{"concept":"Consistent Hashing","durability":true}'
                 : "Recovered answer after doubling reasoning budget.";
-
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            id: "cmpl-ok",
-            object: "chat.completion",
-            created: 1,
-            model: body.model,
-            choices: [
-              {
-                index: 0,
-                message: { role: "assistant", content },
-                finish_reason: "stop",
-              },
-            ],
-            usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
-          }),
-        );
+        sendJson(res, 200, cmpl(body.model, content, "stop"));
         return;
       }
-
       res.writeHead(404).end();
     });
 
     try {
-      // Register as an instance custom endpoint via /api/endpoints
-      const epCreate = await aliceAgent
-        .post("/api/endpoints")
-        .send({
-          name: "Local Test Engine",
-          baseUrl: `${mockLlm.baseUrl}/v1`,
-        })
-        .expect(201);
-      const epId = epCreate.body.id as string;
+      const epId = (
+        await aliceAgent
+          .post("/api/endpoints")
+          .send({ name: "Local Test Engine", baseUrl: `${mockLlm.baseUrl}/v1` })
+          .expect(201)
+      ).body.id as string;
 
-      const targetSchema = z.object({
-        concept: z.string(),
-        durability: z.boolean(),
-      });
+      const targetSchema = z.object({ concept: z.string(), durability: z.boolean() });
 
-      // Case A: Rung 1 (json_schema -> 400) automatically downgrades to Rung 2 (json_object -> 200) and caches it!
       mode = "reject_schema_only";
       wireFormatsSeen.length = 0;
-      const rung2Out = await runStructured<{
-        concept: string;
-        durability: boolean;
-      }>({
-        model: `custom:${epId}:ollama-rung2`,
-        prompt: "Describe consistent hashing",
-        schema: targetSchema,
-      });
-      expect(rung2Out).toEqual({
-        concept: "Consistent Hashing",
-        durability: true,
-      });
+      expect(
+        await runStructured({
+          model: `custom:${epId}:ollama-rung2`,
+          prompt: "Describe consistent hashing",
+          schema: targetSchema,
+        }),
+      ).toEqual({ concept: "Consistent Hashing", durability: true });
       expect(wireFormatsSeen).toEqual(["json_schema", "json_object"]);
-      expect(__getStructuredModeFor(`instance:${epId}`, "ollama-rung2")).toBe(
-        "json_object",
-      );
+      expect(__getStructuredModeFor(`instance:${epId}`, "ollama-rung2")).toBe("json_object");
 
-      // Second call to the same model skips Rung 1 immediately!
       wireFormatsSeen.length = 0;
-      await runStructured({
-        model: `custom:${epId}:ollama-rung2`,
-        prompt: "Again",
-        schema: targetSchema,
-      });
+      await runStructured({ model: `custom:${epId}:ollama-rung2`, prompt: "Again", schema: targetSchema });
       expect(wireFormatsSeen).toEqual(["json_object"]);
 
-      // Case B: Rung 1 (400) -> Rung 2 (400) -> Rung 3 (plain prompt JSON with markdown fences -> 200)
       mode = "reject_both_formats";
       wireFormatsSeen.length = 0;
-      const rung3Out = await runStructured<{
-        concept: string;
-        durability: boolean;
-      }>({
-        model: `custom:${epId}:lmstudio-rung3`,
-        prompt: "Describe WAL",
-        schema: targetSchema,
-      });
-      expect(rung3Out).toEqual({
-        concept: "Write-Ahead Log",
-        durability: true,
-      });
-      expect(wireFormatsSeen).toEqual(["json_schema", "json_object", undefined]);
       expect(
-        __getStructuredModeFor(`instance:${epId}`, "lmstudio-rung3"),
-      ).toBe("prompt");
+        await runStructured({
+          model: `custom:${epId}:lmstudio-rung3`,
+          prompt: "Describe WAL",
+          schema: targetSchema,
+        }),
+      ).toEqual({ concept: "Write-Ahead Log", durability: true });
+      expect(wireFormatsSeen).toEqual(["json_schema", "json_object", undefined]);
+      expect(__getStructuredModeFor(`instance:${epId}`, "lmstudio-rung3")).toBe("prompt");
 
-      // Case C: Reasoning exhaustion retries with 2x maxOutputTokens, and throws AI_REASONING_EXHAUSTED if still empty
       mode = "exhaust_once";
       maxTokensSeen.length = 0;
-      const recovered = await runText({
-        model: `custom:${epId}:deepseek-reasoner`,
-        prompt: "Prove FLP impossibility",
-        maxOutputTokens: 512,
-      });
-      expect(recovered).toBe(
-        "Recovered answer after doubling reasoning budget.",
-      );
+      expect(
+        await runText({
+          model: `custom:${epId}:deepseek-reasoner`,
+          prompt: "Prove FLP impossibility",
+          maxOutputTokens: 512,
+        }),
+      ).toBe("Recovered answer after doubling reasoning budget.");
       expect(maxTokensSeen).toEqual([512, 1024]);
 
       mode = "exhaust_always";
@@ -692,11 +467,8 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
           prompt: "Loop forever in thoughts",
           maxOutputTokens: 512,
         }),
-      ).rejects.toMatchObject({
-        code: "AI_REASONING_EXHAUSTED",
-      });
+      ).rejects.toMatchObject({ code: "AI_REASONING_EXHAUSTED" });
 
-      // Case D: Anti-sycophancy falsification-first POST /api/chat/evaluate-interceptor
       __resetStructuredModeCache();
       mode = "sycophantic_eval";
       const evalRes = await aliceAgent
@@ -708,11 +480,9 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
           model: `custom:${epId}:ollama-rung2`,
         })
         .expect(200);
-
       expect(evalRes.body.factualOrLogicalErrors).toEqual([
         "TCP is a Layer 4 transport protocol, not Layer 7.",
       ]);
-      // Even though the LLM emitted `pass: true`, non-empty `factualOrLogicalErrors` forces `pass: false`!
       expect(evalRes.body.pass).toBe(false);
     } finally {
       await mockLlm.close();
@@ -720,7 +490,6 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
   });
 
   it("5. enforces hostGuard DNS-rebinding protection, readBodyCapped/readBytesCapped limits, and SSRF protection on SearXNG result URLs", async () => {
-    // 5a. hostGuard blocks forged Host headers while allowing localhost / 127.0.0.1 / PUBLIC_ORIGIN
     expect(isHostAllowed("localhost:3100")).toBe(true);
     expect(isHostAllowed("127.0.0.1:3100")).toBe(true);
     expect(isHostAllowed("[::1]:3100")).toBe(true);
@@ -731,27 +500,22 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
       .set("Host", "attacker.example")
       .expect(403);
     expect(blockedHostRes.body.error?.code).toBe("HOST_NOT_ALLOWED");
+    await aliceAgent.get("/api/config").set("Host", "127.0.0.1:3100").expect(200);
+    await aliceAgent.get("/api/config").set("Host", "localhost:3100").expect(200);
 
-    await aliceAgent
-      .get("/api/config")
-      .set("Host", "127.0.0.1:3100")
-      .expect(200);
-    await aliceAgent
-      .get("/api/config")
-      .set("Host", "localhost:3100")
-      .expect(200);
-
-    // 5b. isPrivateAddress covers 198.18.0.0/15, multicast/reserved >= 224/4, and IPv4-mapped/NAT64 IPv6
-    expect(isPrivateAddress("198.18.0.1")).toBe(true);
-    expect(isPrivateAddress("198.19.255.254")).toBe(true);
+    for (const priv of [
+      "198.18.0.1",
+      "198.19.255.254",
+      "224.0.0.1",
+      "240.0.0.1",
+      "::ffff:127.0.0.1",
+      "64:ff9b::10.0.0.1",
+    ]) {
+      expect(isPrivateAddress(priv)).toBe(true);
+    }
     expect(isPrivateAddress("198.20.0.1")).toBe(false);
-    expect(isPrivateAddress("224.0.0.1")).toBe(true);
-    expect(isPrivateAddress("240.0.0.1")).toBe(true);
-    expect(isPrivateAddress("::ffff:127.0.0.1")).toBe(true);
-    expect(isPrivateAddress("64:ff9b::10.0.0.1")).toBe(true);
     expect(isPrivateAddress("93.184.216.34")).toBe(false);
 
-    // 5c. readBodyCapped & readBytesCapped enforce byte caps with RESPONSE_TOO_LARGE
     const oversizedChunkedResponse = new Response(
       new ReadableStream({
         start(controller) {
@@ -761,22 +525,15 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
         },
       }),
     );
-    await expect(
-      readBytesCapped(oversizedChunkedResponse, { maxBytes: 1500 }),
-    ).rejects.toMatchObject({
+    await expect(readBytesCapped(oversizedChunkedResponse, { maxBytes: 1500 })).rejects.toMatchObject({
       code: "RESPONSE_TOO_LARGE",
     });
-
-    const oversizedTextResponse = new Response("x".repeat(4096), {
-      headers: { "Content-Length": "4096" },
-    });
     await expect(
-      readBodyCapped(oversizedTextResponse, { maxBytes: 1024 }),
+      readBodyCapped(new Response("x".repeat(4096), { headers: { "Content-Length": "4096" } }), {
+        maxBytes: 1024,
+      }),
     ).rejects.toBeInstanceOf(AppError);
 
-    // 5d. SSRF protection on SearXNG web research:
-    // Local SearXNG instance IS allowed (`allowPrivate: true`), while private-IP result URLs
-    // returned by SearXNG are strictly rejected (`allowPrivate: false`) and never fetched!
     let internalSecretHit = false;
     const internalAdminServer = await listenLocal((_req, res) => {
       internalSecretHit = true;
@@ -787,65 +544,42 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
     const searxServer = await listenLocal((req, res) => {
       const parsed = new URL(req.url ?? "/", "http://127.0.0.1");
       if (parsed.pathname === "/search" && parsed.searchParams.get("format") === "json") {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            results: [
-              {
-                title: "SSRF Loopback Trap",
-                url: `${internalAdminServer.baseUrl}/internal-secret`,
-                content: "Attempt to trick Toolbox into reading loopback service",
-              },
-              {
-                title: "Cloud Metadata Trap",
-                url: "http://169.254.169.254/latest/meta-data/iam",
-                content: "Attempt to read AWS IMDS",
-              },
-              {
-                title: "Benchmark Net Trap",
-                url: "http://198.18.10.20/admin",
-                content: "Attempt to read 198.18.0.0/15",
-              },
-            ],
-          }),
-        );
+        sendJson(res, 200, {
+          results: [
+            { title: "SSRF Loopback Trap", url: `${internalAdminServer.baseUrl}/internal-secret`, content: "Loopback" },
+            { title: "Cloud Metadata Trap", url: "http://169.254.169.254/latest/meta-data/iam", content: "AWS IMDS" },
+            { title: "Benchmark Net Trap", url: "http://198.18.10.20/admin", content: "198.18.0.0/15" },
+          ],
+        });
         return;
       }
       res.writeHead(404).end();
     });
 
     try {
-      // Admin Test SearXNG endpoint succeeds against localhost SearXNG
       const testSearxRes = await aliceAgent
         .post("/api/admin/ai-settings/test-searxng")
         .send({ searxngUrl: searxServer.baseUrl })
         .expect(200);
-      expect(testSearxRes.body.ok).toBe(true);
-      expect(testSearxRes.body.resultCount).toBe(3);
+      expect(testSearxRes.body).toMatchObject({ ok: true, resultCount: 3 });
 
-      // Running full web research queries SearXNG on localhost, then blocks ALL private result URLs!
       const research = await runWebResearch({
         scope: aliceScope,
         query: "distributed consensus",
         engine: "searxng",
         searxngUrlOverride: searxServer.baseUrl,
       });
-
       expect(internalSecretHit).toBe(false);
       expect(research.pages).toHaveLength(0);
       expect(research.citations).toHaveLength(0);
       expect(research.blockedUrls).toHaveLength(3);
       expect(research.summary).not.toContain("INTERNAL_METADATA_SECRET_KEY");
 
-      // Grounding redirect helper check
       expect(
-        isGroundingRedirectUrl(
-          "https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbCdEf",
-        ),
+        isGroundingRedirectUrl("https://vertexaisearch.cloud.google.com/grounding-api-redirect/AbCdEf"),
       ).toBe(true);
       expect(isGroundingRedirectUrl("https://example.com/article")).toBe(false);
-      const passthrough = await resolveRedirects(["https://example.com/docs"]);
-      expect(passthrough.get("https://example.com/docs")).toBe(
+      expect((await resolveRedirects(["https://example.com/docs"])).get("https://example.com/docs")).toBe(
         "https://example.com/docs",
       );
     } finally {
@@ -856,22 +590,15 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
 
   it("6. wires hybrid study tools (search_guide, search_flashcards, search_kit_sources, web_research gating) and clean chunk deletion", async () => {
     const aliceKit = ensureDefaultSystemDesignKit(db, aliceScope);
-
-    // Without enableWebResearch, web_research tool is omitted
-    const baseTools = buildStudyTools(aliceScope, aliceKit);
-    expect(Object.keys(baseTools).sort()).toEqual([
+    expect(Object.keys(buildStudyTools(aliceScope, aliceKit)).sort()).toEqual([
       "search_flashcards",
       "search_guide",
       "search_kit_sources",
     ]);
 
-    // With enableWebResearch: true, web_research is exposed
-    const researchTools = buildStudyTools(aliceScope, aliceKit, {
-      enableWebResearch: true,
-    });
+    const researchTools = buildStudyTools(aliceScope, aliceKit, { enableWebResearch: true });
     expect(Object.keys(researchTools)).toContain("web_research");
 
-    // Seed a Kit source + chunk in SQLite and execute search_kit_sources tool
     db.prepare(
       `INSERT INTO kit_sources (id, ownerId, kit_id, kind, title)
        VALUES ('src-dynamo', ?, ?, 'note', 'Amazon Dynamo Paper Notes')`,
@@ -889,68 +616,46 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
       { query: "sloppy quorums hinted handoff" },
       { toolCallId: "tc-1", messages: [] },
     );
-    expect(Array.isArray(sourceHits)).toBe(true);
-    expect(sourceHits[0].title).toBe("Amazon Dynamo Paper Notes");
+    expect(sourceHits[0]?.title).toBe("Amazon Dynamo Paper Notes");
 
-    // Delete source chunk from RAG store and verify removal across rag_chunks, FTS5, and vec0
-    db.prepare(
-      "DELETE FROM kit_source_chunks WHERE ownerId = ? AND id = 'sc-dynamo-1'",
-    ).run(aliceId);
-    const deleted = deleteRagChunksBySource(
-      db,
-      aliceScope,
-      aliceKit.id,
-      "source_chunk",
-      "sc-dynamo-1",
-    );
-    expect(deleted).toBe(1);
-
-    const afterDelete = await hybridSearch(
-      db,
-      aliceScope,
-      "sloppy quorums hinted handoff",
-      { kitId: aliceKit.id, kinds: ["source_chunk"] },
-    );
-    expect(afterDelete).toHaveLength(0);
+    db.prepare("DELETE FROM kit_source_chunks WHERE ownerId = ? AND id = 'sc-dynamo-1'").run(aliceId);
+    expect(deleteRagChunksBySource(db, aliceScope, aliceKit.id, "source_chunk", "sc-dynamo-1")).toBe(1);
+    expect(
+      await hybridSearch(db, aliceScope, "sloppy quorums hinted handoff", {
+        kitId: aliceKit.id,
+        kinds: ["source_chunk"],
+      }),
+    ).toHaveLength(0);
   });
 
   it("7. eliminates RAG ghosting on card/deck/guide/Kit CRUD, scopes /api/search by Kit slug, persists chat persona, and returns JSON 404 on unknown production /api routes", async () => {
-    const countRagEverywhere = (chunkId: string) => {
-      const c1 = (
-        db
-          .prepare("SELECT COUNT(*) AS c FROM rag_chunks WHERE chunk_id = ?")
-          .get(chunkId) as { c: number }
-      ).c;
-      const c2 = (
-        db
-          .prepare("SELECT COUNT(*) AS c FROM rag_chunks_fts WHERE chunk_id = ?")
-          .get(chunkId) as { c: number }
-      ).c;
-      const c3 = (
-        db
-          .prepare("SELECT COUNT(*) AS c FROM rag_chunks_vec WHERE chunk_id = ?")
-          .get(chunkId) as { c: number }
-      ).c;
-      return c1 + c2 + c3;
-    };
+    const countRagEverywhere = (chunkId: string) =>
+      ["rag_chunks", "rag_chunks_fts", "rag_chunks_vec"].reduce(
+        (sum, table) =>
+          sum +
+          (db.prepare(`SELECT COUNT(*) AS c FROM ${table} WHERE chunk_id = ?`).get(chunkId) as { c: number })
+            .c,
+        0,
+      );
 
-    // 1. Card create -> edit -> delete syncs rag_chunks + FTS5 + sqlite-vec and scopes /api/search by Kit slug
-    const deckRes = await aliceAgent
-      .post("/api/decks")
-      .set("X-Toolbox-Kit", "ml-systems")
-      .send({ name: "RAG Lifecycle Deck" })
-      .expect(201);
-    const deckId = deckRes.body.id as string;
+    const deckId = (
+      await aliceAgent
+        .post("/api/decks")
+        .set("X-Toolbox-Kit", "ml-systems")
+        .send({ name: "RAG Lifecycle Deck" })
+        .expect(201)
+    ).body.id as string;
 
-    const cardCreate = await aliceAgent
-      .post(`/api/decks/${deckId}/cards`)
-      .set("X-Toolbox-Kit", "ml-systems")
-      .send({
-        front: "ZeRO Stage 3 Optimizer Partitioning",
-        back: "Shards parameters, gradients, and optimizer states across data-parallel ranks.",
-      })
-      .expect(201);
-    const cardId = cardCreate.body.id as string;
+    const cardId = (
+      await aliceAgent
+        .post(`/api/decks/${deckId}/cards`)
+        .set("X-Toolbox-Kit", "ml-systems")
+        .send({
+          front: "ZeRO Stage 3 Optimizer Partitioning",
+          back: "Shards parameters, gradients, and optimizer states across data-parallel ranks.",
+        })
+        .expect(201)
+    ).body.id as string;
     const cardChunkId = `${aliceId}:${aliceKit2Id}:flashcard:${cardId}`;
     expect(countRagEverywhere(cardChunkId)).toBe(3);
 
@@ -958,25 +663,19 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
       .get("/api/search")
       .query({ q: "ZeRO Stage 3 Optimizer", kitId: "ml-systems" })
       .expect(200);
-    expect(
-      scopedHit.body.flashcards.some((c: { id: string }) => c.id === cardId),
-    ).toBe(true);
-    expect(
-      scopedHit.body.chunks.some(
-        (c: { sourceRefId: string }) => c.sourceRefId === cardId,
-      ),
-    ).toBe(true);
+    expect(scopedHit.body.flashcards.some((c: { id: string }) => c.id === cardId)).toBe(true);
+    expect(scopedHit.body.chunks.some((c: { sourceRefId: string }) => c.sourceRefId === cardId)).toBe(
+      true,
+    );
 
     const otherKitMiss = await aliceAgent
       .get("/api/search")
       .query({ q: "ZeRO Stage 3 Optimizer", kitId: "system-design" })
       .expect(200);
     expect(otherKitMiss.body.flashcards).toHaveLength(0);
-    expect(
-      otherKitMiss.body.chunks.some(
-        (c: { sourceRefId: string }) => c.sourceRefId === cardId,
-      ),
-    ).toBe(false);
+    expect(otherKitMiss.body.chunks.some((c: { sourceRefId: string }) => c.sourceRefId === cardId)).toBe(
+      false,
+    );
 
     await aliceAgent
       .put(`/api/decks/${deckId}/cards/${cardId}`)
@@ -985,64 +684,59 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
         back: "Communicates 2(N-1)/N tensor volume independent of worker count.",
       })
       .expect(200);
-    const staleAfterEdit = await hybridSearch(
-      db,
-      aliceScope,
-      "ZeRO Stage Partitioning",
-      { kitId: aliceKit2Id, skipVec: true },
-    );
     expect(
-      staleAfterEdit.some((h) => h.sourceRefId === cardId),
+      (
+        await hybridSearch(db, aliceScope, "ZeRO Stage Partitioning", {
+          kitId: aliceKit2Id,
+          skipVec: true,
+        })
+      ).some((h) => h.sourceRefId === cardId),
     ).toBe(false);
-    const updatedHits = await hybridSearch(
-      db,
-      aliceScope,
-      "Ring AllReduce Bandwidth",
-      { kitId: aliceKit2Id },
-    );
-    expect(updatedHits[0]?.sourceRefId).toBe(cardId);
-    expect(updatedHits[0]?.title).toBe("Ring AllReduce Bandwidth Optimal");
+    const updatedHits = await hybridSearch(db, aliceScope, "Ring AllReduce Bandwidth", {
+      kitId: aliceKit2Id,
+    });
+    expect(updatedHits[0]).toMatchObject({
+      sourceRefId: cardId,
+      title: "Ring AllReduce Bandwidth Optimal",
+    });
 
-    await aliceAgent
-      .delete(`/api/decks/${deckId}/cards/${cardId}`)
-      .expect(204);
+    await aliceAgent.delete(`/api/decks/${deckId}/cards/${cardId}`).expect(204);
     expect(countRagEverywhere(cardChunkId)).toBe(0);
 
-    // 2. Deck delete purges child flashcard chunks before ON DELETE CASCADE
-    const card2 = await aliceAgent
-      .post(`/api/decks/${deckId}/cards`)
-      .set("X-Toolbox-Kit", "ml-systems")
-      .send({ front: "Pipeline Bubble Fraction", back: "(p - 1) / m" })
-      .expect(201);
-    const card2ChunkId = `${aliceId}:${aliceKit2Id}:flashcard:${card2.body.id as string}`;
+    const card2Id = (
+      await aliceAgent
+        .post(`/api/decks/${deckId}/cards`)
+        .set("X-Toolbox-Kit", "ml-systems")
+        .send({ front: "Pipeline Bubble Fraction", back: "(p - 1) / m" })
+        .expect(201)
+    ).body.id as string;
+    const card2ChunkId = `${aliceId}:${aliceKit2Id}:flashcard:${card2Id}`;
     expect(countRagEverywhere(card2ChunkId)).toBe(3);
 
     await aliceAgent.delete(`/api/decks/${deckId}`).expect(204);
     expect(countRagEverywhere(card2ChunkId)).toBe(0);
 
-    // 3. Guide section PUT -> clear ("") purges rag_chunks + FTS5 + vec0
-    const firstPillar = SYSTEM_DESIGN_KIT_SKELETON_FOR_TEST();
+    const skelRow = db
+      .prepare("SELECT skeleton_json FROM kits WHERE ownerId = ? LIMIT 1")
+      .get(aliceId) as { skeleton_json: string };
+    const firstPillar = (
+      JSON.parse(skelRow.skeleton_json) as {
+        pillars: Array<{ id: string; topics: Array<{ id: string }>; sections: Array<{ id: string }> }>;
+      }
+    ).pillars[0];
+    const slotPath = `/api/guide-content/${firstPillar.id}/${firstPillar.topics[0].id}/${firstPillar.sections[0].id}`;
+    const guideChunkId = `${aliceId}:${aliceKit2Id}:guide:${firstPillar.id}:${firstPillar.topics[0].id}:${firstPillar.sections[0].id}`;
+
     await aliceAgent
-      .put(
-        `/api/guide-content/${firstPillar.p}/${firstPillar.t}/${firstPillar.s}`,
-      )
+      .put(slotPath)
       .set("X-Toolbox-Kit", "ml-systems")
       .send({ content: "Speculative decoding draft verification acceptance rate." })
       .expect(200);
-    const guideRef = `${firstPillar.p}:${firstPillar.t}:${firstPillar.s}`;
-    const guideChunkId = `${aliceId}:${aliceKit2Id}:guide:${guideRef}`;
     expect(countRagEverywhere(guideChunkId)).toBe(3);
 
-    await aliceAgent
-      .put(
-        `/api/guide-content/${firstPillar.p}/${firstPillar.t}/${firstPillar.s}`,
-      )
-      .set("X-Toolbox-Kit", "ml-systems")
-      .send({ content: "" })
-      .expect(200);
+    await aliceAgent.put(slotPath).set("X-Toolbox-Kit", "ml-systems").send({ content: "" }).expect(200);
     expect(countRagEverywhere(guideChunkId)).toBe(0);
 
-    // 4. Kit delete purges rag_chunks_vec alongside rag_chunks and rag_chunks_fts
     await upsertRagChunk(db, aliceScope, {
       kitId: aliceKit2Id,
       kind: "guide",
@@ -1051,16 +745,14 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
       content: "Ephemeral tensor parallelism note.",
     });
     await aliceAgent.delete(`/api/kits/${aliceKit2Id}`).expect(200);
-    const remainingVecForDeletedKit = (
-      db
-        .prepare(
-          "SELECT COUNT(*) AS c FROM rag_chunks_vec WHERE ownerId = ? AND kit_id = ?",
-        )
-        .get(aliceId, aliceKit2Id) as { c: number }
-    ).c;
-    expect(remainingVecForDeletedKit).toBe(0);
+    expect(
+      (
+        db
+          .prepare("SELECT COUNT(*) AS c FROM rag_chunks_vec WHERE ownerId = ? AND kit_id = ?")
+          .get(aliceId, aliceKit2Id) as { c: number }
+      ).c,
+    ).toBe(0);
 
-    // 5. Chat session persona round-trips through SQLite
     await aliceAgent
       .post("/api/chat/sessions")
       .send({
@@ -1072,70 +764,25 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
         },
       })
       .expect(200);
-    const sessionsRes = await aliceAgent.get("/api/chat/sessions").expect(200);
-    expect(sessionsRes.body["persona-session-1"]?.persona).toBe("gordon");
-
-    // 6. Production mode unknown /api/* routes always return JSON 404 and /api-* prefixes never hang
-    const prevNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-    try {
-      const prodApp = createApp();
-      const missApiGet = await request(prodApp)
-        .get("/api/nonexistent-endpoint")
-        .expect(404);
-      expect(missApiGet.headers["content-type"]).toMatch(/json/);
-      expect(missApiGet.body.error?.code).toBe("ROUTE_NOT_FOUND");
-
-      const missApiPost = await request(prodApp)
-        .post("/api/nonexistent-endpoint")
-        .expect(404);
-      expect(missApiPost.headers["content-type"]).toMatch(/json/);
-      expect(missApiPost.body.error?.code).toBe("ROUTE_NOT_FOUND");
-
-      const missPrefix = await request(prodApp).get("/api-typo");
-      expect([200, 404]).toContain(missPrefix.status);
-    } finally {
-      process.env.NODE_ENV = prevNodeEnv;
-    }
-
-    // 7. DISABLE_BACKGROUND_JOBS=true disables background runners and activates offline mock embedder
-    const { isBackgroundJobsDisabled } = await import("../appConfig.ts");
-    const { shouldUseMockEmbedder } = await import(
-      "../platform/workers/cpuHost.ts"
+    expect((await aliceAgent.get("/api/chat/sessions").expect(200)).body["persona-session-1"]?.persona).toBe(
+      "gordon",
     );
-    const prevBg = process.env.DISABLE_BACKGROUND_JOBS;
-    const prevEnvForBg = process.env.NODE_ENV;
-    process.env.NODE_ENV = "production";
-    process.env.DISABLE_BACKGROUND_JOBS = "true";
-    try {
+
+    await withEnv({ NODE_ENV: "production" }, async () => {
+      const prodApp = createApp();
+      for (const m of ["get", "post"] as const) {
+        const miss = await request(prodApp)[m]("/api/nonexistent-endpoint").expect(404);
+        expect(miss.headers["content-type"]).toMatch(/json/);
+        expect(miss.body.error?.code).toBe("ROUTE_NOT_FOUND");
+      }
+      expect([200, 404]).toContain((await request(prodApp).get("/api-typo")).status);
+    });
+
+    const { isBackgroundJobsDisabled } = await import("../appConfig.ts");
+    const { shouldUseMockEmbedder } = await import("../platform/workers/cpuHost.ts");
+    await withEnv({ NODE_ENV: "production", DISABLE_BACKGROUND_JOBS: "true" }, () => {
       expect(isBackgroundJobsDisabled()).toBe(true);
       expect(shouldUseMockEmbedder()).toBe(true);
-    } finally {
-      process.env.NODE_ENV = prevEnvForBg;
-      if (prevBg === undefined) delete process.env.DISABLE_BACKGROUND_JOBS;
-      else process.env.DISABLE_BACKGROUND_JOBS = prevBg;
-    }
+    });
   });
 });
-
-function SYSTEM_DESIGN_KIT_SKELETON_FOR_TEST(): {
-  p: string;
-  t: string;
-  s: string;
-} {
-  const row = db
-    .prepare("SELECT skeleton_json FROM kits LIMIT 1")
-    .get() as { skeleton_json: string };
-  const skel = JSON.parse(row.skeleton_json) as {
-    pillars: Array<{
-      id: string;
-      topics: Array<{ id: string }>;
-      sections: Array<{ id: string }>;
-    }>;
-  };
-  return {
-    p: skel.pillars[0].id,
-    t: skel.pillars[0].topics[0].id,
-    s: skel.pillars[0].sections[0].id,
-  };
-}

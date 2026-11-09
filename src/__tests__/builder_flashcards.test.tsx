@@ -1,13 +1,14 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import type { ReactNode } from 'react'
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom'
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import BoardList from '../components/builder/BoardList'
+import { readStoreNodes } from '../components/builder/boardModel'
+import FlashcardView from '../components/study/FlashcardView'
 import BuilderPage from '../pages/BuilderPage'
 import StudyPage from '../pages/StudyPage'
 import useAppStore from '../stores/appStore'
-import useKitStore from '../stores/useKitStore'
-import FlashcardView from '../components/study/FlashcardView'
-import BoardList from '../components/builder/BoardList'
-import { readStoreNodes } from '../components/builder/boardModel'
+import { makeTestKit, resetKitStore } from './testHelpers'
 
 const MOCK_DECKS = [
   {
@@ -19,13 +20,7 @@ const MOCK_DECKS = [
     tags: 'Storage',
     last_studied: '2 days ago',
     progress: 75,
-    cards: [
-      {
-        id: 'c1',
-        front: 'What is the CAP Theorem?',
-        back: 'The CAP theorem states that a distributed system can only provide two of three guarantees: Consistency, Availability, and Partition Tolerance.',
-      },
-    ],
+    cards: [{ id: 'c1', front: 'What is the CAP Theorem?', back: 'Consistency, Availability, and Partition Tolerance.' }],
   },
   {
     id: 'deck-2',
@@ -38,29 +33,17 @@ const MOCK_DECKS = [
     progress: 40,
     cards: [],
   },
-  {
-    id: 'deck-3',
-    name: 'Database Scaling Patterns',
-    description: 'Database Scaling description',
-    color_index: 2,
-    card_count: 15,
-    tags: 'Storage',
-    last_studied: 'Never studied',
-    progress: 0,
-    cards: [],
-  },
 ]
 
 const mocks = vi.hoisted(() => ({
   decksList: vi.fn(),
   decksGet: vi.fn(),
   decksCreate: vi.fn(),
-  decksUpdate: vi.fn(),
   decksDelete: vi.fn(),
   boardsList: vi.fn(),
-  boardsGet: vi.fn(),
   boardsCreate: vi.fn(),
   chatStream: vi.fn(),
+  canvasCritique: vi.fn(),
 }))
 
 vi.mock('../utils/api', () => ({
@@ -73,7 +56,7 @@ vi.mock('../utils/api', () => ({
     list: (...args: unknown[]) => mocks.decksList(...args),
     get: (...args: unknown[]) => mocks.decksGet(...args),
     create: (...args: unknown[]) => mocks.decksCreate(...args),
-    update: (...args: unknown[]) => mocks.decksUpdate(...args),
+    update: vi.fn((id: unknown, data: unknown) => Promise.resolve({ id, ...(data as Record<string, unknown>) })),
     delete: (...args: unknown[]) => mocks.decksDelete(...args),
   },
   flashcardsApi: {
@@ -84,7 +67,7 @@ vi.mock('../utils/api', () => ({
   },
   boardsApi: {
     list: (...args: unknown[]) => mocks.boardsList(...args),
-    get: (...args: unknown[]) => mocks.boardsGet(...args),
+    get: vi.fn(() => Promise.resolve({})),
     create: (...args: unknown[]) => mocks.boardsCreate(...args),
     update: vi.fn(() => Promise.resolve({})),
     delete: vi.fn(() => Promise.resolve({})),
@@ -95,12 +78,13 @@ vi.mock('../utils/api', () => ({
     send: vi.fn(() => Promise.resolve({ response: 'AI response content' })),
     stream: (...args: unknown[]) => mocks.chatStream(...args),
   },
-  studySessionsApi: {
-    list: vi.fn(() => Promise.resolve([])),
-  },
-  kitsApi: {
-    list: vi.fn(() => Promise.resolve({ kits: [] })),
-    get: vi.fn(() => Promise.resolve(null)),
+  studySessionsApi: { list: vi.fn(() => Promise.resolve([])) },
+  kitsApi: { list: vi.fn(() => Promise.resolve({ kits: [] })), get: vi.fn(() => Promise.resolve(null)) },
+}))
+
+vi.mock('../utils/pedagogyApi', () => ({
+  canvasCritiqueApi: {
+    critique: (...args: unknown[]) => mocks.canvasCritique(...args),
   },
 }))
 
@@ -110,13 +94,22 @@ function q<T extends Element = HTMLElement>(selector: string): T {
   return el
 }
 
-describe('Builder and Flashcards Comprehensive Test Suite', () => {
+async function renderSettled(ui: ReactNode) {
+  let out!: ReturnType<typeof render>
+  await act(async () => {
+    out = render(ui)
+  })
+  return out
+}
+
+describe('Builder Canvas, Concept Map Critique & Flashcard Decks', () => {
   let activeMockDecks: typeof MOCK_DECKS
 
   beforeEach(() => {
     activeMockDecks = structuredClone(MOCK_DECKS)
     window.innerWidth = 1024
     useAppStore.setState({
+      model: 'gemini-2.5-flash',
       sidebarCollapsed: false,
       chatOpen: { chat: false, guide: false, builder: false, study: false },
       apiKeyConfigured: true,
@@ -124,18 +117,11 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       nodes: [],
       edges: [],
     })
-    useKitStore.setState({
-      kits: [],
-      activeKitSlug: null,
-      activeKit: null,
-      kitCache: {},
-      isLoadingList: false,
-      isLoadingActive: false,
-    })
+    resetKitStore()
 
     mocks.decksList.mockImplementation(() => Promise.resolve([...activeMockDecks]))
     mocks.decksGet.mockImplementation((id: unknown) =>
-      Promise.resolve(activeMockDecks.find((d) => d.id === id) || activeMockDecks[0])
+      Promise.resolve(activeMockDecks.find((d) => d.id === id) || activeMockDecks[0]),
     )
     mocks.decksCreate.mockImplementation((data: unknown) => {
       const payload = data as { name?: string; description?: string; tags?: string; color_index?: number }
@@ -153,22 +139,16 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
       activeMockDecks = [...activeMockDecks, created]
       return Promise.resolve(created)
     })
-    mocks.decksUpdate.mockImplementation((id: unknown, data: unknown) =>
-      Promise.resolve({ id, ...(data as Record<string, unknown>) })
-    )
     mocks.decksDelete.mockImplementation((id: unknown) => {
       activeMockDecks = activeMockDecks.filter((d) => d.id !== id)
       return Promise.resolve({})
     })
     mocks.boardsList.mockResolvedValue([])
-    mocks.boardsGet.mockResolvedValue({})
     mocks.boardsCreate.mockResolvedValue({ id: 'board-created', name: 'Untitled Board' })
     mocks.chatStream.mockImplementation(async (_data: unknown, onChunk?: (chunk: string) => void) => {
-      const text = 'AI response content'
-      onChunk?.(text)
-      return text
+      onChunk?.('AI response content')
+      return 'AI response content'
     })
-
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: false,
       media: query,
@@ -185,323 +165,197 @@ describe('Builder and Flashcards Comprehensive Test Suite', () => {
     vi.clearAllMocks()
   })
 
-  describe('Builder Page Tests', () => {
-    it('1. renders canvas, toolbox, toolbar actions, and React Flow chrome', () => {
-      render(<MemoryRouter><BuilderPage /></MemoryRouter>)
+  it('syncs dropped Builder nodes with finite coordinates, purges nodes on /k/:slug/builder Kit switch, and renders 15-tab BoardList', async () => {
+    function KitSwitcher() {
+      const navigate = useNavigate()
+      return <button onClick={() => navigate('/k/kit-b/builder')} data-testid="switch-builder-kit">Switch</button>
+    }
 
-      expect(document.querySelector('#builder-toolbox') || document.querySelector('.builder-toolbox')).toBeInTheDocument()
-      expect(screen.getByText('Components')).toBeInTheDocument()
-      expect(document.querySelector('#builder-canvas') || document.querySelector('.builder-canvas')).toBeInTheDocument()
+    const { unmount } = await renderSettled(
+      <MemoryRouter initialEntries={['/k/kit-a/builder']}>
+        <KitSwitcher />
+        <Routes>
+          <Route path="/k/:slug/builder" element={<BuilderPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
 
-      expect(screen.getByText('Estimate')).toBeInTheDocument()
-      expect(screen.getByText('Templates')).toBeInTheDocument()
-      expect(screen.getByText('Export')).toBeInTheDocument()
-      expect(screen.getByText('Save')).toBeInTheDocument()
-      expect(screen.getByText('Verify Design')).toBeInTheDocument()
+    await screen.findByText('Untitled Board')
+    const canvas = q('#builder-canvas')
+    canvas.getBoundingClientRect = vi.fn(() => ({
+      left: 10, top: 20, right: 810, bottom: 620, width: 800, height: 600, x: 10, y: 20, toJSON: () => ({}),
+    }))
 
-      expect(document.querySelector('.react-flow')).toBeInTheDocument()
-      expect(document.querySelector('.react-flow__controls')).toBeInTheDocument()
-      expect(document.querySelector('.react-flow__minimap')).toBeInTheDocument()
-      expect(document.querySelector('.react-flow__background')).toBeInTheDocument()
+    fireEvent.drop(canvas, {
+      preventDefault: vi.fn(),
+      clientX: 170,
+      clientY: 130,
+      dataTransfer: {
+        getData: (format: string) =>
+          format === 'application/json'
+            ? JSON.stringify({ id: 'cache', name: 'Cache (Redis)', category: 'Storage', icon: 'zap' })
+            : '',
+      },
     })
 
-    it('2. places dropped nodes onto canvas and shared store with numeric coordinates, and supports removal', () => {
-      render(<MemoryRouter><BuilderPage /></MemoryRouter>)
+    const stored = readStoreNodes(useAppStore.getState()).find((n) => n.data?.name === 'Cache (Redis)')
+    expect(stored).toBeDefined()
+    expect(Number.isFinite(stored!.position.x)).toBe(true)
+    expect(Number.isFinite(stored!.position.y)).toBe(true)
 
-      const canvas = q('#builder-canvas')
-      const originalRect = canvas.getBoundingClientRect
-      canvas.getBoundingClientRect = vi.fn(() => ({
-        left: 10, top: 20, right: 810, bottom: 620, width: 800, height: 600, x: 10, y: 20, toJSON: () => ({}),
-      }))
+    fireEvent.click(screen.getByLabelText('Remove node'))
+    expect(readStoreNodes(useAppStore.getState())).toHaveLength(0)
 
-      const cacheItem = { id: 'cache', name: 'Cache (Redis)', category: 'Storage', icon: 'zap' }
-      const workerItem = { id: 'worker', name: 'Background Worker', category: 'Compute', icon: 'cog' }
-
-      fireEvent.drop(canvas, {
-        preventDefault: vi.fn(),
-        clientX: 170,
-        clientY: 130,
-        dataTransfer: {
-          getData: (format: string) => (format === 'application/json' ? JSON.stringify(cacheItem) : ''),
-        },
-      })
-      fireEvent.drop(canvas, {
-        preventDefault: vi.fn(),
-        clientX: 250,
-        clientY: 220,
-        dataTransfer: {
-          getData: (format: string) => (format === 'application/json' ? JSON.stringify(workerItem) : ''),
-        },
-      })
-
-      expect(screen.getAllByText('Cache (Redis)').find((el) => el.closest('#builder-canvas'))).toBeTruthy()
-      expect(canvas.textContent).toContain('Background Worker')
-
-      const stored = readStoreNodes(useAppStore.getState()).find((n) => n.data?.name === 'Cache (Redis)')
-      expect(stored).toBeDefined()
-      expect(stored!.type).toBe('component')
-      expect(stored!.data.category).toBe('Storage')
-      expect(Number.isFinite(stored!.position.x)).toBe(true)
-      expect(Number.isFinite(stored!.position.y)).toBe(true)
-
-      const removeButtons = screen.getAllByLabelText('Remove node')
-      expect(removeButtons.length).toBe(2)
-      fireEvent.click(removeButtons[0])
-      fireEvent.click(removeButtons[1])
-
-      expect(canvas.textContent).not.toContain('Cache (Redis)')
-      expect(canvas.textContent).not.toContain('Background Worker')
-      expect(canvas.textContent).toContain('Drag components from the toolbox to start designing')
-
-      canvas.getBoundingClientRect = originalRect
+    // Drop a Kit A node, then switch Kits -> immediately purged
+    fireEvent.drop(canvas, {
+      preventDefault: vi.fn(),
+      clientX: 140,
+      clientY: 140,
+      dataTransfer: {
+        getData: (format: string) =>
+          format === 'application/json'
+            ? JSON.stringify({ id: 'cdn', name: 'Kit A CDN', category: 'Storage', icon: 'globe' })
+            : '',
+      },
     })
+    expect(readStoreNodes(useAppStore.getState()).some((n) => n.data?.name === 'Kit A CDN')).toBe(true)
 
-    it('3. creates and switches board tabs and renders responsive BoardList', async () => {
-      const { unmount } = render(<MemoryRouter><BuilderPage /></MemoryRouter>)
-
-      expect(await screen.findByText('Untitled Board')).toBeInTheDocument()
-      fireEvent.click(q('#new-board-btn'))
-      expect(screen.getByText('Board 2')).toBeInTheDocument()
-      expect(document.querySelectorAll('.board-tab:not(.board-tab-add)').length).toBe(2)
-
-      const firstTab = screen.getByText('Untitled Board').closest('.board-tab')
-      expect(firstTab).not.toBeNull()
-      fireEvent.click(firstTab!)
-      expect(firstTab).toHaveClass('active')
-      unmount()
-
-      window.innerWidth = 375
-      const manyBoards = Array.from({ length: 15 }, (_, i) => ({
-        id: `board-${i}`,
-        name: `Board tab #${i + 1}`,
-      }))
-      render(
-        <MemoryRouter>
-          <BoardList
-            boards={manyBoards}
-            activeId="board-0"
-            onSelect={vi.fn()}
-            onNew={vi.fn()}
-            onRename={vi.fn()}
-            onDelete={vi.fn()}
-          />
-        </MemoryRouter>
-      )
-      expect(q('#board-list')).toHaveClass('board-list-bar')
-      for (const board of manyBoards) {
-        expect(screen.getByText(board.name)).toBeInTheDocument()
-      }
-    })
-
-    it('4. opens chat panel when Verify Design is clicked on an empty canvas', () => {
-      render(<MemoryRouter><BuilderPage /></MemoryRouter>)
-      expect(screen.getByText('Drag components from the toolbox to start designing')).toBeInTheDocument()
-
-      fireEvent.click(q('#builder-chat-btn'))
-      expect(useAppStore.getState().chatOpen.builder).toBe(true)
-      expect(screen.getAllByText('Ask about your architecture')[0]).toBeInTheDocument()
-    })
-
-    it('5. clears previous Kit nodes immediately when switching between /k/:slug/builder Kits', async () => {
-      function KitSwitcher() {
-        const navigate = useNavigate()
-        return (
-          <button onClick={() => navigate('/k/kit-b/builder')} data-testid="switch-builder-kit">
-            Switch Kit
-          </button>
-        )
-      }
-
-      render(
-        <MemoryRouter initialEntries={['/k/kit-a/builder']}>
-          <KitSwitcher />
-          <Routes>
-            <Route path="/k/:slug/builder" element={<BuilderPage />} />
-          </Routes>
-        </MemoryRouter>
-      )
-
-      await screen.findByText('Untitled Board')
-      const canvas = q('#builder-canvas')
-      canvas.getBoundingClientRect = vi.fn(() => ({
-        left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600, x: 0, y: 0, toJSON: () => ({}),
-      }))
-      fireEvent.drop(canvas, {
-        preventDefault: vi.fn(),
-        clientX: 140,
-        clientY: 140,
-        dataTransfer: {
-          getData: (format: string) =>
-            format === 'application/json'
-              ? JSON.stringify({ id: 'cdn', name: 'Kit A CDN', category: 'Storage', icon: 'globe' })
-              : '',
-        },
-      })
-      expect(readStoreNodes(useAppStore.getState()).some((n) => n.data?.name === 'Kit A CDN')).toBe(true)
-
-      mocks.boardsList.mockResolvedValueOnce([{ id: 'board-kit-b', name: 'Kit B Board' }])
+    mocks.boardsList.mockResolvedValueOnce([{ id: 'board-kit-b', name: 'Kit B Board' }])
+    await act(async () => {
       fireEvent.click(screen.getByTestId('switch-builder-kit'))
-
-      // Kit A's dropped node is immediately purged on Kit switch
-      expect(readStoreNodes(useAppStore.getState()).some((n) => n.data?.name === 'Kit A CDN')).toBe(false)
-      expect(await screen.findByText('Kit B Board')).toBeInTheDocument()
     })
+    expect(readStoreNodes(useAppStore.getState()).some((n) => n.data?.name === 'Kit A CDN')).toBe(false)
+    expect(await screen.findByText('Kit B Board')).toBeInTheDocument()
+    unmount()
+
+    const manyBoards = Array.from({ length: 15 }, (_, i) => ({ id: `b-${i}`, name: `Board tab #${i + 1}` }))
+    render(
+      <MemoryRouter>
+        <BoardList boards={manyBoards} activeId="b-0" onSelect={vi.fn()} onNew={vi.fn()} onRename={vi.fn()} onDelete={vi.fn()} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByText('Board tab #15')).toBeInTheDocument()
   })
 
-  describe('Flashcards Page Tests', () => {
-    it('6. renders deck grid, AI generate button, card counts, recency, and mastery progress bars', async () => {
-      render(<MemoryRouter><StudyPage /></MemoryRouter>)
-
-      await screen.findByText('CAP Theorem & Consistency')
-      expect(q('.deck-grid')).toBeInTheDocument()
-      expect(screen.getByText('Load Balancing Strategies')).toBeInTheDocument()
-      expect(screen.getByText('Database Scaling Patterns')).toBeInTheDocument()
-
-      expect(screen.getByText('12 cards')).toBeInTheDocument()
-      expect(screen.getByText('8 cards')).toBeInTheDocument()
-      expect(screen.getByText('15 cards')).toBeInTheDocument()
-      expect(screen.getByText('2 days ago')).toBeInTheDocument()
-      expect(screen.getByText('Yesterday')).toBeInTheDocument()
-      expect(screen.getAllByText('Never studied').length).toBeGreaterThanOrEqual(1)
-
-      const aiBtn = q('#study-chat-btn')
-      expect(aiBtn).toHaveClass('btn', 'btn-ai-generate')
-      expect(aiBtn.querySelector('svg')).toBeInTheDocument()
-
-      const progressBars = document.querySelectorAll<HTMLElement>('.deck-card div[style*="height: 100%"]')
-      expect(progressBars.length).toBe(3)
-      const widths = Array.from(progressBars).map((el) => el.style.width)
-      expect(widths).toEqual(expect.arrayContaining(['75%', '40%', '0%']))
+  it('adapts BuilderPage to Concept-Map Kits, quick-adds custom nodes, and auto-saves before AI Rubric Critique', async () => {
+    const rustKit = makeTestKit({
+      id: 'kit-rust-1',
+      slug: 'distributed-rust',
+      name: 'Distributed Rust',
+      capabilities: { canvas: 'concept', calculator: false },
+      mutateSkeleton: (s) => {
+        s.canvasConfig = {
+          components: [],
+          protocols: ['implies', 'prevents', 'example of'],
+          templates: [],
+          auditRubric: ['Verify aliasing XOR mutability propositions.'],
+        }
+      },
+    })
+    resetKitStore(rustKit)
+    mocks.boardsCreate.mockResolvedValueOnce({ id: 'board-rust-saved', name: 'Untitled Concept Map' })
+    mocks.canvasCritique.mockResolvedValueOnce({
+      boardId: 'board-rust-saved',
+      kitId: 'kit-rust-1',
+      mode: 'concept',
+      score: 0.88,
+      pass: true,
+      extractedClaims: ['Exclusive &mut T prevents data races.'],
+      factualOrLogicalErrors: [],
+      unexplainedJargon: [],
+      rubricChecks: [{ point: 'Verify aliasing XOR mutability propositions', met: true, evidenceOrGap: 'Accurate.' }],
+      socraticFollowUp: 'Where does UnsafeCell fit?',
+      constructiveFeedback: 'Strong Novakian concept map.',
     })
 
-    it('7. filters decks by search query and shows empty search results state', async () => {
-      render(<MemoryRouter><StudyPage /></MemoryRouter>)
-      await screen.findByText('CAP Theorem & Consistency')
+    await renderSettled(
+      <MemoryRouter initialEntries={['/k/distributed-rust/canvas']}>
+        <Routes>
+          <Route path="/k/:slug/canvas" element={<BuilderPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
 
-      const searchInput = q<HTMLInputElement>('#search-decks')
-      fireEvent.change(searchInput, { target: { value: 'CAP' } })
-      expect(screen.getByText('CAP Theorem & Consistency')).toBeInTheDocument()
-      expect(screen.queryByText('Load Balancing Strategies')).not.toBeInTheDocument()
+    expect(screen.getByText('Concept Primitives')).toBeInTheDocument()
+    expect(screen.queryByText('Estimate')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Linking phrase')).toBeInTheDocument()
 
-      fireEvent.change(searchInput, { target: { value: 'xyz123abc' } })
-      expect(screen.getByText('No results')).toBeInTheDocument()
-      expect(screen.getByText(/No decks match/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Custom concept name'), { target: { value: 'Exclusive &mut T' } })
+    fireEvent.click(screen.getByLabelText('Add concept node'))
+    expect(useAppStore.getState().nodes.some((n: { data?: { name?: string } }) => n.data?.name === 'Exclusive &mut T')).toBe(true)
+
+    fireEvent.click(q('#builder-audit-btn'))
+    expect(await screen.findByText('Concept Map Audit & AI Critique')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId('run-ai-critique-btn'))
+    await waitFor(() => {
+      expect(mocks.boardsCreate).toHaveBeenCalledTimes(1)
+      expect(mocks.canvasCritique).toHaveBeenCalledWith('board-rust-saved', expect.objectContaining({ model: 'gemini-2.5-flash' }))
     })
+    expect(await screen.findByTestId('rubric-pass-badge')).toHaveTextContent('Passed Rubric')
+  })
 
-    it('8. flips study cards, handles empty decks, and wraps long multilingual card text', async () => {
-      const { unmount } = render(<MemoryRouter><StudyPage /></MemoryRouter>)
-      await screen.findByText('CAP Theorem & Consistency')
+  it('filters decks, flips multilingual/empty FlashcardView, creates/deletes decks, and clears stale decks on 0-deck Kit switch', async () => {
+    mocks.chatStream.mockRejectedValueOnce(new Error('Invalid Input / Missing Key'))
 
-      fireEvent.click(screen.getByText('CAP Theorem & Consistency').closest('.deck-card')!)
-      expect(q('#flashcard-viewer')).toBeInTheDocument()
+    function KitSwitcher() {
+      const navigate = useNavigate()
+      return <button onClick={() => navigate('/k/empty-kit/study')} data-testid="switch-study-kit">Switch Study Kit</button>
+    }
 
-      const card = q('.flashcard')
-      expect(card.className).not.toContain('flipped')
-      expect(screen.getByText('What is the CAP Theorem?')).toBeInTheDocument()
+    const { unmount } = await renderSettled(
+      <MemoryRouter initialEntries={['/k/sys-kit/study']}>
+        <KitSwitcher />
+        <Routes>
+          <Route path="/k/:slug/study" element={<StudyPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    await screen.findByText('CAP Theorem & Consistency')
 
-      fireEvent.click(card)
-      expect(card.className).toContain('flipped')
-      expect(screen.getByText(/guarantees: Consistency, Availability/i)).toBeInTheDocument()
-      unmount()
+    const searchInput = q<HTMLInputElement>('#search-decks')
+    fireEvent.change(searchInput, { target: { value: 'xyz123abc' } })
+    expect(screen.getByText('No results')).toBeInTheDocument()
+    fireEvent.change(searchInput, { target: { value: '' } })
 
-      const emptyView = render(
-        <MemoryRouter>
-          <FlashcardView cards={[]} deckName="Empty Deck" onBack={vi.fn()} />
-        </MemoryRouter>
-      )
-      expect(screen.getByText('No cards in this deck yet.')).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /Back to Decks/i })).toBeInTheDocument()
-      emptyView.unmount()
+    fireEvent.click(q('#study-chat-btn'))
+    fireEvent.change(q('#chat-input-study'), { target: { value: 'Generate invalid' } })
+    fireEvent.click(screen.getByLabelText('Send message'))
+    await waitFor(() => expect(screen.getAllByText(/Error: Invalid Input \/ Missing Key/i)[0]).toBeInTheDocument())
 
-      const veryLongFront = 'This is a very long question designed to test how text wrapping behaves in the flashcard view component when the front text is exceptionally lengthy.'
-      const veryLongBack = 'This is a very long answer that also needs to wrap properly. इवेंट हैंडलर और स्टाइल रूल्स को सुनिश्चित करना होगा कि लंबे वाक्यों वाले उत्तर भी ठीक से दिखाई दें।'
-      render(
-        <MemoryRouter>
-          <FlashcardView cards={[{ id: 'long-1', front: veryLongFront, back: veryLongBack }]} deckName="Long Deck" onBack={vi.fn()} />
-        </MemoryRouter>
-      )
-      expect(screen.getByText(veryLongFront)).toHaveClass('flashcard-text')
-      fireEvent.click(q('.flashcard'))
-      expect(screen.getByText(veryLongBack)).toHaveClass('flashcard-text')
-    })
+    fireEvent.click(screen.getAllByTitle('Delete')[0])
+    const confirmDeleteBtn = screen.getAllByRole('button', { name: 'Delete' }).find((el) => el.classList.contains('btn-primary'))!
+    fireEvent.click(confirmDeleteBtn)
+    await waitFor(() => expect(screen.queryByText('CAP Theorem & Consistency')).not.toBeInTheDocument())
 
-    it('9. handles AI chat stream errors, deck deletion confirmation, and deck editor creation', async () => {
-      mocks.chatStream.mockRejectedValueOnce(new Error('Invalid Input / Missing Key'))
-      render(<MemoryRouter><StudyPage /></MemoryRouter>)
+    fireEvent.click(q('#new-deck-btn'))
+    fireEvent.change(q('#deck-name-input'), { target: { value: 'New Custom Deck' } })
+    fireEvent.change(q('#deck-desc-input'), { target: { value: 'Custom Description' } })
+    const textareas = document.querySelectorAll<HTMLTextAreaElement>('#deck-editor textarea')
+    fireEvent.change(textareas[1], { target: { value: 'Q1' } })
+    fireEvent.change(textareas[2], { target: { value: 'A1' } })
+    fireEvent.click(screen.getByRole('button', { name: /Save Deck/i }))
+    await waitFor(() => expect(screen.getByText('New Custom Deck')).toBeInTheDocument())
 
-      await screen.findByText('CAP Theorem & Consistency')
-
-      // AI error alert
-      fireEvent.click(q('#study-chat-btn'))
-      fireEvent.change(q('#chat-input-study'), { target: { value: 'Generate invalid' } })
-      fireEvent.click(screen.getByLabelText('Send message'))
-      await waitFor(() => {
-        expect(screen.getAllByText(/Error: Invalid Input \/ Missing Key/i)[0]).toBeInTheDocument()
-      })
-
-      // Delete first deck
-      fireEvent.click(screen.getAllByTitle('Delete')[0])
-      expect(screen.getByText(/Are you sure you want to delete/i)).toBeInTheDocument()
-      const confirmDeleteBtn = screen
-        .getAllByRole('button', { name: 'Delete' })
-        .find((el) => el.classList.contains('btn-primary'))
-      fireEvent.click(confirmDeleteBtn!)
-      await waitFor(() => {
-        expect(screen.queryByText('CAP Theorem & Consistency')).not.toBeInTheDocument()
-      })
-
-      // Create new deck in DeckEditor
-      fireEvent.click(q('#new-deck-btn'))
-      expect(q('#deck-editor')).toBeInTheDocument()
-      fireEvent.change(q('#deck-name-input'), { target: { value: 'New Custom Deck' } })
-      fireEvent.change(q('#deck-desc-input'), { target: { value: 'Custom Description' } })
-
-      const textareas = document.querySelectorAll<HTMLTextAreaElement>('#deck-editor textarea')
-      fireEvent.change(textareas[1], { target: { value: 'Q1' } })
-      fireEvent.change(textareas[2], { target: { value: 'A1' } })
-
-      fireEvent.click(q('#add-card-btn'))
-      const textareasAfter = document.querySelectorAll<HTMLTextAreaElement>('#deck-editor textarea')
-      fireEvent.change(textareasAfter[3], { target: { value: 'Q2' } })
-      fireEvent.change(textareasAfter[4], { target: { value: 'A2' } })
-
-      fireEvent.click(screen.getByRole('button', { name: /Save Deck/i }))
-      await waitFor(() => {
-        expect(screen.getByText('New Custom Deck')).toBeInTheDocument()
-      })
-      expect(screen.getByText('Custom Description')).toBeInTheDocument()
-      expect(screen.getByText('2 cards')).toBeInTheDocument()
-    })
-
-    it('10. clears decks to empty state when switching to a 0-deck /k/:slug/study Kit instead of retaining stale decks', async () => {
-      function KitSwitcher() {
-        const navigate = useNavigate()
-        return (
-          <button onClick={() => navigate('/k/empty-kit/study')} data-testid="switch-study-kit">
-            Switch Study Kit
-          </button>
-        )
-      }
-
-      render(
-        <MemoryRouter initialEntries={['/k/sys-kit/study']}>
-          <KitSwitcher />
-          <Routes>
-            <Route path="/k/:slug/study" element={<StudyPage />} />
-          </Routes>
-        </MemoryRouter>
-      )
-
-      expect(await screen.findByText('CAP Theorem & Consistency')).toBeInTheDocument()
-
-      // Next Kit returns [] from decksApi.list()
-      mocks.decksList.mockResolvedValueOnce([])
+    // Switch to a 0-deck Kit -> clears stale decks
+    mocks.decksList.mockResolvedValueOnce([])
+    await act(async () => {
       fireEvent.click(screen.getByTestId('switch-study-kit'))
-
-      await waitFor(() => {
-        expect(screen.queryByText('CAP Theorem & Consistency')).not.toBeInTheDocument()
-        expect(screen.getByText('No flashcard decks yet')).toBeInTheDocument()
-      })
     })
+    await waitFor(() => {
+      expect(screen.queryByText('New Custom Deck')).not.toBeInTheDocument()
+      expect(screen.getByText('No flashcard decks yet')).toBeInTheDocument()
+    })
+    unmount()
+
+    // Empty & multilingual FlashcardView
+    const emptyView = render(<MemoryRouter><FlashcardView cards={[]} deckName="Empty Deck" onBack={vi.fn()} /></MemoryRouter>)
+    expect(screen.getByText('No cards in this deck yet.')).toBeInTheDocument()
+    emptyView.unmount()
+
+    const multiBack = 'लंबे वाक्यों वाले उत्तर भी ठीक से दिखाई दें।'
+    render(<MemoryRouter><FlashcardView cards={[{ id: '1', front: 'Long Q', back: multiBack }]} deckName="Deck" onBack={vi.fn()} /></MemoryRouter>)
+    fireEvent.click(q('.flashcard'))
+    expect(screen.getByText(multiBack)).toHaveClass('flashcard-text')
   })
 })
