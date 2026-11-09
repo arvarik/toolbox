@@ -10,7 +10,7 @@ import {
   Play,
   Sparkles,
 } from "lucide-react";
-import MarkdownRendererRaw from "../shared/MarkdownRenderer";
+import MarkdownRenderer from "../shared/MarkdownRenderer";
 import RubricFeedbackCard from "./RubricFeedbackCard.tsx";
 import useAppStore from "../../stores/appStore";
 import {
@@ -18,11 +18,6 @@ import {
   type DrillItem,
   type DrillSubmitResult,
 } from "../../utils/pedagogyApi.ts";
-
-const MarkdownRenderer = MarkdownRendererRaw as unknown as React.ComponentType<{
-  content?: string;
-  className?: string;
-}>;
 
 const READ_GATE_SECONDS = 20;
 const MIN_ATTEMPT_CHARS = 30;

@@ -1,24 +1,16 @@
-import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import {
   ShieldCheck, AlertOctagon, AlertTriangle, Info, CheckCircle2,
   MessageSquare, Sparkles, RefreshCw,
   type LucideIcon,
 } from 'lucide-react'
-import ModalRaw from '../shared/Modal'
+import Modal from '../shared/Modal'
 import RubricFeedbackCard from '../drills/RubricFeedbackCard'
 import useAppStore from '../../stores/appStore'
 import { useKitRoutePrefix } from '../../stores/useKitStore'
 import { canvasCritiqueApi, type CanvasCritiqueResult } from '../../utils/pedagogyApi'
 import type { PersistedBoardData } from './boardModel'
-
-const Modal = ModalRaw as unknown as ComponentType<{
-  open: boolean
-  onClose: () => void
-  title: ReactNode
-  children: ReactNode
-  footer?: ReactNode
-}>
 
 export type AuditSeverity = 'critical' | 'warning' | 'info'
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import {
   AlertTriangle,
@@ -24,7 +24,7 @@ import {
   prerequisitesOf,
   topologicalSort,
 } from "../../shared/kits/kitSkeleton.ts";
-import FlashcardViewRaw from "../components/study/FlashcardView";
+import FlashcardView, { type FlashcardItem } from "../components/study/FlashcardView";
 import ChallengeNodeModal from "../components/drills/ChallengeNodeModal.tsx";
 import useAppStore from "../stores/appStore";
 import useKitStore, {
@@ -33,13 +33,6 @@ import useKitStore, {
 } from "../stores/useKitStore.ts";
 import { graphApi } from "../utils/api";
 import { drillsApi, type DrillItem } from "../utils/pedagogyApi.ts";
-
-const FlashcardView = FlashcardViewRaw as unknown as React.ComponentType<{
-  cards: unknown[];
-  deckName: string;
-  reviewMode?: boolean;
-  onBack: () => void;
-}>;
 
 interface GraphNodeEntry {
   id: string;
@@ -143,7 +136,7 @@ export default function KitPathPage() {
     name: string;
   } | null>(null);
   const [studySession, setStudySession] = useState<{
-    cards: unknown[];
+    cards: FlashcardItem[];
     title: string;
   } | null>(null);
   const [startingSessionId, setStartingSessionId] = useState<string | null>(
@@ -294,7 +287,7 @@ export default function KitPathPage() {
     setStartingSessionId(node.id);
     try {
       const res = (await graphApi.nodeSession(node.id)) as {
-        cards?: unknown[];
+        cards?: FlashcardItem[];
         nodeName?: string;
       };
       if (res?.cards && res.cards.length > 0) {
@@ -316,7 +309,7 @@ export default function KitPathPage() {
     setStartingSessionId(`track:${trackId}`);
     try {
       const res = (await graphApi.trackSession(trackId)) as {
-        cards?: unknown[];
+        cards?: FlashcardItem[];
         trackName?: string;
       };
       if (res?.cards && res.cards.length > 0) {

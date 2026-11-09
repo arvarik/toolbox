@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, type ComponentType, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Plus,
   Trash2,
@@ -19,23 +19,9 @@ import FlashcardView, { type FlashcardItem, type SrsPreviews } from '../componen
 import DeckEditor, { type DeckSavePayload } from '../components/study/DeckEditor'
 import StudyHeatmap, { type StudySessionDay } from '../components/study/StudyHeatmap'
 import ChatPanel from '../components/shared/ChatPanel'
-import EmptyStateRaw from '../components/shared/EmptyState'
-import ModalRaw from '../components/shared/Modal'
+import EmptyState from '../components/shared/EmptyState'
+import Modal from '../components/shared/Modal'
 
-const EmptyState = EmptyStateRaw as unknown as ComponentType<{
-  icon?: ReactNode
-  title: string
-  description?: string
-  action?: ReactNode
-}>
-
-const Modal = ModalRaw as unknown as ComponentType<{
-  open: boolean
-  onClose: () => void
-  title: ReactNode
-  children: ReactNode
-  footer?: ReactNode
-}>
 import useAppStore from '../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
 import { decksApi, flashcardsApi, studySessionsApi } from '../utils/api'

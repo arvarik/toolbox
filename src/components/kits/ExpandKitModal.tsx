@@ -10,7 +10,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import ModalRaw from "../shared/Modal";
+import Modal from "../shared/Modal";
 import useAppStore from "../../stores/appStore";
 import type { KitSummaryItem } from "../../stores/useKitStore";
 import {
@@ -18,14 +18,6 @@ import {
   type ExpandKitResponse,
   type StagedSourceSummary,
 } from "../../utils/compilerApi";
-
-const Modal = ModalRaw as unknown as React.ComponentType<{
-  open: boolean;
-  onClose?: () => void;
-  title: React.ReactNode;
-  footer?: React.ReactNode;
-  children?: React.ReactNode;
-}>;
 
 export function ExpandKitModal({
   kit,

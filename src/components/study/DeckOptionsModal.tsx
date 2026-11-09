@@ -1,14 +1,6 @@
-import { useEffect, useState, type ComponentType, type ReactNode } from 'react'
-import ModalRaw from '../shared/Modal'
+import { useEffect, useState } from 'react'
+import Modal from '../shared/Modal'
 import { Save, RotateCcw } from 'lucide-react'
-
-const Modal = ModalRaw as unknown as ComponentType<{
-  open: boolean
-  onClose: () => void
-  title: ReactNode
-  children: ReactNode
-  footer?: ReactNode
-}>
 
 export interface DeckSchedulerSettings {
   new_limit: number

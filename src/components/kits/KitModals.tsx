@@ -10,18 +10,10 @@ import {
   RefreshCw,
   Upload,
 } from "lucide-react";
-import ModalRaw from "../shared/Modal";
+import Modal from "../shared/Modal";
 import useAppStore from "../../stores/appStore";
 import { kitsApi, sharedKitsApi } from "../../utils/api";
 import type { KitDetailItem, KitSummaryItem } from "../../stores/useKitStore";
-
-const Modal = ModalRaw as unknown as React.ComponentType<{
-  open: boolean;
-  onClose?: () => void;
-  title: React.ReactNode;
-  footer?: React.ReactNode;
-  children?: React.ReactNode;
-}>;
 
 type CollisionChoice = "update" | "copy" | "replace";
 

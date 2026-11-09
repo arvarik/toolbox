@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   ArrowLeft,
@@ -10,15 +10,10 @@ import {
   Loader2,
   Wrench,
 } from "lucide-react";
-import MarkdownRendererRaw from "../components/shared/MarkdownRenderer";
+import MarkdownRenderer from "../components/shared/MarkdownRenderer";
 import useAppStore from "../stores/appStore";
 import { useKitStore } from "../stores/useKitStore";
 import { flashcardsApi } from "../utils/api";
-
-const MarkdownRenderer = MarkdownRendererRaw as unknown as React.ComponentType<{
-  content?: string;
-  className?: string;
-}>;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FSRS6_DECAY = 0.1542;
