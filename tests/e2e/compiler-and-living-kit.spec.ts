@@ -10,6 +10,7 @@
  */
 import { test as base } from "@playwright/test";
 import { ToolboxInstance } from "./fixtures/instance.ts";
+import { buildEuclideanGeometryKit } from "./fixtures/kits.ts";
 import {
   configureInstanceMockAi,
   startMockAiServer,
@@ -278,4 +279,39 @@ test.describe("New Kit Studio Compiler & Living Kit Expansion", () => {
       expect(pageErrors).toEqual([]);
     },
   );
+
+  test("streams a Kit-grounded AI tutor reply in /k/:slug/chat and restores the session from the server", async ({
+    page,
+    compilerInstance,
+    mockAi,
+  }) => {
+    const pageErrors = collectPageErrors(page);
+    await resetLibrary(compilerInstance);
+    await compilerInstance.api("POST", "/kits/import-kit", {
+      skeleton: buildEuclideanGeometryKit({ includeStarterContent: false }),
+    });
+    mockAi.reset();
+
+    const question = "Why must two quorums overlap in a replicated log?";
+    const reply = "Quorum intersection guarantees at least one overlapping witness replica across terms.";
+    await page.goto("/k/euclidean-geometry/chat");
+    await page.locator("#learning-chat-input").fill(question);
+    await page.getByRole("button", { name: "Send message" }).click();
+    const messages = page.locator("#learning-chat-messages");
+    await expect(messages).toContainText(reply);
+
+    const streamed = mockAi.requests.find((r) => r.stream);
+    expect(streamed?.systemPrompt).toContain('Active Study Kit: "Euclidean Geometry"');
+    expect(streamed?.userPrompt).toContain(question);
+
+    const kitHeader = { "X-Toolbox-Kit": "euclidean-geometry" };
+    await expect
+      .poll(async () => JSON.stringify(await compilerInstance.api("GET", "/chat/sessions", undefined, kitHeader)))
+      .toContain(reply);
+    await page.evaluate(() => localStorage.clear());
+    await page.reload();
+    await expect(messages).toContainText(question);
+    await expect(messages).toContainText(reply);
+    expect(pageErrors).toEqual([]);
+  });
 });

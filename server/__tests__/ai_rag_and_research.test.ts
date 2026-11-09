@@ -8,7 +8,7 @@ import type { Scope } from "../platform/tenancy/scope.ts";
 import { setupTwoTenants } from "./testHelpers.ts";
 
 const { default: db } = await import("../db.ts");
-const { createApp } = await import("../app.ts");
+const { createApp, __resetAppRateLimits } = await import("../app.ts");
 const { __resetAuthRateLimits } = await import("../platform/routes/authRoutes.ts");
 const { __resetHostGuard, isHostAllowed } = await import("../platform/net/hostGuard.ts");
 const { isPrivateAddress, readBodyCapped, readBytesCapped } = await import(
@@ -784,5 +784,117 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
       expect(isBackgroundJobsDisabled()).toBe(true);
       expect(shouldUseMockEmbedder()).toBe(true);
     });
+  });
+
+  it("8. meters every billable AI route through one per-user cost budget without starving other users", async () => {
+    __resetAppRateLimits();
+    for (let i = 0; i < 30; i++) await bobAgent.post("/api/chat").send({}).expect(400);
+    const billable: Array<["get" | "post", string]> = [
+      ["post", "/api/chat"],
+      ["post", "/api/chat/stream"],
+      ["post", "/api/chat/generate-flashcards"],
+      ["post", "/api/chat/generate-reverse-cards"],
+      ["post", "/api/chat/summarize"],
+      ["post", "/api/chat/evaluate-interceptor"],
+      ["post", "/api/chat/concept-map"],
+      ["post", "/api/chat/commit"],
+      ["post", "/api/feynman/evaluate"],
+      ["post", "/api/compiler/calibrate"],
+      ["post", "/api/compiler/compile"],
+      ["post", "/api/compiler/refine"],
+      ["post", "/api/compiler/commit"],
+      ["post", `/api/compiler/kits/${bobKitId}/expand`],
+      ["post", "/api/drills/generate"],
+      ["post", "/api/drills/challenge/node-1"],
+      ["post", "/api/drills/drill-1/submit"],
+      ["post", "/api/boards/board-1/critique"],
+      ["post", "/api/calculator/audit"],
+    ];
+    for (const [method, route] of billable) {
+      const res = await bobAgent[method](route).send({});
+      expect(res.status, `${method.toUpperCase()} ${route}`).toBe(429);
+      expect(res.body.error?.code).toBe("RATE_LIMITED");
+    }
+    await bobAgent.post("/api/chat/commit/save").send({}).expect((res) => expect(res.status).not.toBe(429));
+    await bobAgent.get("/api/chat/starters?pillarId=p&topicId=t").expect((res) => expect(res.status).not.toBe(429));
+    await aliceAgent.post("/api/chat").send({}).expect(400);
+    __resetAppRateLimits();
+  });
+
+  it("9. seals and masks the instance endpoint key, streams tutor replies as SSE frames, and aborts the billable upstream generation when the learner disconnects", async () => {
+    const systemPrompts: string[] = [];
+    const upstreamAuth: Array<string | undefined> = [];
+    let upstreamClosed!: () => void;
+    const closed = new Promise<void>((resolve) => (upstreamClosed = resolve));
+    const llm = await listenLocal(async (req, res) => {
+      if (req.url === "/v1/models") return sendJson(res, 200, { data: [{ id: "slow-tutor", created: 1_760_000_000 }] });
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      const body = JSON.parse(raw) as { model: string; messages: Array<{ role: string; content: string }> };
+      upstreamAuth.push(req.headers.authorization);
+      systemPrompts.push(body.messages.find((m) => m.role === "system")?.content ?? "");
+      const frame = (delta: object, finish: string | null = null) =>
+        `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: body.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(frame({ role: "assistant", content: "Quorums overlap. " }));
+      if (body.messages.at(-1)?.content === "finish the answer") {
+        res.write(frame({ content: "So reads see the latest write." }));
+        res.end(`${frame({}, "stop")}data: [DONE]\n\n`);
+        return;
+      }
+      res.on("close", () => upstreamClosed());
+    });
+    const server = app.listen(0, "127.0.0.1");
+    try {
+      const apiKey = "sk-instance-tutor-secret-4242";
+      const created = (await aliceAgent.post("/api/endpoints").send({ name: "Slow Tutor", baseUrl: `${llm.baseUrl}/v1`, apiKey }).expect(201)).body;
+      const epId = created.id as string;
+      const model = `custom:${epId}:slow-tutor`;
+      const sealedKey = () => (db.prepare("SELECT api_key FROM custom_endpoints WHERE id = ?").get(epId) as { api_key: string }).api_key;
+      expect(sealedKey()).toMatch(/^v1:/);
+      expect(sealedKey()).not.toContain(apiKey);
+      const adminView = (await aliceAgent.get("/api/endpoints").expect(200)).body.find((e: { id: string }) => e.id === epId);
+      expect(adminView).toMatchObject({ apiKeyMasked: "••••4242", hasApiKey: true });
+      const memberView = JSON.stringify((await bobAgent.get("/api/endpoints").expect(200)).body);
+      expect(memberView).toContain('"apiKeyMasked":"••••"');
+      expect(memberView).not.toContain("4242");
+      // Re-saving the admin form with the masked value keeps the real key
+      await aliceAgent.put(`/api/endpoints/${epId}`).send({ name: "Slow Tutor", baseUrl: `${llm.baseUrl}/v1`, apiKey: adminView.apiKeyMasked }).expect(200);
+      await withEnv({ DISABLE_BACKGROUND_JOBS: "true" }, async () => {
+        __resetAppRateLimits();
+        const full = await aliceAgent
+          .post("/api/chat/stream")
+          .send({ message: "finish the answer", persona: "strict", model })
+          .expect(200);
+        expect(full.headers["content-type"]).toMatch(/^text\/event-stream/);
+        expect(full.text).toBe(
+          'data: {"text":"Quorums overlap. "}\n\ndata: {"text":"So reads see the latest write."}\n\ndata: [DONE]\n\n',
+        );
+        expect(systemPrompts[0]).toContain('Active Study Kit: "System Design"');
+        expect(systemPrompts[0]).toContain("Tutor Persona Directive:");
+        expect(upstreamAuth[0]).toBe(`Bearer ${apiKey}`);
+
+        const token = (await aliceAgent.post("/api/auth/tokens").send({ name: "stream-client" }).expect(201)).body.token as string;
+        const { port } = server.address() as { port: number };
+        const req = http.request({
+          host: "127.0.0.1",
+          port,
+          method: "POST",
+          path: "/api/chat/stream",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        });
+        req.end(JSON.stringify({ message: "keep talking", model }));
+        const res = await new Promise<http.IncomingMessage>((resolve) => req.on("response", resolve));
+        const firstFrame = await new Promise<string>((resolve) => res.once("data", (c: Buffer) => resolve(c.toString())));
+        expect(firstFrame).toContain("Quorums overlap.");
+        req.destroy();
+        await closed;
+      });
+    } finally {
+      server.closeAllConnections();
+      server.close();
+      await llm.close();
+      __resetAppRateLimits();
+    }
   });
 });

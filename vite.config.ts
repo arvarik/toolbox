@@ -59,5 +59,16 @@ export default defineConfig({
       "test-results/**",
       "playwright-report/**",
     ],
+    coverage: {
+      include: ["src/**/*.{ts,tsx}", "server/**/*.ts", "shared/**/*.ts"],
+      exclude: ["**/__tests__/**", "**/*.d.ts"],
+      // Ratchet: raise these when coverage grows; never lower them to pass CI.
+      thresholds: {
+        statements: 67,
+        branches: 56,
+        functions: 60,
+        lines: 68,
+      },
+    },
   },
 });
