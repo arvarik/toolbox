@@ -152,8 +152,7 @@ describe("OSS Community Hygiene, Build Metadata & Operator Password Recovery CLI
     }
 
     // Shipped artifacts keep third-party notices and load nothing the CSP blocks
-    expect(pkg.scripts.build).toBe("node scripts/build.ts");
-    expect(read("scripts/build.ts")).toContain(
+    expect(read("vite.config.ts")).toContain(
       'license: { fileName: "THIRD-PARTY-LICENSES.md" }',
     );
     expect(read("Dockerfile")).toContain("! -iname '*licen[cs]e*' ! -iname '*notice*'");
