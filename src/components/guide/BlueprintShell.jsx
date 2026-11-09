@@ -92,7 +92,6 @@ export default function BlueprintShell() {
   }, [pillarId, topicId])
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSectionContent({})
     fetchContent()
   }, [fetchContent])
@@ -109,7 +108,6 @@ export default function BlueprintShell() {
 
   useEffect(() => {
     if (!pillarId) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchProgress()
     }
   }, [pillarId, fetchProgress])

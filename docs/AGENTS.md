@@ -1,249 +1,105 @@
-# Toolbox — Agent Instructions & Design Reference
+# Toolbox v2 — Agent Instructions & Architecture Reference
 
-> **For future AI agents**: This file is your starting point. Read it in full before making any changes to this codebase.
+> **For AI agents**: Read this file before modifying the codebase.
 
 ---
 
 ## Project Identity
 
-**Toolbox** is a self-hosted web application for preparing for software engineering system design interviews. It is a **single-user tool** with no authentication, designed to run as a self-contained Docker container.
+**Toolbox** is a self-hosted, multi-tenant AI study platform organized around a **Library** of portable, AI-synthesized learning **Kits** (with **System Design** seeded as an Official Starter Kit).
 
-**Live demo**: https://arvarik.com/toolbox
-
----
-
-## Tech Stack (Non-Negotiable)
-
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Frontend | React 19 + Vite | Established in project |
-| Routing | React Router DOM v7 | Established in project |
-| State | Zustand (persisted stores) | Established in project |
-| Diagrams | React Flow (`@xyflow/react`) + dagre | Whiteboard canvas + knowledge-graph layout |
-| Styling | **Vanilla CSS only** | See CSS rules below |
-| Icons | `lucide-react` only | Consistent icon set |
-| Backend | Node.js + Express | Simple, matches dev experience |
-| Database | SQLite (`better-sqlite3`) | Self-hostable, zero-config |
-| AI | Vercel AI SDK (`ai`) | Multi-provider: Gemini, Claude, OpenAI, and custom OpenAI-compatible endpoints |
+- By default (`AUTH_REQUIRED=false`), Toolbox runs with zero friction under an implicit local owner (`local@toolbox.local`).
+- Operators can secure any instance into multi-user mode (`AUTH_REQUIRED=true` or **Settings → Secure This Instance**) with `scrypt` passwords, HttpOnly cookie sessions (`toolbox_session`), Passkeys (`@simplewebauthn/*`), OIDC SSO (`openid-client`), personal `tbk_` API tokens, online SQLite backups, and audit logging.
 
 ---
 
-## Critical Rules for Agents
+## Tech Stack
 
-### 1. 🚫 NO TAILWIND CSS
+| Layer | Choice | Notes |
+|---|---|---|
+| Runtime | Node.js ≥ 24 (`node server/index.ts`) | Native TypeScript type-stripping — no server build step |
+| Contracts | TypeScript + Zod v4 (`shared/`) | Runtime-pure (`no-restricted-imports` blocks `node:*` and `react`) |
+| Frontend | React 19 + Vite 8 + React Router v7 | Zustand stores in `src/stores/` |
+| Styling | Tailwind v4 semantic `@theme` (`src/theme.css`) + legacy CSS (`src/index.css`) | WCAG 2.1 AA contrast verified by `src/__tests__/theme_contrast.test.ts` |
+| Icons | `lucide-react` | Consistent icon set |
+| Diagrams | `@xyflow/react` + `dagre` | Canvas + Knowledge Graph DAG |
+| Database | SQLite (`better-sqlite3`, WAL + `foreign_keys = ON`) | Tenant-scoped via branded `Scope` |
+| Lint & Gates | `oxlint`, `tsc --noEmit`, `scripts/tenant-lint.mjs` | Run together via `npm run lint` |
 
-This project uses **Vanilla CSS with CSS Custom Properties**. Do not use:
-- Tailwind utility classes (`flex`, `items-center`, `text-blue-500`, etc.)
-- `@apply` directives
-- Any Tailwind CDN or plugin
+---
 
-**Correct**: Use `className="card"`, `style={{ color: 'var(--color-accent)' }}`, or add new classes to `src/index.css`.
+## Modularity & Tenancy Rules (Enforced in CI)
 
-**Wrong**: `className="flex items-center gap-4 text-indigo-500"`
-
-### 2. Icons: lucide-react Only
-
-Always import icons from `lucide-react`. Never write custom SVGs or import from other libraries.
-
-```jsx
-// ✅ Correct
-import { ArrowRight, Settings } from 'lucide-react'
-
-// ❌ Wrong
-import { FaArrowRight } from 'react-icons/fa'
-```
-
-### 3. Global State: Use Existing Zustand Stores
-
-For features requiring cross-page persistence, use the existing stores:
-- `src/stores/appStore.js` — Theme, sidebar, chat panels, API key, whiteboard nodes/edges, toasts, calculator modal, `srsVersion` sync counter
-- `src/stores/useTimerStore.js` — Pomodoro timer state
-- `src/stores/useCalcStore.js` — BotE Calculator inputs, scenario, and latency budget (persisted to localStorage)
-
-Do not create new top-level stores unless the feature genuinely requires it and doesn't fit in an existing store.
-
-### 4. Backend Changes: Update Both db.js and Routes
-
-- Schema additions go in `server/db.js` (the migration runs automatically on startup)
-- New endpoints go in `server/routes/` as new files, then mount in `server/index.js`
-- Use synchronous `better-sqlite3` methods (`.run()`, `.get()`, `.all()`) — not async/await
-
-### 5. UI Consistency: Use Design System Classes
-
-These CSS classes are already defined in `src/index.css` — use them:
-
-```css
-/* Buttons */
-.btn, .btn-primary, .btn-secondary, .btn-ghost, .btn-outline
-.btn-sm, .btn-lg, .btn-icon
-
-/* Inputs */
-.input
-
-/* Cards */
-.card, .card-interactive
-
-/* Typography */
-.page-title, .page-subtitle, .page-description
-
-/* Layout patterns */
-.page-wrapper, .page-header
-```
-
-### 6. Responsiveness
-
-The app is mobile-responsive with breakpoints at 768px. Check existing patterns:
-- `MobileDrawer.jsx` for mobile slide-out panels
-- `BottomNav.jsx` for mobile tab bar
-- Media queries in `index.css` under `@media (max-width: 768px)`
-- Always check `isMobile` state before rendering desktop-only elements
-
-### 7. AI Streaming Pattern
-
-All AI responses stream via SSE. Follow the existing pattern in `server/routes/chat.js` and the client in `src/utils/api.js`:
-
-```javascript
-// Server: use generateContentStream + SSE writes
-// Client: use chatApi.stream(payload, onChunkCallback, onDoneCallback, abortSignal)
-```
+1. **One-Way `platform/` Boundary**:
+   - Reusable self-hosted infrastructure lives in `server/platform/*` and `shared/platform/*` (`auth`, `tenancy`, `crypto`, `audit`, `mail`, `settings`, `net`, `db`).
+   - Toolbox domain code lives in `server/kits/*`, `server/srs/*`, `server/graph/*`, `server/ai/*`, `server/routes/*`, and `shared/kits/*`.
+   - Domain imports `platform/`; **`platform/` never imports domain** (enforced by `.oxlintrc.json` and `scripts/tenant-lint.mjs`).
+2. **Single `server/appConfig.ts` for Brand Constants**:
+   - Keep app-specific identifiers (`APP_SLUG`, `SESSION_COOKIE`, `TOKEN_PREFIX = "tbk_"`, `SECRET_KEY_ENV = "TOOLBOX_SECRET_KEY"`, `DEFAULT_PORT = 3100`) centralized in `server/appConfig.ts`.
+3. **Branded `Scope` + `tenant-lint` on Every Owned Table**:
+   - Every HTTP route touching user-owned tables (`kits`, `guide_content`, `chat_starters`, `decks`, `flashcards`, `remediation_queue`, `drills`, `drill_attempts`, `boards`, `chat_sessions`, `kit_sources`, `kit_source_chunks`, `episodic_memory`, `study_sessions`, `user_learning_profile`, `user_ai_settings`) MUST extract `const scope = scopeOf(req)` and filter SQL with `ownerId = ?` (`scope.ownerId`).
+   - `npm run lint:tenant` statically AST-checks every `db.prepare(...)` / `db.exec(...)` call in `server/**/*.ts`. Only add `// tenant-lint: allow <reason>` on genuine instance-wide admin/migration queries with a clear explanation.
+4. **Encrypted Credentials at Rest (`secretBox`)**:
+   - Never store plaintext API keys, OIDC secrets, or SMTP passwords in SQLite. Seal with `sealCredential()` / `secretBox.seal()` (`AES-256-GCM` keyed by `TOOLBOX_SECRET_KEY` or `<DATA_DIR>/secret.key`).
+5. **Co-Located Subsystem Schemas**:
+   - Platform tables live in `initPlatformSchema(db)` (`server/platform/db/platformSchema.ts`); Kit/study tables and legacy v1→v2 automatic migration live in `initKitsSchema(db)` (`server/kits/kitsSchema.ts`), orchestrated by `server/db.ts`.
+6. **Semantic `@theme` Tokens & WCAG AA Contrast**:
+   - New `.tsx` views use Contrack-compatible semantic Tailwind v4 tokens (`bg-surface`, `bg-surface-container`, `bg-surface-container-lowest`, `text-on-surface`, `text-on-surface-variant`, `bg-primary`, `text-on-primary`, `text-on-primary-wash`, `text-ai`, `text-on-ai-wash`, `border-outline-variant`, `text-danger`, `text-success`, `text-warning`).
+   - Keep `src/theme.css` and `src/lib/themePalette.ts` synchronized; every text/surface and pill-wash pair must stay ≥ 4.5:1 in both dark and light modes.
 
 ---
 
 ## Key Directories
 
 ```
-src/
-├── App.jsx              # Route definitions
-├── index.css            # 🔑 Entire design system here
-├── pages/               # Route-level page components
-├── components/
-│   ├── layout/          # Global chrome (sidebar, nav, modals)
-│   ├── chat/            # AI Chat page components
-│   ├── guide/           # Knowledge library components
-│   ├── builder/         # Whiteboard canvas components
-│   ├── study/           # Flashcard components
-│   └── shared/          # Reusable across pages
-├── stores/              # Zustand global state
-└── utils/
-    ├── api.js           # 🔑 All API calls — add new endpoints here
-    ├── constants.js     # 🔑 Pillar/topic/section data structure
-    └── templates.js     # Pre-built architecture templates
+shared/
+├── platform/auth.ts        # Shared Auth & Admin Zod v4 schemas
+└── kits/
+    ├── kitSkeleton.ts      # Canonical .toolbox-kit.json v1 schema + pure DAG helpers
+    └── systemDesignKit.ts  # Official System Design Starter Kit skeleton
 
 server/
-├── index.js             # Express setup + route mounting
-├── db.js                # 🔑 SQLite schema + migrations
-└── routes/              # One file per feature domain
+├── appConfig.ts            # Centralized brand/cookie/env constants
+├── app.ts                  # Express app factory (used by index.ts and supertest)
+├── index.ts                # Production/dev HTTP server entrypoint
+├── db.ts                   # SQLite initialization + subsystem schema runner
+├── platform/               # Reusable auth, tenancy, secretBox, mail, audit, backup
+├── kits/kitsSchema.ts      # Multi-tenant Kit tables + zero-data-loss v1 DB upgrader
+├── ai/engine.ts            # Multi-provider AI engine (Gemini, Claude, OpenAI, BYOM)
+├── srs/scheduler.ts        # SM-2 spaced repetition scheduler
+├── graph/                  # Pure DAG health & prerequisite remediation planners
+└── routes/                 # Tenant-scoped Express routers
+
+src/
+├── theme.css               # Tailwind v4 semantic @theme tokens (dark + light)
+├── index.css               # Legacy design system classes (.btn, .card, .sidebar, etc.)
+├── components/auth/        # AuthGate.tsx + useAuth() context
+├── components/settings/    # Account, Passkeys, tbk_ Tokens & Instance Admin UI
+├── pages/                  # Route-level page components
+├── stores/                 # Zustand global state (appStore, useTimerStore, useCalcStore)
+└── utils/                  # API clients (api.js, authApi.ts) & helpers
 ```
 
 ---
 
-## Feature Map
-
-| Feature | Page | Key Files |
-|---------|------|-----------|
-| AI Learning Chat | `/chat` | `ChatPage.jsx`, `LearningChat.jsx`, `LearningTodo.jsx`, `CommitModal.jsx` |
-| Knowledge Library | `/guide` | `GuidePage.jsx`, `BlueprintShell.jsx`, `PillarNav.jsx` |
-| Architecture Builder | `/builder` | `BuilderPage.jsx`, `Canvas.jsx`, `Toolbox.jsx`, `TemplateGallery.jsx` |
-| Flashcards + SRS | `/study` | `StudyPage.jsx`, `FlashcardView.jsx`, `DeckEditor.jsx`, `CardBrowser.jsx`, `StatsDashboard.jsx` |
-| Feynman Simulator | `/feynman` | `FeynmanPage.jsx` |
-| Interleaved Review | `/interleaved` | `InterleavedPage.jsx` |
-| Knowledge Graph | `/graph` | `GraphPage.jsx`, `components/graph/*`, `src/utils/knowledgeGraph.js`, `server/routes/graph.js`, `server/graph/*` |
-| BotE Calculator | `/calculator` + global `⌘E` modal | `CalculatorPage.jsx`, `components/calculator/*`, `src/utils/bote.js`, `useCalcStore.js`, `server/routes/calculator.js` |
-| Pomodoro Timer | Global modal | `PomodoroModal.jsx`, `PomodoroWidget.jsx`, `useTimerStore.js` |
-| Settings | `/settings` | `SettingsPage.jsx` |
-
-Cross-cutting modules:
-- `src/utils/knowledgeGraph.js` — pure graph data + algorithms, imported by BOTH client and server. Keep it dependency-free. Edges must stay acyclic — `validateGraph()` runs at server boot and in tests.
-- `server/srs/scheduler.js` — the SM-2 scheduler (`calculateNextSrsState`), shared by decks and graph routes.
-- `server/graph/health.js` / `server/graph/remediation.js` — pure functions; the route layer owns all DB access.
-
----
-
-## Data Structure: Pillars & Blueprint Sections
-
-The content structure is defined in `src/utils/constants.js`. The 7 pillars are:
-
-1. `compute` — Compute & Infrastructure
-2. `storage` — Storage & Data
-3. `protocols` — Protocols & Communication
-4. `observability` — Observability
-5. `resiliency` — Resiliency & Reliability
-6. `distributed` — Distributed Systems
-7. `paradigms` — Architectural Paradigms
-
-Each pillar has `topics`, and each topic has `BLUEPRINT_SECTIONS` — the structured set of study dimensions (scale, performance, trade-offs, etc.).
-
-When adding new content, match these IDs exactly. The guide content API uses `pillar_id__topic_id__section_id` as composite keys.
-
----
-
-## AI Integration Patterns
-
-### Streaming Chat
-```javascript
-await chatApi.stream(
-  { message, context: systemPrompt, history, model },
-  (partialText) => { /* update UI with accumulated text */ }
-)
-```
-
-### Non-Streaming (One-Shot)
-For analysis tasks (Feynman, concept maps), use `chatApi.stream()` but collect the full response before updating state.
-
-### API Key
-- Stored server-side in SQLite `config` table
-- Can also be set via `GEMINI_API_KEY` env var (env var takes precedence)
-- Check `apiKeyConfigured` from `useAppStore` before showing AI features
-
----
-
-## Running Tests
+## Commands
 
 ```bash
-npm test              # Run all Vitest tests
-npm run test:watch    # Watch mode
+npm run dev             # Concurrent Vite (:5173) + Express (:3100)
+npm run lint            # oxlint + tsc --noEmit + tenant-lint
+npm test                # Vitest unit + supertest integration suite
+npm run test:coverage   # Vitest with v8 coverage
+npm run build           # Production Vite frontend bundle
 ```
-
-Tests are in `src/__tests__/` and use React Testing Library.
-
-## Running Locally
-
-```bash
-npm install
-npm run dev           # Starts Vite (port 5173) + Express (port 3100)
-```
-
-The Vite proxy config in `vite.config.js` forwards `/api/*` to the backend automatically.
 
 ---
 
-## What NOT to Do
+## Common Gotchas (Preserve These)
 
-- ❌ Don't add a routing library other than React Router
-- ❌ Don't add a CSS framework (Tailwind, Bootstrap, etc.)
-- ❌ Don't add a state management library other than Zustand
-- ❌ Don't add authentication or multi-user features
-- ❌ Don't use async SQLite — use synchronous `better-sqlite3` calls
-- ❌ Don't add a database ORM — use raw SQL with the `db` singleton
-- ❌ Don't modify `vite.config.js` without understanding the proxy and alias setup
-- ❌ Don't put API keys in the frontend code or commit them
-
----
-
-## Common Gotchas
-
-1. **SRS state after edits**: After saving card content via the card browser, always re-fetch the full deck (`decksApi.get(deckId)`) to sync SRS state back to the UI.
-
-2. **Board auto-save vs manual save**: Boards auto-save after 3 seconds of inactivity. New boards (with `id.startsWith('board-')`) are NOT auto-saved until first manual save (which assigns a real DB ID).
-
+1. **SRS state after edits**: After saving card content via the card browser, re-fetch the full deck (`decksApi.get(deckId)`) to sync SRS state back to the UI.
+2. **Board auto-save vs manual save**: Boards auto-save after 3 seconds of inactivity. New boards (`id.startsWith('board-')`) are NOT auto-saved until first manual save.
 3. **Chat panel state**: Each page (`guide`, `builder`, `study`) has its own chat panel state in `appStore.chatOpen`. Toggle with `toggleChat(page)`.
-
-4. **Streaming abort**: Always pass an `AbortController.signal` to `chatApi.stream()` so users can stop generation. Check the LearningChat pattern.
-
-5. **Mobile detection**: Don't use CSS-only responsive tricks for conditional rendering. Use the `isMobile` state pattern (window resize listener) that's established in each page component.
-
-6. **Toast notifications**: Use `addToast({ type: 'success'|'error'|'info', message: '...' })` from `useAppStore` for user feedback. Never use `alert()`.
-
-7. **Two board shapes**: The app store holds whiteboard state in the React Flow shape (`position: {x,y}`, `data: {...}`, `source`/`target`). The database, the templates, and the server keep the legacy shape (`x`/`y`, `from`/`to`, anchors). Convert ONLY at the boundaries with `src/components/builder/boardModel.js` — never persist the React Flow shape.
-
-8. **Global `svg { max-width: 100% }` reset**: React Flow's edge SVGs collapse to zero width under it. The `.react-flow svg { max-width: none }` override in `index.css` protects them — keep it if you touch the reset.
+4. **Streaming abort**: Always pass an `AbortController.signal` to `chatApi.stream()` so users can stop generation.
+5. **Toast notifications**: Use `addToast({ type: 'success'|'error'|'info', message: '...' })` from `useAppStore` for user feedback. Never use `alert()`.
+6. **Two board shapes**: `appStore` holds whiteboard state in React Flow shape (`position: {x,y}`, `data: {...}`, `source`/`target`), while SQLite and templates persist `{x, y, from, to}`. Convert ONLY at boundaries via `src/components/builder/boardModel.js`.
+7. **Global `svg { max-width: 100% }` reset**: React Flow's edge SVGs collapse to zero width without `.react-flow svg { max-width: none }` in `src/index.css` — keep that override intact, and keep bare-element resets inside `@layer base` so Tailwind v4 utilities win cleanly.

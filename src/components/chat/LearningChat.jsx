@@ -505,7 +505,6 @@ export default function LearningChat({ activeTopic, onCommitClick }) {
         })
         .catch(() => setSectionStatus(null))
     } else {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSectionStatus(null)
     }
 

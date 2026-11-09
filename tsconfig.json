@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "vitest/globals", "@testing-library/jest-dom/vitest", "node"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "allowJs": true,
+    "checkJs": false,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["./*"]
+    },
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "strict": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true
+  },
+  "include": ["src", "server", "shared", "scripts", "*.ts"],
+  "exclude": ["node_modules", "dist", "data", "uploads", "backups"]
+}

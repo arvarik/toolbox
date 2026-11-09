@@ -109,25 +109,36 @@ export default function MermaidRenderer({ chart }) {
         {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
       </button>
 
-      <div 
-        ref={containerRef}
-        dangerouslySetInnerHTML={svgContent ? { __html: svgContent } : undefined}
-        style={{
-          width: '100%',
-          height: isExpanded ? '100%' : 'auto',
-          overflow: 'auto',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-        }}
-      >
-        {!svgContent && !error && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-tertiary)', padding: 'var(--space-4)', fontSize: 'var(--text-xs)' }}>
-            <Loader2 size={14} className="spin" />
-            <span>Rendering diagram...</span>
-          </div>
-        )}
-      </div>
+      {svgContent ? (
+        <div
+          ref={containerRef}
+          dangerouslySetInnerHTML={{ __html: svgContent }}
+          style={{
+            width: '100%',
+            height: isExpanded ? '100%' : 'auto',
+            overflow: 'auto',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        />
+      ) : (
+        <div
+          style={{
+            width: '100%',
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+          }}
+        >
+          {!error && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--color-text-tertiary)', padding: 'var(--space-4)', fontSize: 'var(--text-xs)' }}>
+              <Loader2 size={14} className="spin" />
+              <span>Rendering diagram...</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
