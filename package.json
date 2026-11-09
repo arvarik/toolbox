@@ -84,6 +84,7 @@
     "@vitejs/plugin-react": "^6.3.0",
     "@vitest/coverage-v8": "^5.1.0",
     "@xyflow/react": "^12.12.1",
+    "fast-check": "^4.10.2",
     "jsdom": "^31.0.0",
     "katex": "^0.19.1",
     "lucide-react": "^1.70.0",

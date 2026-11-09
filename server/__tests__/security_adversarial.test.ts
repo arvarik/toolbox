@@ -1,6 +1,7 @@
 // @vitest-environment node
 import dns from "node:dns/promises";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
@@ -9,13 +10,22 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Express } from "express";
 import db from "../db.ts";
 import { createApp } from "../app.ts";
+import { runText } from "../ai/engine.ts";
 import { extractZipArchive } from "../platform/archive/zip.ts";
 import {
   normalizeEndpointBaseUrl,
+  upsertUserCustomEndpoint,
   validateEndpointBaseUrl,
 } from "../platform/ai/aiSettingsService.ts";
+import { scopeForOwnerId } from "../platform/tenancy/scope.ts";
+import { fetchEndpointModels } from "../providers/defs.ts";
+import { makeKitSkeleton } from "./testHelpers.ts";
+import { topologicalSort } from "../../shared/kits/kitSkeleton.ts";
 import { makeDataPrivate } from "../platform/fs/privateFiles.ts";
-import { CONTENT_SECURITY_POLICY } from "../platform/net/errors.ts";
+import {
+  CONTENT_SECURITY_POLICY,
+  trimTrailingSlashes,
+} from "../platform/net/errors.ts";
 import { __resetHostGuard } from "../platform/net/hostGuard.ts";
 import { __resetMcpRateLimit } from "../platform/mcp/mcpPrimitives.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
@@ -74,6 +84,7 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
   let app: Express;
   let adminAgent: ReturnType<typeof request.agent>;
   let memberAgent: ReturnType<typeof request.agent>;
+  let memberId = "";
   let readOnlyToken = "";
 
   beforeAll(async () => {
@@ -102,7 +113,7 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
     ).searchParams.get("token")!;
 
     memberAgent = request.agent(app);
-    await memberAgent
+    const memberRes = await memberAgent
       .post("/api/auth/accept-invitation")
       .send({
         token: inviteToken,
@@ -112,6 +123,7 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
         password: "correct-horse-battery-staple-member",
       })
       .expect(201);
+    memberId = memberRes.body.user.id as string;
 
     const tokenRes = await adminAgent
       .post("/api/auth/tokens")
@@ -450,5 +462,106 @@ describe("Adversarial Security & Runtime Hardening Suite", () => {
       .readdirSync(os.tmpdir())
       .filter((n) => n.startsWith("toolbox-backup-") && !beforeDirs.has(n));
     expect(leakedDirs).toEqual([]);
+  });
+
+  it("8. re-checks custom endpoint targets on every connection and redirect, not only when saved (CodeQL js/request-forgery, js/polynomial-redos)", async () => {
+    const hits: string[] = [];
+    const server = http.createServer((req, res) => {
+      hits.push(`${req.method} ${req.url}`);
+      if (req.url?.startsWith("/redirect/")) {
+        res.writeHead(302, { Location: "http://169.254.169.254/latest/meta-data/" }).end();
+        return;
+      }
+      if (req.url?.startsWith("/huge/")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(`{"data":[{"id":"${"x".repeat(3 * 1024 * 1024)}"}]}`);
+        return;
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: [{ id: "tiny" }] }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      // A member's probe (default policy) never reaches a private address.
+      await expect(fetchEndpointModels("", `${base}/v1`)).rejects.toThrow(/private address/);
+      expect(hits).toEqual([]);
+
+      // Admin endpoints may be on the LAN, but a redirect to cloud metadata is refused.
+      await expect(
+        fetchEndpointModels("", `${base}/v1`, { allowPrivate: true }),
+      ).resolves.toEqual([{ id: "tiny", releasedAt: null }]);
+      await expect(
+        fetchEndpointModels("", `${base}/redirect`, { allowPrivate: true }),
+      ).rejects.toThrow(/blocked address/);
+      // A user-configured endpoint cannot make the server buffer an unbounded body.
+      await expect(
+        fetchEndpointModels("", `${base}/huge`, { allowPrivate: true }),
+      ).rejects.toThrow(/exceeds/);
+
+      // A member endpoint saved earlier (DNS rebinding, or the opt-in env var was
+      // later removed) now points at loopback. Chat calls must not reach it.
+      hits.length = 0;
+      const memberScope = scopeForOwnerId(memberId);
+      const endpoint = await upsertUserCustomEndpoint(
+        memberScope,
+        { name: "Rebound endpoint", baseUrl: `${base}/v1` },
+        undefined,
+        { skipProbe: true, allowPrivate: true },
+      );
+      await expect(
+        runText({ model: `custom:${endpoint.id}:tiny`, scope: memberScope, prompt: "hi" }),
+      ).rejects.toThrow(/private address/);
+      expect(hits).toEqual([]);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+
+    // Trailing-slash and trailing-dot regexes are O(n^2): over-long URLs are refused first.
+    const started = performance.now();
+    expect(() =>
+      normalizeEndpointBaseUrl(`http://a${"/".repeat(1_000_000)}x`),
+    ).toThrow(/too long/);
+    expect(() =>
+      normalizeEndpointBaseUrl(`http://a${".".repeat(1_000_000)}b/v1`),
+    ).toThrow(/too long/);
+    expect(performance.now() - started).toBeLessThan(1_000);
+  });
+
+  it("9. bounds CPU and memory on untrusted input: request paths, Kit graph size, and multipart field count", async () => {
+    // /\/+$/ was O(n^2) on every request path (rate limiter, read-only token guard).
+    const started = performance.now();
+    expect(trimTrailingSlashes(`/api${"/".repeat(200_000)}x`)).toBe(
+      `/api${"/".repeat(200_000)}x`,
+    );
+    expect(trimTrailingSlashes("/api/mcp///")).toBe("/api/mcp");
+    expect(trimTrailingSlashes("///")).toBe("/");
+    // The old queue re-sort made topologicalSort O(n^2): 40,000 nodes took 14 s.
+    topologicalSort(
+      Array.from({ length: 100_000 }, (_, i) => ({ id: `n${i}` })),
+      [],
+    );
+    expect(performance.now() - started).toBeLessThan(2_000);
+
+    // A 3 MB Kit with 50,000 nodes is refused by the schema caps, not processed.
+    const hugeKit = makeKitSkeleton((s) => {
+      s.graph.nodes = Array.from({ length: 50_000 }, (_, i) => ({
+        ...s.graph.nodes[0],
+        id: `n${i}`,
+      }));
+    });
+    const capRes = await memberAgent
+      .post("/api/kits/import-kit")
+      .send({ skeleton: hugeKit })
+      .expect(400);
+    expect(capRes.body.error.code).toBe("VALIDATION_ERROR");
+
+    // Multer keeps every text field in memory; unlimited fields were a memory DoS.
+    let manyFields = memberAgent.post("/api/kits/import-backup");
+    for (let i = 0; i < 20; i++) manyFields = manyFields.field(`f${i}`, "x");
+    const fieldsRes = await manyFields
+      .attach("file", Buffer.from("PK"), "x.toolbox-backup.zip")
+      .expect(413);
+    expect(fieldsRes.body.error.code).toBe("PAYLOAD_TOO_LARGE");
   });
 });

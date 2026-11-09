@@ -2,6 +2,11 @@ import { z } from "zod";
 
 const slugId = z.string().regex(/^[a-z0-9-]+$/);
 
+// Size caps for imported Kits: graph views run expandTrack once per track, and an
+// uncapped 10 MB import made the graph helpers block the event loop for minutes.
+// The official System Design Kit has 7 pillars, 59 nodes, 88 edges, and 6 tracks.
+const MAX_GRAPH_NODES = 2_000;
+
 const SectionLensSchema = z.object({
   id: slugId,
   name: z.string().min(1).max(80),
@@ -23,7 +28,7 @@ const PillarSchema = z.object({
   shortName: z.string().min(1).max(40),
   color: z.string().min(1),
   sections: z.array(SectionLensSchema).min(2).max(8),
-  topics: z.array(PillarTopicSchema).min(1),
+  topics: z.array(PillarTopicSchema).min(1).max(256),
 });
 
 const GraphNodeSchema = z.object({
@@ -32,8 +37,8 @@ const GraphNodeSchema = z.object({
   pillarId: slugId,
   topicId: slugId.nullable().default(null),
   summary: z.string().max(500),
-  keywords: z.array(z.string()).default([]),
-  components: z.array(z.string()).default([]),
+  keywords: z.array(z.string()).max(64).default([]),
+  components: z.array(z.string()).max(64).default([]),
 });
 
 const GraphEdgeSchema = z.object({
@@ -46,7 +51,7 @@ const LearningTrackSchema = z.object({
   name: z.string().min(1).max(100),
   emoji: z.string().default("🧭"),
   description: z.string().max(400),
-  targets: z.array(slugId).min(1),
+  targets: z.array(slugId).min(1).max(32),
 });
 
 const StarterCardSeedSchema = z.object({
@@ -126,12 +131,12 @@ export const KitSkeletonV1Schema = z.object({
       .default([]),
   }),
 
-  pillars: z.array(PillarSchema).min(1),
+  pillars: z.array(PillarSchema).min(1).max(64),
 
   graph: z.object({
-    nodes: z.array(GraphNodeSchema).min(1),
-    edges: z.array(GraphEdgeSchema),
-    tracks: z.array(LearningTrackSchema).default([]),
+    nodes: z.array(GraphNodeSchema).min(1).max(MAX_GRAPH_NODES),
+    edges: z.array(GraphEdgeSchema).max(5 * MAX_GRAPH_NODES),
+    tracks: z.array(LearningTrackSchema).max(32).default([]),
   }),
 
   canvasConfig: z
@@ -244,6 +249,7 @@ export function dependentsOf(edges: readonly GraphEdge[]): Map<string, string[]>
 
 /**
  * Kahn's algorithm. Ties break on original node-array order for stability.
+ * The ready set is a binary min-heap of array positions: O((V + E) log V).
  */
 export function topologicalSort(
   nodes: readonly { id: string }[],
@@ -257,16 +263,44 @@ export function topologicalSort(
     adj.get(e.from)?.push(e.to);
   }
   const orderIndex = new Map<string, number>(nodes.map((n, i) => [n.id, i]));
-  const queue = nodes.filter((n) => indegree.get(n.id) === 0).map((n) => n.id);
+  const heap: number[] = [];
+  const push = (pos: number): void => {
+    let i = heap.push(pos) - 1;
+    while (i > 0 && heap[(i - 1) >> 1] > heap[i]) {
+      const parent = (i - 1) >> 1;
+      [heap[parent], heap[i]] = [heap[i], heap[parent]];
+      i = parent;
+    }
+  };
+  const pop = (): number => {
+    const top = heap[0];
+    const last = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = last;
+      for (let i = 0; ; ) {
+        const l = 2 * i + 1;
+        const r = l + 1;
+        let min = i;
+        if (l < heap.length && heap[l] < heap[min]) min = l;
+        if (r < heap.length && heap[r] < heap[min]) min = r;
+        if (min === i) break;
+        [heap[min], heap[i]] = [heap[i], heap[min]];
+        i = min;
+      }
+    }
+    return top;
+  };
+  nodes.forEach((n, i) => {
+    if (indegree.get(n.id) === 0) push(i);
+  });
   const result: string[] = [];
-  while (queue.length > 0) {
-    queue.sort((a, b) => (orderIndex.get(a) ?? 0) - (orderIndex.get(b) ?? 0));
-    const id = queue.shift()!;
+  while (heap.length > 0) {
+    const id = nodes[pop()].id;
     result.push(id);
     for (const next of adj.get(id) ?? []) {
       const nextDeg = (indegree.get(next) ?? 0) - 1;
       indegree.set(next, nextDeg);
-      if (nextDeg === 0) queue.push(next);
+      if (nextDeg === 0) push(orderIndex.get(next) ?? 0);
     }
   }
   return result;

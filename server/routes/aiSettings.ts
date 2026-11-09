@@ -89,7 +89,11 @@ userAiSettingsRouter.post(
     });
     const normalized = await validateEndpointBaseUrl(baseUrl, { allowPrivate });
     try {
-      const models = await fetchEndpointModels((apiKey ?? "").trim(), normalized);
+      const models = await fetchEndpointModels(
+        (apiKey ?? "").trim(),
+        normalized,
+        { allowPrivate },
+      );
       res.json({ ok: true, modelCount: models.length });
     } catch (err) {
       res.status(400).json({

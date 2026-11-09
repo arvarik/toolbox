@@ -101,6 +101,7 @@ export async function refreshEndpointCatalog(endpoint: {
   const rawModels = await fetchEndpointModels(
     endpoint.api_key || "",
     endpoint.base_url,
+    { allowPrivate: true },
   );
   const entries = buildEndpointCatalogEntries(endpoint, rawModels);
   saveCatalog(`custom:${endpoint.id}`, entries);

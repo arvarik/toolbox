@@ -32,9 +32,11 @@ export function getErrorMessage(err: unknown): string {
   return String(err);
 }
 
+// A loop, not /\/+$/: that regex is O(n^2) and runs on every request path.
 export function trimTrailingSlashes(value: string): string {
-  if (value === "/") return "/";
-  return value.replace(/\/+$/, "") || "/";
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end) || "/";
 }
 
 const SENSITIVE_QUERY = /([?&](?:token|code|state|key|secret)=)[^&]*/gi;
@@ -238,7 +240,7 @@ function translate(err: unknown): {
     };
   }
   const e = err as SqliteLikeError;
-  if (e?.code === "LIMIT_FILE_SIZE" || e?.type === "entity.too.large") {
+  if (e?.code?.startsWith("LIMIT_") || e?.type === "entity.too.large") {
     return {
       statusCode: 413,
       code: "PAYLOAD_TOO_LARGE",

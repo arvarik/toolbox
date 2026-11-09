@@ -1,3 +1,5 @@
+import { readBodyCapped, safeFetch } from "../platform/net/originAndFetch.ts";
+
 const LIST_TIMEOUT_MS = 15_000;
 
 export const CUSTOM_ENDPOINT_COLOR = "#8B5CF6";
@@ -55,7 +57,7 @@ export function parseCustomModelId(
 async function extractErrorMessage(res: Response): Promise<string> {
   let detail = "";
   try {
-    const body = (await res.json()) as {
+    const body = JSON.parse(await readBodyCapped(res, { maxBytes: 64 * 1024 })) as {
       error?: { message?: string };
       message?: string;
     };
@@ -69,6 +71,7 @@ async function extractErrorMessage(res: Response): Promise<string> {
 async function fetchGeminiModels(apiKey: string): Promise<RawDiscoveredModel[]> {
   const models: RawDiscoveredModel[] = [];
   let pageToken = "";
+  let pages = 0;
   do {
     const url = new URL(
       "https://generativelanguage.googleapis.com/v1beta/models",
@@ -102,7 +105,8 @@ async function fetchGeminiModels(apiKey: string): Promise<RawDiscoveredModel[]> 
       });
     }
     pageToken = data.nextPageToken || "";
-  } while (pageToken);
+    pages += 1;
+  } while (pageToken && pages < 10);
 
   return models;
 }
@@ -148,9 +152,14 @@ async function fetchClaudeModels(apiKey: string): Promise<RawDiscoveredModel[]> 
   return models;
 }
 
+/**
+ * Lists models on an OpenAI-compatible endpoint. `allowPrivate` is true only for
+ * admin-configured endpoints; every connection and redirect is re-checked by `safeFetch`.
+ */
 export async function fetchEndpointModels(
   apiKey: string,
   baseUrl: string,
+  opts: { allowPrivate?: boolean } = {},
 ): Promise<RawDiscoveredModel[]> {
   const base = String(baseUrl || "").replace(/\/+$/, "");
   const headers: Record<string, string> = {};
@@ -158,17 +167,20 @@ export async function fetchEndpointModels(
 
   let res: Response;
   try {
-    res = await fetch(`${base}/models`, {
+    ({ response: res } = await safeFetch(`${base}/models`, {
       headers,
+      allowPrivate: opts.allowPrivate ?? false,
+      timeoutMs: LIST_TIMEOUT_MS,
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
-    });
+    }));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Could not reach ${base} — ${msg}`, { cause: err });
   }
   if (!res.ok) throw new Error(await extractErrorMessage(res));
 
-  const data = (await res.json()) as
+  // The endpoint is user-configured, so its body is read with a 2 MB cap.
+  const data = JSON.parse(await readBodyCapped(res)) as
     | { data?: Array<{ id?: string; name?: string; created?: number }> }
     | Array<{ id?: string; name?: string; created?: number }>;
   const rawModels = Array.isArray(data)

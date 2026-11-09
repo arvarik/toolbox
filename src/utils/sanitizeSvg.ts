@@ -212,10 +212,11 @@ function parseSafeStyle(rawStyle: string): Record<string, string> {
     const prop = decl.slice(0, colonIdx).trim().toLowerCase();
     const reactKey = STYLE_PROP_TO_REACT[prop];
     if (!reactKey) continue;
-    const val = decl
-      .slice(colonIdx + 1)
-      .replace(/\s*!important\s*$/i, "")
-      .trim();
+    // No /\s*!important\s*$/ regex: it is O(n^2) on long whitespace runs.
+    let val = decl.slice(colonIdx + 1).trim();
+    if (val.toLowerCase().endsWith("!important")) {
+      val = val.slice(0, -"!important".length).trim();
+    }
     if (!val || hasControlChar(val) || FORBIDDEN_STYLE_VAL_RE.test(val)) continue;
     safe[reactKey] = val;
   }
@@ -282,7 +283,8 @@ export function sanitizeSvg(raw: string, instancePrefix: string): SanitizeSvgRes
   const xmlInput =
     /\bxlink:[A-Za-z]/i.test(trimmed) && !/\bxmlns:xlink\s*=/i.test(trimmed)
       ? trimmed.replace(
-          /^(\s*(?:<\?xml[^>]*\?>\s*|<!--[\s\S]*?-->\s*)*<svg\b)/i,
+          // A comment body cannot contain "--", so each split of "<!--a--><!--b-->" is unique (no exponential backtracking).
+          /^(\s*(?:<\?xml[^>]*\?>\s*|<!--[^-]*(?:-[^-]+)*-->\s*)*<svg\b)/i,
           `$1 xmlns:xlink="${XLINK_NS}"`,
         )
       : trimmed;
