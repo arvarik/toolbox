@@ -95,7 +95,13 @@ export default function Toolbox() {
   }
 
   return (
-    <div className="builder-toolbox" id="builder-toolbox">
+    <div
+      className="builder-toolbox"
+      id="builder-toolbox"
+      tabIndex={0}
+      role="region"
+      aria-label="Component toolbox"
+    >
       <div
         style={{
           fontSize: 'var(--text-xs)',
