@@ -1,6 +1,9 @@
 // @vitest-environment node
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import zlib from "node:zlib";
 import express, { type Express } from "express";
 import request from "supertest";
@@ -22,7 +25,7 @@ import {
 } from "../index.ts";
 import { listOwnedKits } from "../kits/kitService.ts";
 import { kitTokFor, ownerTokFor } from "../kits/kitsSchema.ts";
-import { sqlite } from "../platform/db/connection.ts";
+import { openDatabase, sqlite } from "../platform/db/connection.ts";
 import { gzipCompression } from "../platform/net/compression.ts";
 import { __resetHostGuard } from "../platform/net/hostGuard.ts";
 import { createRateLimiter, MAX_BUCKETS } from "../platform/net/rateLimit.ts";
@@ -787,5 +790,26 @@ describe("Performance, Concurrency & Graceful Shutdown Suite", () => {
     };
     expect(kitRow.status).toBe("ready");
     expect(kitRow.status_detail).toBe(ORPHANED_JOB_RESTART_ERROR);
+  });
+
+  it("6. refuses a corrupt database file or a DATA_DIR that is a file with an error naming the path, and leaves the file untouched", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "toolbox-open-"));
+    try {
+      const corrupt = path.join(dir, "toolbox.db");
+      const garbage = Buffer.alloc(8192, 0x41);
+      fs.writeFileSync(corrupt, garbage);
+      expect(() => openDatabase(corrupt)).toThrow(
+        `Cannot open the database at ${corrupt}: file is not a database (SQLITE_NOTADB)`,
+      );
+      expect(fs.readFileSync(corrupt).equals(garbage)).toBe(true);
+
+      const fileNotDir = path.join(dir, "data-is-a-file");
+      fs.writeFileSync(fileNotDir, "");
+      expect(() => openDatabase(path.join(fileNotDir, "toolbox.db"))).toThrow(
+        `Cannot open the database at ${path.join(fileNotDir, "toolbox.db")}`,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
