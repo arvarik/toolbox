@@ -5,7 +5,6 @@ import { DB_PATH } from "../../appConfig.ts";
 import {
   initPlatformSchema,
   ensureLocalOwner as ensureLocalOwnerOnDb,
-  primaryAdminId as primaryAdminIdOnDb,
 } from "./platformSchema.ts";
 
 export function applySqlitePragmas(db: Database.Database): void {
@@ -43,10 +42,6 @@ initPlatformSchema(sqlite);
 
 export function ensureLocalOwner(): string {
   return ensureLocalOwnerOnDb(sqlite);
-}
-
-export function primaryAdminId(): string {
-  return primaryAdminIdOnDb(sqlite);
 }
 
 /**

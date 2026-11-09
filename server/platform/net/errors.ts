@@ -135,12 +135,6 @@ export class RateLimitedError extends AppError {
   }
 }
 
-export class ServiceUnavailableError extends AppError {
-  constructor(message: string, details?: unknown) {
-    super(message, 503, { code: "SERVICE_UNAVAILABLE", details });
-  }
-}
-
 export class UpstreamTimeoutError extends AppError {
   constructor(message: string, details?: unknown) {
     super(message, 504, { code: "UPSTREAM_TIMEOUT", details });

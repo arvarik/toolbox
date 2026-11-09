@@ -43,33 +43,7 @@ export interface SendMailOptions {
   html?: string;
 }
 
-export interface RecordedMessage {
-  from?: string;
-  to?: string | string[];
-  subject?: string;
-  text?: string;
-  html?: string;
-  [key: string]: unknown;
-}
-
 const SETTING_KEY = "mail.smtp";
-
-let isJsonTransportActive = false;
-const recordedMessages: RecordedMessage[] = [];
-
-export function __useJsonTransport(enabled = true): {
-  getMessages: () => RecordedMessage[];
-  clear: () => void;
-} {
-  isJsonTransportActive = enabled;
-  if (!enabled) recordedMessages.length = 0;
-  return {
-    getMessages: () => [...recordedMessages],
-    clear: () => {
-      recordedMessages.length = 0;
-    },
-  };
-}
 
 let cachedTransport: Transporter | null = null;
 let cachedTransportKey: string | null = null;
@@ -149,7 +123,6 @@ function resolveConfig(): MailConfig {
 }
 
 function isConfigured(): boolean {
-  if (isJsonTransportActive) return true;
   const config = resolveConfig();
   return (
     config.source !== "none" && Boolean(config.host) && Boolean(config.from)
@@ -179,13 +152,6 @@ function getTransport(config: InternalMailConfig): Transporter {
 }
 
 async function sendOrThrow(opts: SendMailOptions): Promise<void> {
-  if (isJsonTransportActive) {
-    recordedMessages.push({
-      from: resolveConfig().from || `${APP_NAME} <noreply@localhost>`,
-      ...opts,
-    });
-    return;
-  }
   const config = resolveInternalConfig();
   if (config.source === "none" || !config.host || !config.from) {
     throw new AppError("Outgoing mail is not configured", 409, {

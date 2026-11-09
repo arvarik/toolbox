@@ -219,11 +219,6 @@ function stripHash(row: UserRow): User {
   };
 }
 
-export function countUsers(): number {
-  return (sqlite.prepare("SELECT COUNT(*) AS n FROM users").get() as { n: number })
-    .n;
-}
-
 export function getUserById(id: string): User | null {
   const row = stmts.userById.get(id) as UserRow | undefined;
   return row ? stripHash(row) : null;

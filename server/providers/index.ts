@@ -28,10 +28,6 @@ for (const def of PROVIDER_DEFS) {
   }
 }
 
-export function getProviderDef(providerId: string): ProviderDef | undefined {
-  return PROVIDERS[providerId];
-}
-
 export function getApiKeyForProvider(providerId: string): string | null {
   const def = PROVIDERS[providerId];
   if (!def) return null;

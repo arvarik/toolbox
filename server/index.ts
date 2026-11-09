@@ -11,7 +11,6 @@ import { isAuthRequired } from "./platform/auth/authMiddleware.ts";
 import { validateSecretKey } from "./platform/crypto/secretBox.ts";
 import { sqlite } from "./platform/db/connection.ts";
 import { validatePublicUrl } from "./platform/net/originAndFetch.ts";
-import * as cpuHost from "./platform/workers/cpuHost.ts";
 import logger from "./utils/logger.ts";
 
 export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
@@ -91,11 +90,8 @@ export async function shutdownServer(
     server.closeIdleConnections?.();
   });
 
-  const workerStopper =
-    options.stopWorker ??
-    (cpuHost as { stopCpuWorker?: () => Promise<void> | void }).stopCpuWorker;
   try {
-    await workerStopper?.();
+    await options.stopWorker?.();
   } catch (err) {
     logger.warn("CPU worker shutdown error", {
       error: err instanceof Error ? err.message : String(err),

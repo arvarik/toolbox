@@ -30,10 +30,6 @@ export function validateSecretKey(
 
 let cachedKey: Buffer | null = null;
 
-export function __resetSecretKeyCache(): void {
-  cachedKey = null;
-}
-
 export function getOrInitSecretKey(dataDir: string = DATA_DIR): Buffer {
   const envVal = process.env[SECRET_KEY_ENV];
   if (envVal) {
