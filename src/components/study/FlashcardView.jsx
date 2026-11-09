@@ -34,7 +34,6 @@ export default function FlashcardView({ cards = [], onBack, deckName, deckId, re
   // Load cards into the dynamic session queue
   useEffect(() => {
     if (cards.length > 0) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSessionQueue([...cards])
       setCurrentIndex(0)
       setFlipped(false)

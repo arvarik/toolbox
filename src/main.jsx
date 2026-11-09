@@ -5,11 +5,14 @@ import { BrowserRouter } from 'react-router-dom'
 import '@xyflow/react/dist/style.css'
 import './index.css'
 import App from './App.jsx'
+import { AuthGate } from './components/auth/AuthGate.tsx'
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
+    <AuthGate>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </AuthGate>
   </StrictMode>,
 )

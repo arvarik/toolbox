@@ -4,6 +4,8 @@ import useAppStore from '../stores/appStore'
 import { configApi, systemApi, profileApi, guideContentApi, endpointsApi } from '../utils/api'
 import Modal from '../components/shared/Modal'
 import ModelPicker from '../components/shared/ModelPicker'
+import { useAuth } from '../components/auth/AuthGate.tsx'
+import { AccountSecuritySection, InstanceAdminSection } from '../components/settings/AccountAndAdminSections.tsx'
 
 /**
  * Default fallback provider config (used before server metadata loads).
@@ -460,6 +462,8 @@ function CustomEndpointsSection() {
 
 export default function SettingsPage() {
   const { addToast, theme, toggleTheme, model, fetchAvailableModels, availableModels } = useAppStore()
+  const { isResolved, authRequired, isAdmin } = useAuth()
+  const canManageInstanceAi = !isResolved || !authRequired || isAdmin
   const isMac = typeof window !== 'undefined' && navigator.userAgent.includes('Mac')
   const [systemStats, setSystemStats] = useState(null)
   const [profileText, setProfileText] = useState('')
@@ -593,31 +597,38 @@ export default function SettingsPage() {
       </div>
 
       <div className="settings-content">
-        {/* API Keys Section */}
-        <div className="settings-section">
-          <h2 className="settings-section-title">AI Provider API Keys</h2>
-          <p className="settings-section-desc">
-            Configure API keys for AI-powered features. Add keys for one or more providers — models will appear based on which keys are configured.
-          </p>
+        <AccountSecuritySection />
+        <InstanceAdminSection />
 
-          {providerDefs.map((def) => (
-            <ProviderKeySection
-              key={def.id}
-              providerId={def.id}
-              providerDef={def}
-              keyStatus={keyStatuses[def.id] || 'disconnected'}
-              maskedKey={maskedKeys[def.id] || ''}
-              onKeyStatusChange={handleKeyStatusChange}
-            />
-          ))}
-        </div>
+        {/* API Keys Section (admin-managed when multi-user auth is active) */}
+        {canManageInstanceAi && (
+          <>
+            <div className="settings-section">
+              <h2 className="settings-section-title">AI Provider API Keys</h2>
+              <p className="settings-section-desc">
+                Configure API keys for AI-powered features. Add keys for one or more providers — models will appear based on which keys are configured.
+              </p>
 
-        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+              {providerDefs.map((def) => (
+                <ProviderKeySection
+                  key={def.id}
+                  providerId={def.id}
+                  providerDef={def}
+                  keyStatus={keyStatuses[def.id] || 'disconnected'}
+                  maskedKey={maskedKeys[def.id] || ''}
+                  onKeyStatusChange={handleKeyStatusChange}
+                />
+              ))}
+            </div>
 
-        {/* Custom Endpoints (BYOM) */}
-        <CustomEndpointsSection />
+            <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
 
-        <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+            {/* Custom Endpoints (BYOM) */}
+            <CustomEndpointsSection />
+
+            <div className="divider-h" style={{ margin: 'var(--space-6) 0' }} />
+          </>
+        )}
 
         {/* AI Shadow Memory */}
         <div className="settings-section">

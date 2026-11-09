@@ -44,7 +44,6 @@ export default function FlashcardReviewModal({ open, onClose, cards: initialCard
 
   useEffect(() => {
     if (open && initialCards) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
       setCards(initialCards)
       setDuplicateMap({})
       setExcludedIndexes(new Set())

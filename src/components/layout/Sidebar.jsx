@@ -13,12 +13,14 @@ import {
   Waypoints,
   Calculator,
   Sun,
-  Moon
+  Moon,
+  LogOut
 } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import PomodoroWidget from './PomodoroWidget'
 import ModelPicker from '../shared/ModelPicker'
 import useIsMobile from '../../hooks/useIsMobile'
+import { useAuth } from '../auth/AuthGate.tsx'
 
 const navItems = [
   {
@@ -46,6 +48,7 @@ export default function Sidebar() {
   const theme = useAppStore((s) => s.theme)
   const toggleTheme = useAppStore((s) => s.toggleTheme)
   const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
+  const { authRequired, user, logout } = useAuth()
   const location = useLocation()
 
   const isMobile = useIsMobile()
@@ -130,6 +133,22 @@ export default function Sidebar() {
 
       {/* Collapse & theme toggles */}
       <div className="sidebar-footer">
+        {authRequired && user && (
+          <button
+            className="sidebar-collapse-btn"
+            onClick={() => void logout()}
+            aria-label={`Sign out ${user.username}`}
+            title={`Signed in as @${user.username} — click to sign out`}
+            style={{ marginBottom: '4px' }}
+          >
+            <LogOut size={16} />
+            {!collapsed && (
+              <span className="sidebar-link-label">
+                @{user.username} · Sign out
+              </span>
+            )}
+          </button>
+        )}
         <button
           className="sidebar-collapse-btn"
           onClick={toggleTheme}

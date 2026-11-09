@@ -52,7 +52,6 @@ export default function GraphPage() {
 
   // Load on mount; refresh whenever a card is graded anywhere in the
   // app (srsVersion) and when the window regains focus.
-  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchGraph() }, [fetchGraph, srsVersion])
   useEffect(() => {
     const onFocus = () => fetchGraph()

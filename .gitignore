@@ -1,9 +1,14 @@
-# Build output
+# Build & test output
 dist
+coverage
 
 # Runtime data
 data
+uploads
+backups
 *.db
+*.db-shm
+*.db-wal
 
 # Dependencies
 node_modules

@@ -30,27 +30,11 @@ async function request(path, options = {}) {
     }
   }
 
+  let res
   try {
-    const res = await fetch(url, config)
-
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({ message: res.statusText }))
-      throw new Error(error.message || `Request failed: ${res.status}`)
-    }
-
-    // Handle 204 No Content
-    if (res.status === 204) return null
-    
-    const data = await res.json()
-    
-    // Cache successful GET requests for offline use
-    if (isGet) {
-      await setCache(url, data).catch(console.error)
-    }
-    
-    return data
+    res = await fetch(url, config)
   } catch (err) {
-    // Fallback if fetch fails (e.g. server down but browser thinks it's online)
+    // Network error (e.g. server down while browser still thinks it is online)
     if (isGet) {
       const cached = await getCache(url)
       if (cached) return cached
@@ -60,6 +44,33 @@ async function request(path, options = {}) {
     }
     throw err
   }
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ message: res.statusText }))
+    const message =
+      body?.error?.message || body?.message || `Request failed: ${res.status}`
+    const err = new Error(message)
+    err.status = res.status
+    err.code = body?.error?.code
+    if (res.status === 401 && typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('toolbox:unauthorized', { detail: { code: err.code } }),
+      )
+    }
+    throw err
+  }
+
+  // Handle 204 No Content
+  if (res.status === 204) return null
+
+  const data = await res.json()
+
+  // Cache successful GET requests for offline use
+  if (isGet) {
+    await setCache(url, data).catch(console.error)
+  }
+
+  return data
 }
 
 /* ---- Config ---- */
@@ -153,8 +164,17 @@ export const chatApi = {
     })
 
     if (!res.ok) {
-      const error = await res.json().catch(() => ({ message: res.statusText }))
-      throw new Error(error.message || `Stream failed: ${res.status}`)
+      const body = await res.json().catch(() => ({ message: res.statusText }))
+      const message =
+        body?.error?.message || body?.message || `Stream failed: ${res.status}`
+      if (res.status === 401 && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('toolbox:unauthorized', {
+            detail: { code: body?.error?.code },
+          }),
+        )
+      }
+      throw new Error(message)
     }
 
     const reader = res.body.getReader()

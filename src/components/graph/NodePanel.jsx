@@ -37,7 +37,6 @@ export default function NodePanel({ nodeId, onClose, onSelectNode, onStartSessio
 
   useEffect(() => {
     let cancelled = false
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsLoading(true)
     graphApi.getNode(nodeId)
       .then((data) => { if (!cancelled) setDetail(data) })
