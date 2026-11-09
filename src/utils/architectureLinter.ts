@@ -25,7 +25,7 @@ export interface AuditEdge {
   target?: string
   from?: string
   to?: string
-  label?: string
+  label?: unknown
   protocol?: string
   data?: { protocol?: string; [key: string]: unknown }
   [key: string]: unknown

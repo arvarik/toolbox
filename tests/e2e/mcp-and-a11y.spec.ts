@@ -55,17 +55,6 @@ async function callMcp(
   };
 }
 
-// Pre-existing `src/` styling & label rules surfaced by real Chromium axe scans
-// (tracked for UI wave follow-up; all other WCAG 2.2 AA critical/serious rules enforced):
-// 1. `color-contrast`: dark-theme `.btn-primary` (#818cf8) and muted sidebar/settings tokens in `src/index.css`
-// 2. `label-content-name-mismatch`: `aria-label` differs from visible text on `#model-picker-trigger`, `#theme-toggle-btn`, and `Expand Kit`
-// 3. `scrollable-region-focusable`: `.overflow-x-auto` wrapper in `src/components/settings/McpSettingsSection.tsx` lacks `tabIndex={0}`
-const KNOWN_PREEXISTING_SERIOUS_RULES = [
-  "color-contrast",
-  "label-content-name-mismatch",
-  "scrollable-region-focusable",
-];
-
 test.describe("MCP Streamable HTTP, Mobile Drawer & Accessibility", () => {
   test("mints read-only & writable tbk_ tokens in Settings, enforces MCP tool scopes, and renders MCP-created Markdown + KaTeX flashcards in /review", async ({
     page,
@@ -260,7 +249,6 @@ test.describe("MCP Streamable HTTP, Mobile Drawer & Accessibility", () => {
       await expectNoCriticalA11yViolations(page, {
         testInfo,
         label: route.label,
-        disableRules: KNOWN_PREEXISTING_SERIOUS_RULES,
       });
     }
   });
@@ -302,7 +290,6 @@ test.describe("MCP Streamable HTTP, Mobile Drawer & Accessibility", () => {
       await expectNoCriticalA11yViolations(page, {
         testInfo,
         label: "mobile-settings",
-        disableRules: KNOWN_PREEXISTING_SERIOUS_RULES,
       });
       expect(pageErrors).toEqual([]);
     },

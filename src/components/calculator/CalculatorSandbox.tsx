@@ -10,25 +10,14 @@ import {
   formatBytesPerSec,
   formatBitrate,
   CACHE_NODE_RAM_GB,
+  type BoteInputDef,
+  type BoteInputKey,
 } from '../../utils/bote'
 import LatencyReference, { type LatencyBudgetItem } from './LatencyReference'
 import AuditPanel, { type BoteEstimates, type BoteScenario } from './AuditPanel'
 import ExportMenu from './ExportMenu'
 
 const SLIDER_STEPS = 200
-
-interface BoteInputDef {
-  key: string
-  label: string
-  unit: string
-  min: number
-  max: number
-  default: number
-  log?: boolean
-  logFloor?: number
-  group: 'traffic' | 'data' | 'advanced' | string
-  help: string
-}
 
 /** Map a raw value to a slider position (log-aware). */
 function valueToSlider(def: BoteInputDef, value: number): number {
@@ -65,7 +54,7 @@ function roundNice(v: number): number {
 interface InputRowProps {
   def: BoteInputDef
   value: number
-  onChange: (key: string, value: number | string) => void
+  onChange: (key: BoteInputKey, value: number | string) => void
 }
 
 /** One labeled input with a numeric field plus a (log) slider. */

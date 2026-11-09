@@ -23,7 +23,8 @@ export interface ModelProviderInfo {
 export interface ModelCatalogItem {
   id: string
   name: string
-  family?: string
+  description?: string
+  family?: string | null
 }
 
 export interface ModelGroup {
@@ -105,7 +106,7 @@ export interface SearchApiResponse {
 
 export interface CommitSectionUpdate {
   sectionId: string
-  sectionName: string
+  sectionName?: string
   reason: string
   existingContent?: string
   newContent: string
@@ -259,10 +260,10 @@ export const configApi = {
 
 /* ---- Custom Endpoints (BYOM) ---- */
 export const endpointsApi = {
-  list: () => request<Array<Record<string, unknown>>>('/endpoints'),
+  list: <T = Record<string, unknown>>() => request<T[]>('/endpoints'),
   create: (data: { name: string; baseUrl: string; apiKey?: string }) =>
     request('/endpoints', { method: 'POST', body: data }),
-  update: (id: string, data: Record<string, unknown>) =>
+  update: (id: string, data: object) =>
     request(`/endpoints/${id}`, { method: 'PUT', body: data }),
   delete: (id: string) => request(`/endpoints/${id}`, { method: 'DELETE' }),
   test: (data: { baseUrl: string; apiKey?: string; endpointId?: string }) =>
@@ -280,10 +281,10 @@ export const decksApi = {
   get: (id: string) => request<DeckRecord>(`/decks/${id}`),
   create: (data: { name: string; description?: string; tags?: string; color_index?: number }) =>
     request<DeckRecord>('/decks', { method: 'POST', body: data }),
-  update: (id: string, data: Record<string, unknown>) =>
+  update: (id: string, data: object) =>
     request<DeckRecord>(`/decks/${id}`, { method: 'PUT', body: data }),
   delete: (id: string) => request(`/decks/${id}`, { method: 'DELETE' }),
-  updateSettings: (id: string, settings: Record<string, unknown>) =>
+  updateSettings: (id: string, settings: object) =>
     request(`/decks/${id}/settings`, { method: 'PUT', body: settings }),
 }
 
@@ -292,16 +293,21 @@ export const flashcardsApi = {
   list: (deckId: string) => request<FlashcardRecord[]>(`/decks/${deckId}/cards`),
   due: (deckId: string) => request<FlashcardRecord[]>(`/decks/${deckId}/cards/due`),
   dueAll: () => request<FlashcardRecord[]>('/decks/all/cards/due'),
-  create: (deckId: string, data: Record<string, unknown>) =>
+  create: (deckId: string, data: object) =>
     request<FlashcardRecord>(`/decks/${deckId}/cards`, { method: 'POST', body: data }),
-  update: (deckId: string, cardId: string, data: Record<string, unknown>) =>
+  update: (deckId: string, cardId: string, data: object) =>
     request<FlashcardRecord>(`/decks/${deckId}/cards/${cardId}`, {
       method: 'PUT',
       body: data,
     }),
   delete: (deckId: string, cardId: string) =>
     request(`/decks/${deckId}/cards/${cardId}`, { method: 'DELETE' }),
-  review: (deckId: string, cardId: string, quality: number, confidence?: string | number) =>
+  review: (
+    deckId: string,
+    cardId: string,
+    quality: number,
+    confidence?: string | number | null,
+  ) =>
     request(`/decks/${deckId}/cards/${cardId}/review`, {
       method: 'PUT',
       body: { quality, confidence },
@@ -320,12 +326,12 @@ export const studySessionsApi = {
 
 /* ---- Boards ---- */
 export const boardsApi = {
-  list: () => request<Array<Record<string, unknown>>>('/boards'),
-  get: (id: string) => request<Record<string, unknown>>(`/boards/${id}`),
-  create: (data: Record<string, unknown>) =>
-    request<Record<string, unknown>>('/boards', { method: 'POST', body: data }),
-  update: (id: string, data: Record<string, unknown>) =>
-    request<Record<string, unknown>>(`/boards/${id}`, { method: 'PUT', body: data }),
+  list: <T = Record<string, unknown>>() => request<T[]>('/boards'),
+  get: <T = Record<string, unknown>>(id: string) => request<T>(`/boards/${id}`),
+  create: <T = Record<string, unknown>>(data: object) =>
+    request<T>('/boards', { method: 'POST', body: data }),
+  update: <T = Record<string, unknown>>(id: string, data: object) =>
+    request<T>(`/boards/${id}`, { method: 'PUT', body: data }),
   delete: (id: string) => request(`/boards/${id}`, { method: 'DELETE' }),
   rename: (id: string, name: string) =>
     request(`/boards/${id}/rename`, { method: 'PATCH', body: { name } }),
@@ -465,23 +471,23 @@ export const chatApi = {
       body: data,
     }),
 
-  getSessions: () => request<Array<Record<string, unknown>>>('/chat/sessions'),
-  saveSession: (session: Record<string, unknown>) =>
+  getSessions: <T = Record<string, unknown>>() => request<T>('/chat/sessions'),
+  saveSession: (session: object) =>
     request('/chat/sessions', { method: 'POST', body: { session } }),
   deleteSession: (id: string) =>
     request(`/chat/sessions/${id}`, { method: 'DELETE' }),
-  migrateBulk: (sessions: Array<Record<string, unknown>>) =>
+  migrateBulk: (sessions: object) =>
     request('/chat/sessions/bulk', { method: 'POST', body: { sessions } }),
 }
 
 /* ---- Guide Content ---- */
 export const guideContentApi = {
   getForTopic: (pillarId: string, topicId: string) =>
-    request<Record<string, { content: string; committedAt?: string }>>(
+    request<Record<string, { content: string; committedAt?: string | null }>>(
       `/guide-content/${pillarId}/${topicId}`,
     ),
   getSection: (pillarId: string, topicId: string, sectionId: string) =>
-    request<{ content: string; committedAt?: string }>(
+    request<{ content: string; committedAt?: string | null }>(
       `/guide-content/${pillarId}/${topicId}/${sectionId}`,
     ),
   upsert: (pillarId: string, topicId: string, sectionId: string, content: string) =>
@@ -520,8 +526,8 @@ export const searchApi = {
 
 /* ---- Knowledge Graph ---- */
 export const graphApi = {
-  get: () => request('/graph'),
-  getNode: (id: string) => request(`/graph/nodes/${id}`),
+  get: <T = unknown>() => request<T>('/graph'),
+  getNode: <T = unknown>(id: string) => request<T>(`/graph/nodes/${id}`),
   nodeSession: (id: string) =>
     request(`/graph/nodes/${id}/session`, { method: 'POST' }),
   trackSession: (id: string) =>

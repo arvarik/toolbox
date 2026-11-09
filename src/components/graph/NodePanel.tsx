@@ -93,8 +93,8 @@ export default function NodePanel({
   useEffect(() => {
     let cancelled = false
     setIsLoading(true)
-    graphApi.getNode(nodeId)
-      .then((data: NodeDetailResponse | null) => { if (!cancelled) setDetail(data) })
+    graphApi.getNode<NodeDetailResponse | null>(nodeId)
+      .then((data) => { if (!cancelled) setDetail(data) })
       .catch(() => { if (!cancelled) setDetail(null) })
       .finally(() => { if (!cancelled) setIsLoading(false) })
     return () => { cancelled = true }

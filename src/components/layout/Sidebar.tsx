@@ -296,7 +296,13 @@ export default function Sidebar() {
         <button
           className="sidebar-collapse-btn"
           onClick={toggleTheme}
-          aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+          aria-label={
+            collapsed
+              ? theme === 'dark'
+                ? 'Switch to light theme'
+                : 'Switch to dark theme'
+              : undefined
+          }
           title={theme === 'dark' ? 'Switch to light theme (⌘D)' : 'Switch to dark theme (⌘D)'}
           id="theme-toggle-btn"
           data-testid="theme-toggle"

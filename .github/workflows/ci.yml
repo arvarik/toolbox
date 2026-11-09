@@ -39,6 +39,9 @@ jobs:
       - name: Lint, Typecheck & Tenant Isolation Check
         run: npm run lint
 
+      - name: WCAG AA Static Contrast Audit
+        run: npm run audit:contrast
+
       - name: Dependency Security Audit
         run: npm audit --omit=dev
 

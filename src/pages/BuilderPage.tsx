@@ -96,9 +96,9 @@ export default function BuilderPage() {
     setShowAuditModal(false)
     writeStoreGraph({ nodes: [], edges: [] })
 
-    boardsApi.list().then((rawList) => {
+    boardsApi.list<BoardTabItem>().then((rawList) => {
       if (cancelled) return
-      const list = Array.isArray(rawList) ? (rawList as BoardTabItem[]) : []
+      const list = Array.isArray(rawList) ? rawList : []
       if (list.length > 0) {
         setBoards(list)
         // Deep link support: /builder?board=<id> (e.g. from the Knowledge Graph)
@@ -155,9 +155,8 @@ export default function BuilderPage() {
 
     let cancelled = false
     // Load from server (persisted board shape → React Flow shape)
-    boardsApi.get(activeBoard).then((rawBoard) => {
+    boardsApi.get<ServerBoardDetail | null>(activeBoard).then((board) => {
       if (cancelled) return
-      const board = rawBoard as ServerBoardDetail | null
       if (board && board.data) {
         const boardNodes = board.data.nodes || []
         const boardEdges = board.data.edges || []

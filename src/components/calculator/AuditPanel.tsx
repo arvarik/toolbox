@@ -16,34 +16,10 @@ import {
   formatBytes,
   formatBytesPerSec,
   formatBitrate,
+  type BoteEstimates,
 } from '../../utils/bote'
 
-export interface BoteEstimates {
-  inputs: Record<string, number>
-  requestsPerDay: number
-  writesPerDay: number
-  readsPerDay: number
-  avgWriteQps: number
-  avgReadQps: number
-  avgTotalQps: number
-  peakWriteQps: number
-  peakReadQps: number
-  peakTotalQps: number
-  avgTransferBytes: number
-  ingestPerDayBytes: number
-  ingestRateBytesPerSec: number
-  storagePerYearBytes: number
-  rawRetainedBytes: number
-  replicatedRetainedBytes: number
-  fiveYearReplicatedBytes: number
-  dailyReadVolumeBytes: number
-  cacheBytes: number
-  cacheNodes: number
-  ingressBps: number
-  egressBps: number
-  appServers: number
-  dbShards: number
-}
+export type { BoteEstimates }
 
 export interface BoteScenario {
   id: string

@@ -312,8 +312,8 @@ function CustomEndpointsSection() {
 
   const loadEndpoints = useCallback(() => {
     endpointsApi
-      .list()
-      .then((rows) => setEndpoints(Array.isArray(rows) ? (rows as CustomEndpointRecord[]) : []))
+      .list<CustomEndpointRecord>()
+      .then((rows) => setEndpoints(Array.isArray(rows) ? rows : []))
       .catch(() => {})
   }, [])
 

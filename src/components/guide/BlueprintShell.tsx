@@ -102,7 +102,7 @@ export default function BlueprintShell() {
     if (!pillarId || !topicId) return
     setIsLoadingContent(true)
     guideContentApi.getForTopic(pillarId, topicId)
-      .then((data: Record<string, CommittedSection> | null) => setSectionContent(data || {}))
+      .then((data) => setSectionContent((data as Record<string, CommittedSection>) || {}))
       .catch(() => setSectionContent({}))
       .finally(() => setIsLoadingContent(false))
   }, [pillarId, topicId])

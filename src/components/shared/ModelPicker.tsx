@@ -145,8 +145,7 @@ export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
         className={`model-trigger model-trigger-${variant}`}
         id="model-picker-trigger"
         onClick={openPicker}
-        aria-label="Change model"
-        title={`Model: ${triggerLabel}`}
+        title={`Change model (${triggerLabel})`}
       >
         <span className="model-trigger-dot" style={{ background: triggerColor }} />
         <span className="model-trigger-label">{triggerLabel}</span>

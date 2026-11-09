@@ -101,7 +101,6 @@ export function createApp(): Express {
 
   if (isProduction) {
     const distPath = path.join(__dirname, "..", "dist");
-    const indexPath = path.join(distPath, "index.html");
     app.use(express.static(distPath));
     app.get("*all", (req, res, next) => {
       if (
@@ -112,7 +111,7 @@ export function createApp(): Express {
         notFoundHandler(req, res, next);
         return;
       }
-      res.sendFile(indexPath, (err) => {
+      res.sendFile("index.html", { root: distPath }, (err) => {
         if (err) next();
       });
     });

@@ -216,8 +216,8 @@ describe('ChatPanel, LearningChat & Cross-Feature Chat Workflows', () => {
   describe('ChatPanel Core & Edge Workflows', () => {
     it('1. renders markdown formatting, copies AI responses, and clears conversation history', () => {
       const markdownMsg = [
-        { role: 'user', content: 'Clear me' },
-        { role: 'ai', content: '### AI Title\nThis is **bold content** and here is code:\n```const test = 123;```' },
+        { role: 'user' as const, content: 'Clear me' },
+        { role: 'ai' as const, content: '### AI Title\nThis is **bold content** and here is code:\n```const test = 123;```' },
       ]
       useAppStore.setState({ chatOpen: { chat: false, guide: true, builder: false, study: false } })
       render(<ChatPanel page="guide" initialMessages={markdownMsg} />)
