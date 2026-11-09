@@ -2,8 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["main"]
+    tags: ["v*"]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -18,20 +20,22 @@ permissions:
   contents: read
 
 jobs:
-  ci:
+  verify:
     name: Lint · Typecheck · Audit · Test · Build · E2E
     runs-on: ubuntu-latest
     timeout-minutes: 25
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Set up Node.js from .nvmrc
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: "npm"
 
       - name: Install dependencies
         run: npm ci
@@ -45,8 +49,8 @@ jobs:
       - name: Dependency Security Audit
         run: npm audit --omit=dev
 
-      - name: Unit & Integration Tests
-        run: npm test
+      - name: Unit & Integration Tests with Coverage
+        run: npm run test:coverage
 
       - name: Production Build
         run: npm run build
@@ -57,7 +61,7 @@ jobs:
 
       - name: Cache Playwright Chromium
         id: browser-cache
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ steps.playwright.outputs.version }}
@@ -74,9 +78,76 @@ jobs:
         run: npm run test:e2e
 
       - name: Upload Playwright Report
-        if: failure()
-        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report
           path: playwright-report/
           retention-days: 14
+          if-no-files-found: ignore
+
+  container-smoke:
+    name: Docker Build & Runtime Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build production container image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: toolbox:smoke
+          cache-from: type=gha,scope=smoke
+          cache-to: type=gha,mode=max,scope=smoke
+
+      - name: Boot container and verify health & auth endpoints
+        run: |
+          set -euo pipefail
+          cleanup() {
+            docker rm -f toolbox-smoke >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run -d --name toolbox-smoke \
+            -p 127.0.0.1:3100:3100 \
+            -e AUTH_REQUIRED=true \
+            toolbox:smoke
+
+          ready=0
+          for _ in $(seq 1 30); do
+            if health=$(curl -fsS http://127.0.0.1:3100/api/health 2>/dev/null) &&
+               jq -e '.status == "ok"' >/dev/null <<<"$health"; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ "$ready" -ne 1 ]]; then
+            echo "::error::Timed out waiting for /api/health"
+            docker logs toolbox-smoke || true
+            exit 1
+          fi
+
+          if ! auth=$(curl -fsS http://127.0.0.1:3100/api/auth/status) ||
+             ! jq -e '.authRequired == true and .authenticated == false' >/dev/null <<<"$auth"; then
+            echo "::error::Unexpected /api/auth/status response: ${auth:-<empty>}"
+            docker logs toolbox-smoke || true
+            exit 1
+          fi
+
+          if ! html=$(curl -fsS http://127.0.0.1:3100/) ||
+             ! grep -q '<div id="root"></div>' <<<"$html"; then
+            echo "::error::Unexpected SPA index response from /"
+            docker logs toolbox-smoke || true
+            exit 1
+          fi
