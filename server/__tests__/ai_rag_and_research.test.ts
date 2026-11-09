@@ -360,16 +360,27 @@ describe("Wave 1B: AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlit
         "user_override",
       );
 
-      // Bob adds a personal custom endpoint
-      const bobEpRes = await bobAgent
-        .post("/api/ai-settings/endpoints")
-        .send({
-          name: "Bob Homelab vLLM",
-          baseUrl: `${bobMockServer.baseUrl}/v1`,
-          apiKey: "bob-vllm-token-secret",
-        })
-        .expect(201);
-      const bobEpId = bobEpRes.body.id as string;
+      // Bob adds a personal custom endpoint (explicitly opted-in via ALLOW_PRIVATE_BYOK_ENDPOINTS for local mock server)
+      const prevAllowPrivateByok = process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS;
+      process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS = "true";
+      let bobEpId: string;
+      try {
+        const bobEpRes = await bobAgent
+          .post("/api/ai-settings/endpoints")
+          .send({
+            name: "Bob Homelab vLLM",
+            baseUrl: `${bobMockServer.baseUrl}/v1`,
+            apiKey: "bob-vllm-token-secret",
+          })
+          .expect(201);
+        bobEpId = bobEpRes.body.id as string;
+      } finally {
+        if (prevAllowPrivateByok === undefined) {
+          delete process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS;
+        } else {
+          process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS = prevAllowPrivateByok;
+        }
+      }
       expect(bobEpId.startsWith("u_")).toBe(true);
 
       // Inspect raw SQLite row: ZERO plaintext secrets in user_ai_settings!

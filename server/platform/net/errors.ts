@@ -185,6 +185,11 @@ export function attachRequestId(
   next();
 }
 
+export const CONTENT_SECURITY_POLICY =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'";
+
+export const PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=()";
+
 export function securityHeaders(
   _req: Request,
   res: Response,
@@ -193,6 +198,9 @@ export function securityHeaders(
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader("Permissions-Policy", PERMISSIONS_POLICY);
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
   next();
 }
 

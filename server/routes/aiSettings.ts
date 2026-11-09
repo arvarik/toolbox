@@ -8,14 +8,15 @@ import { isBackgroundJobsDisabled } from "../appConfig.ts";
 import db from "../db.ts";
 import {
   assertNoUserEmbeddingsOverride,
+  canUsePrivateEndpoint,
   deleteUserCustomEndpoint,
   getAdminAiSettingsView,
   getInstanceWebSearchConfig,
   getUserAiSettingsView,
-  normalizeEndpointBaseUrl,
   updateAdminAiSettings,
   updateUserByokSettings,
   upsertUserCustomEndpoint,
+  validateEndpointBaseUrl,
 } from "../platform/ai/aiSettingsService.ts";
 import { ValidationError, asyncHandler } from "../platform/net/errors.ts";
 import { testSearxngConnection } from "../platform/research/searxng.ts";
@@ -83,7 +84,10 @@ userAiSettingsRouter.post(
       baseUrl?: string;
       apiKey?: string;
     };
-    const normalized = normalizeEndpointBaseUrl(baseUrl);
+    const allowPrivate = canUsePrivateEndpoint({
+      isAdmin: req.principal?.user.role === "admin",
+    });
+    const normalized = await validateEndpointBaseUrl(baseUrl, { allowPrivate });
     try {
       const models = await fetchEndpointModels((apiKey ?? "").trim(), normalized);
       res.json({ ok: true, modelCount: models.length });
@@ -103,6 +107,10 @@ userAiSettingsRouter.post(
     const scope = scopeOf(req);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const skipProbe = body.skipProbe === true;
+    const allowPrivate = canUsePrivateEndpoint({
+      isAdmin: req.principal?.user.role === "admin",
+      scope,
+    });
     const input = CustomEndpointInputSchema.parse({
       name: body.name,
       baseUrl: body.baseUrl,
@@ -110,6 +118,7 @@ userAiSettingsRouter.post(
     });
     const endpoint = await upsertUserCustomEndpoint(scope, input, undefined, {
       skipProbe,
+      allowPrivate,
     });
     res.status(201).json(endpoint);
   }),
@@ -121,6 +130,10 @@ userAiSettingsRouter.put(
     const scope = scopeOf(req);
     const body = (req.body ?? {}) as Record<string, unknown>;
     const skipProbe = body.skipProbe === true;
+    const allowPrivate = canUsePrivateEndpoint({
+      isAdmin: req.principal?.user.role === "admin",
+      scope,
+    });
     const input = CustomEndpointInputSchema.parse({
       name: body.name,
       baseUrl: body.baseUrl,
@@ -130,7 +143,7 @@ userAiSettingsRouter.put(
       scope,
       input,
       String(req.params.id),
-      { skipProbe },
+      { skipProbe, allowPrivate },
     );
     res.json(endpoint);
   }),
@@ -179,7 +192,10 @@ adminAiSettingsRouter.post(
     if (!rawUrl) {
       throw new ValidationError("SearXNG URL is required to test connection");
     }
-    const status = await testSearxngConnection(rawUrl);
+    const safeUrl = await validateEndpointBaseUrl(rawUrl, {
+      allowPrivate: true,
+    });
+    const status = await testSearxngConnection(safeUrl);
     if (!status.ok) {
       res.status(400).json(status);
       return;

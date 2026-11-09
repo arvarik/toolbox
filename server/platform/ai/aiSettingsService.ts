@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import dns from "node:dns/promises";
+import net from "node:net";
 import {
   CapabilitiesConfigSchema,
   DEFAULT_CAPABILITY_ASSIGNMENT,
@@ -24,12 +26,14 @@ import {
 import { sqlite } from "../db/connection.ts";
 import { open, seal } from "../crypto/secretBox.ts";
 import { getSetting, setSetting } from "../settings/settingsService.ts";
-import type { Scope } from "../tenancy/scope.ts";
+import { getContext, type Scope } from "../tenancy/scope.ts";
 import {
+  AppError,
   ForbiddenError,
   NotFoundError,
   ValidationError,
 } from "../net/errors.ts";
+import { isPrivateAddress } from "../net/originAndFetch.ts";
 import {
   DEFAULT_MODEL_ID,
   PROVIDER_DEFS,
@@ -103,7 +107,66 @@ function openSecret(stored: string | null | undefined): string {
   }
 }
 
-export function normalizeEndpointBaseUrl(raw: unknown): string {
+const ALWAYS_BLOCKED_HOSTS = new Set([
+  "metadata.google.internal",
+  "metadata.goog",
+  "instance-data.ec2.internal",
+]);
+
+function extractEmbeddedIPv4(lowerIPv6: string): string | null {
+  const mapped = lowerIPv6.match(/^::ffff:(?:0:)?(.+)$/);
+  const nat64 = lowerIPv6.match(/^64:ff9b::(.+)$/);
+  const tail = mapped?.[1] ?? nat64?.[1];
+  if (!tail) return null;
+  if (net.isIPv4(tail)) return tail;
+  const hex = tail.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (!hex) return null;
+  const high = parseInt(hex[1], 16);
+  const low = parseInt(hex[2], 16);
+  return `${high >> 8}.${high & 0xff}.${low >> 8}.${low & 0xff}`;
+}
+
+export function isAlwaysBlockedAddress(address: string): boolean {
+  if (net.isIPv4(address)) {
+    const [a, b] = address.split(".").map(Number);
+    return a === 0 || (a === 169 && b === 254) || a >= 224;
+  }
+  const lower = address.toLowerCase();
+  const embedded = extractEmbeddedIPv4(lower);
+  if (embedded) return isAlwaysBlockedAddress(embedded);
+  return (
+    lower === "::" ||
+    lower === "fd00:ec2::254" ||
+    /^fe[89ab][0-9a-f]*:/.test(lower) ||
+    lower.startsWith("ff")
+  );
+}
+
+export function canUsePrivateEndpoint(opts?: {
+  isAdmin?: boolean;
+  scope?: Scope;
+}): boolean {
+  if (process.env.ALLOW_PRIVATE_BYOK_ENDPOINTS === "true") return true;
+  if (opts?.isAdmin !== undefined) return opts.isAdmin;
+  const ctxRole = getContext()?.principal?.user.role;
+  if (ctxRole) return ctxRole === "admin";
+  if (opts?.scope) {
+    try {
+      const row = sqlite
+        .prepare("SELECT role FROM users WHERE id = ?")
+        .get(opts.scope.ownerId) as { role?: string } | undefined;
+      return row?.role === "admin";
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+export function normalizeEndpointBaseUrl(
+  raw: unknown,
+  opts?: { allowPrivate?: boolean },
+): string {
   if (typeof raw !== "string" || !raw.trim()) {
     throw new ValidationError("A valid http(s) Base URL is required");
   }
@@ -117,10 +180,97 @@ export function normalizeEndpointBaseUrl(raw: unknown): string {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new ValidationError("Only http(s) Base URLs are allowed");
   }
-  if (parsed.hostname === "169.254.169.254") {
+  if (parsed.username || parsed.password) {
+    throw new ValidationError("Credentials in endpoint Base URL are not allowed");
+  }
+
+  const bareHost = parsed.hostname
+    .replace(/^\[|\]$/g, "")
+    .toLowerCase()
+    .replace(/\.+$/, "");
+  if (!bareHost) {
+    throw new ValidationError("A valid http(s) Base URL is required");
+  }
+
+  if (
+    ALWAYS_BLOCKED_HOSTS.has(bareHost) ||
+    bareHost.endsWith(".metadata.google.internal") ||
+    bareHost.endsWith(".metadata.goog")
+  ) {
     throw new ValidationError("Endpoint URL resolves to a blocked address");
   }
-  return trimmed;
+
+  const allowPrivate = opts?.allowPrivate ?? true;
+
+  if (net.isIP(bareHost)) {
+    if (isAlwaysBlockedAddress(bareHost)) {
+      throw new ValidationError("Endpoint URL resolves to a blocked address");
+    }
+    if (!allowPrivate && isPrivateAddress(bareHost)) {
+      throw new ValidationError("Endpoint URL resolves to a private address");
+    }
+    return parsed.toString().replace(/\/+$/, "");
+  }
+
+  if (
+    !allowPrivate &&
+    (bareHost === "localhost" ||
+      bareHost.endsWith(".localhost") ||
+      bareHost.endsWith(".local") ||
+      bareHost.endsWith(".internal"))
+  ) {
+    throw new ValidationError("Endpoint URL resolves to a private address");
+  }
+
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+export async function validateEndpointBaseUrl(
+  raw: unknown,
+  opts?: { allowPrivate?: boolean },
+): Promise<string> {
+  const allowPrivate = opts?.allowPrivate ?? false;
+  const normalized = normalizeEndpointBaseUrl(raw, { allowPrivate });
+  const bareHost = new URL(normalized).hostname
+    .replace(/^\[|\]$/g, "")
+    .toLowerCase()
+    .replace(/\.+$/, "");
+
+  if (net.isIP(bareHost)) {
+    return normalized;
+  }
+
+  if (!allowPrivate) {
+    let records: Array<{ address: string }>;
+    try {
+      records = await dns.lookup(bareHost, { all: true, verbatim: true });
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+      throw new ValidationError("Could not resolve endpoint hostname");
+    }
+    if (
+      records.length === 0 ||
+      records.some(
+        (r) => isAlwaysBlockedAddress(r.address) || isPrivateAddress(r.address),
+      )
+    ) {
+      throw new ValidationError("Endpoint URL resolves to a private address");
+    }
+    return normalized;
+  }
+
+  if (bareHost !== "localhost" && !bareHost.endsWith(".localhost")) {
+    try {
+      const records = await dns.lookup(bareHost, { all: true, verbatim: true });
+      if (records.some((r) => isAlwaysBlockedAddress(r.address))) {
+        throw new ValidationError("Endpoint URL resolves to a blocked address");
+      }
+    } catch (err) {
+      if (err instanceof AppError) throw err;
+    }
+  }
+
+  return normalized;
 }
 
 function readStoredBlob(): StoredAiSettingsBlob {
@@ -745,6 +895,12 @@ export function updateAdminAiSettings(patch: AdminAiSettingsUpdate): {
       ...nextWebSearch,
       ...patch.webSearch,
     });
+    if (nextWebSearch.searxngUrl.trim()) {
+      nextWebSearch.searxngUrl = normalizeEndpointBaseUrl(
+        nextWebSearch.searxngUrl,
+        { allowPrivate: true },
+      );
+    }
   }
 
   if (patch.providerKeys) {
@@ -879,9 +1035,13 @@ export async function upsertUserCustomEndpoint(
   scope: Scope,
   input: CustomEndpointInput,
   existingId?: string,
-  opts?: { skipProbe?: boolean },
+  opts?: { skipProbe?: boolean; allowPrivate?: boolean },
 ): Promise<ClientCustomEndpoint> {
-  const baseUrl = normalizeEndpointBaseUrl(input.baseUrl);
+  const allowPrivate =
+    opts?.allowPrivate ?? canUsePrivateEndpoint({ scope });
+  const baseUrl = await validateEndpointBaseUrl(input.baseUrl, {
+    allowPrivate,
+  });
   const current = readUserByok(scope);
   const existingIdx = existingId
     ? current.endpoints.findIndex((e) => e.id === existingId)

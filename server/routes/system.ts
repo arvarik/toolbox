@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
 import { Router } from "express";
 import db from "../db.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
@@ -72,25 +71,28 @@ router.get("/export-db", async (req, res, next) => {
     next(new ForbiddenError("Only administrators can export the instance database"));
     return;
   }
-  const tmpFile = path.join(
-    os.tmpdir(),
-    `toolbox_backup_${crypto.randomUUID()}.db`,
-  );
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolbox-backup-"));
+  const cleanup = () => {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Ignore temp cleanup failure
+    }
+  };
   try {
+    if (process.platform !== "win32") {
+      fs.chmodSync(tmpDir, 0o700);
+    }
+    const tmpFile = path.join(tmpDir, "toolbox_backup.db");
     await db.backup(tmpFile);
+    if (process.platform !== "win32") {
+      fs.chmodSync(tmpFile, 0o600);
+    }
     res.download(tmpFile, "toolbox_backup.db", () => {
-      try {
-        fs.unlinkSync(tmpFile);
-      } catch {
-        // Ignore temp cleanup failure
-      }
+      cleanup();
     });
   } catch (err) {
-    try {
-      fs.unlinkSync(tmpFile);
-    } catch {
-      // Ignore
-    }
+    cleanup();
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("[system] Error exporting db:", msg);
     res.status(500).json({ message: "Failed to export database" });
