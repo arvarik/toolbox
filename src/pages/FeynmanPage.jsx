@@ -1,22 +1,58 @@
-import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { BrainCircuit, Play, Loader, CheckCircle, Mic, MicOff, Square, MessageSquare, GraduationCap, RotateCcw } from 'lucide-react'
-import { chatApi } from '../utils/api'
+import { useState, useRef, useEffect, useMemo } from 'react'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
+import {
+  BrainCircuit,
+  Play,
+  Loader,
+  Mic,
+  MicOff,
+  MessageSquare,
+  GraduationCap,
+  RotateCcw,
+  ArrowLeft,
+} from 'lucide-react'
 import useAppStore from '../stores/appStore'
-import MarkdownRenderer from '../components/shared/MarkdownRenderer'
+import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
+import { feynmanApi } from '../utils/pedagogyApi'
+import RubricFeedbackCard from '../components/drills/RubricFeedbackCard'
 
 export default function FeynmanPage() {
   const navigate = useNavigate()
-  const [topic, setTopic] = useState('')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const nodeParam = searchParams.get('node') || ''
+  const prefix = useKitRoutePrefix()
+  const { skeleton, pillars } = useActiveKit()
+
+  const model = useAppStore((s) => s.model)
+  const addToast = useAppStore((s) => s.addToast)
+
+  const [selectedNodeId, setSelectedNodeId] = useState(nodeParam || '')
+  const [customTopic, setCustomTopic] = useState('')
   const [explanation, setExplanation] = useState('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
-  const [feedback, setFeedback] = useState('')
-  const [hasResult, setHasResult] = useState(false)
+  const [result, setResult] = useState(null)
   const [isRecording, setIsRecording] = useState(false)
-  const addToast = useAppStore(s => s.addToast)
-  const feedbackEndRef = useRef(null)
+
   const recognitionRef = useRef(null)
-  const abortRef = useRef(null)
+
+  const nodesByPillar = useMemo(() => {
+    return pillars.map((p) => ({
+      pillar: p,
+      nodes: skeleton.graph.nodes.filter((n) => n.pillarId === p.id),
+    }))
+  }, [pillars, skeleton.graph.nodes])
+
+  const selectedNode = useMemo(
+    () => skeleton.graph.nodes.find((n) => n.id === selectedNodeId) || null,
+    [skeleton.graph.nodes, selectedNodeId],
+  )
+
+  // Sync URL ?node=<nodeId> param on entry / change
+  useEffect(() => {
+    if (nodeParam && skeleton.graph.nodes.some((n) => n.id === nodeParam)) {
+      setSelectedNodeId(nodeParam)
+    }
+  }, [nodeParam, skeleton.graph.nodes])
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
@@ -24,7 +60,7 @@ export default function FeynmanPage() {
       const recognition = new SpeechRecognition()
       recognition.continuous = true
       recognition.interimResults = true
-      
+
       recognition.onresult = (event) => {
         let finalTranscript = ''
         for (let i = event.resultIndex; i < event.results.length; ++i) {
@@ -33,7 +69,7 @@ export default function FeynmanPage() {
           }
         }
         if (finalTranscript) {
-          setExplanation(prev => prev + finalTranscript)
+          setExplanation((prev) => prev + finalTranscript)
         }
       }
 
@@ -69,97 +105,78 @@ export default function FeynmanPage() {
     }
   }
 
-  useEffect(() => {
-    return () => {
-      if (abortRef.current) {
-        abortRef.current.abort()
-      }
-    }
-  }, [])
+  const effectiveConceptName = selectedNode ? selectedNode.name : customTopic.trim()
 
-  const handleStop = () => {
-    if (abortRef.current) {
-      abortRef.current.abort()
-      abortRef.current = null
-      setIsAnalyzing(false)
-      addToast({ type: 'info', message: 'Analysis stopped' })
+  const handleSelectNode = (val) => {
+    setSelectedNodeId(val)
+    setResult(null)
+    const next = new URLSearchParams(searchParams)
+    if (val) {
+      next.set('node', val)
+    } else {
+      next.delete('node')
     }
+    setSearchParams(next, { replace: true })
   }
 
   const handlePracticeInChat = () => {
+    const gaps = [
+      ...(result?.factualOrLogicalErrors || []).map((e) => `- Factual/Logical Error: ${e}`),
+      ...(result?.unexplainedJargon || []).map((j) => `- Unexplained Jargon: ${j}`),
+      ...(result?.rubricChecks || [])
+        .filter((rc) => !rc.met)
+        .map((rc) => `- Missing Rubric Point (${rc.point}): ${rc.evidenceOrGap}`),
+    ].join('\n')
+
     try {
       sessionStorage.setItem(
         'toolbox_chat_draft',
-        `I practiced explaining "${topic}" via the Feynman technique simulator.\n\nMy explanation was:\n> ${explanation}\n\nThe feedback highlighted these gaps:\n\n${feedback}\n\nPlease help me master these missing points with Socratic questions!`
+        `I practiced explaining "${effectiveConceptName}" via the Feynman Simulator.\n\nMy explanation was:\n> ${explanation}\n\nThe rubric evaluation highlighted these gaps:\n${gaps || result?.constructiveFeedback || 'Refine precision and edge cases.'}\n\nPlease help me master these missing points with Socratic questions!`,
       )
       window.dispatchEvent(new CustomEvent('toolbox-chat-draft'))
-      navigate('/chat')
+      navigate(`${prefix}/chat`)
     } catch {
-      navigate('/chat')
+      navigate(`${prefix}/chat`)
     }
   }
 
   const handleReset = () => {
-    setTopic('')
+    setSelectedNodeId('')
+    setCustomTopic('')
     setExplanation('')
-    setFeedback('')
-    setHasResult(false)
+    setResult(null)
+    const next = new URLSearchParams(searchParams)
+    next.delete('node')
+    setSearchParams(next, { replace: true })
   }
 
   const handleAnalyze = async () => {
-    if (!topic.trim() || !explanation.trim()) {
-      addToast({ type: 'error', message: 'Please provide both a topic and an explanation.' })
+    if (!effectiveConceptName || !explanation.trim()) {
+      addToast({ type: 'error', message: 'Please select or enter a concept and write your explanation.' })
       return
     }
 
     setIsAnalyzing(true)
-    setFeedback('')
-    setHasResult(false)
+    setResult(null)
 
     try {
-      const prompt = `Topic: ${topic}\n\nExplanation:\n${explanation}`
-      const systemContext = `You are a strict and precise Feynman Technique evaluator. The user is attempting to explain a concept to you as if you were a beginner.
-Your job is to analyze their explanation critically and provide structured feedback.
-
-CRITICAL RULES:
-1. Do NOT explain the concept for them. 
-2. Point out what THEY missed.
-3. Point out complex terminology or jargon THEY used without breaking it down.
-4. Highlight logical gaps or jumps in their reasoning.
-
-Format your response in Markdown with the exact following sections:
-### Missing Key Points
-(List crucial information they omitted, focusing on the core principles)
-
-### Unexplained Jargon
-(List complex words or terminology they used without explaining them simply)
-
-### Logical Gaps
-(List areas where their reasoning breaks down, skips steps, or makes assumptions)
-
-### Overall Assessment
-(A brief, constructive summary of their current comprehension level)`
-
-      abortRef.current = new AbortController()
-      await chatApi.stream(
-        { message: prompt, context: systemContext, history: [] },
-        (chunk) => {
-          setFeedback(chunk)
-          if (feedbackEndRef.current) {
-             feedbackEndRef.current.scrollIntoView({ behavior: 'smooth' })
-          }
-        },
-        null,
-        abortRef.current.signal
-      )
-      setHasResult(true)
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        addToast({ type: 'error', message: err.message || 'Failed to analyze explanation.' })
+      const evaluated = await feynmanApi.evaluate({
+        nodeId: selectedNode?.id || undefined,
+        pillarId: selectedNode?.pillarId || undefined,
+        topicId: selectedNode?.topicId || undefined,
+        conceptName: effectiveConceptName,
+        explanation: explanation.trim(),
+        model,
+      })
+      setResult(evaluated)
+      useAppStore.getState().bumpSrsVersion()
+      if (evaluated.pass) {
+        useAppStore.getState().triggerAhaMoment()
       }
+    } catch (err) {
+      addToast({ type: 'error', message: err.message || 'Failed to evaluate explanation.' })
     } finally {
       setIsAnalyzing(false)
-      abortRef.current = null
     }
   }
 
@@ -167,36 +184,88 @@ Format your response in Markdown with the exact following sections:
     <div className="page-layout feynman-container" id="feynman-page">
       <div className="page-header">
         <div>
+          {prefix && (
+            <Link
+              to={prefix}
+              className="text-xs font-semibold text-on-primary-wash hover:underline inline-flex items-center gap-1 mb-1"
+            >
+              <ArrowLeft size={13} />
+              Back to {skeleton.identity.name} Path
+            </Link>
+          )}
           <h1 className="page-title feynman-title">
             <BrainCircuit className="icon-accent" size={24} />
             Feynman Simulator
           </h1>
           <p className="page-subtitle">
-            Explain a concept as simply as possible to identify gaps in your understanding.
+            Teach a concept from first principles without hiding behind jargon — graded against your {skeleton.identity.name} curriculum rubric.
           </p>
         </div>
       </div>
 
       <div className="card feynman-card">
-        <div>
-          <label style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-2)' }}>
-            What concept are you learning?
-          </label>
-          <input
-            className="input"
-            placeholder="e.g., DNS, Paxos, React Hooks"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            disabled={isAnalyzing}
-          />
+        <div className="space-y-3">
+          <div>
+            <label
+              htmlFor="feynman-node-select"
+              style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-2)' }}
+            >
+              Concept Node ({skeleton.identity.name})
+            </label>
+            <select
+              id="feynman-node-select"
+              data-testid="feynman-node-select"
+              className="input"
+              value={selectedNodeId}
+              onChange={(e) => handleSelectNode(e.target.value)}
+              disabled={isAnalyzing}
+            >
+              <option value="">Custom Freeform Topic…</option>
+              {nodesByPillar.map(({ pillar, nodes }) =>
+                nodes.length > 0 ? (
+                  <optgroup key={pillar.id} label={`Pillar ${pillar.number}: ${pillar.name}`}>
+                    {nodes.map((node) => (
+                      <option key={node.id} value={node.id}>
+                        {node.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null,
+              )}
+            </select>
+          </div>
+
+          {selectedNode ? (
+            <div className="rounded-xl border border-outline-variant bg-surface-container p-3 text-xs text-on-surface-variant">
+              <strong className="text-on-surface">{selectedNode.name}:</strong> {selectedNode.summary}
+            </div>
+          ) : (
+            <div>
+              <label
+                htmlFor="feynman-custom-topic"
+                style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, marginBottom: 'var(--space-1)' }}
+              >
+                Or enter any custom concept:
+              </label>
+              <input
+                id="feynman-custom-topic"
+                className="input"
+                placeholder="e.g., Consistent Hashing, Paxos, Borrow Checker"
+                value={customTopic}
+                onChange={(e) => setCustomTopic(e.target.value)}
+                disabled={isAnalyzing}
+              />
+            </div>
+          )}
         </div>
 
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-            <label style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
-              Explain it to a beginner:
+            <label htmlFor="feynman-explanation-input" style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+              Explain it clearly from first principles:
             </label>
-            <button 
+            <button
+              type="button"
               className={`btn btn-sm ${isRecording ? 'btn-primary' : 'btn-outline'}`}
               onClick={toggleRecording}
               style={{ display: 'flex', alignItems: 'center', gap: 4 }}
@@ -207,8 +276,10 @@ Format your response in Markdown with the exact following sections:
             </button>
           </div>
           <textarea
+            id="feynman-explanation-input"
+            data-testid="feynman-explanation-input"
             className="input feynman-textarea"
-            placeholder="Imagine you are explaining this to someone who has never heard of it before..."
+            placeholder="Explain the core mechanism, why it is needed, unpack any specialized terms, and state what breaks when assumptions fail..."
             value={explanation}
             onChange={(e) => setExplanation(e.target.value)}
             disabled={isAnalyzing}
@@ -216,70 +287,53 @@ Format your response in Markdown with the exact following sections:
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
-          {isAnalyzing && (
-            <button
-              className="btn btn-secondary"
-              onClick={handleStop}
-              id="feynman-stop-btn"
-            >
-              <Square size={14} /> Stop
-            </button>
-          )}
-          <button 
-            className="btn btn-primary" 
-            onClick={handleAnalyze} 
-            disabled={isAnalyzing || !topic.trim() || !explanation.trim()}
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleAnalyze}
+            disabled={isAnalyzing || !effectiveConceptName || !explanation.trim()}
             id="feynman-analyze-btn"
           >
             {isAnalyzing ? <Loader className="spin" size={16} /> : <Play size={16} />}
-            {isAnalyzing ? 'Analyzing...' : 'Analyze Explanation'}
+            {isAnalyzing ? 'Evaluating Against Rubric...' : 'Analyze Explanation'}
           </button>
         </div>
       </div>
 
-      {(feedback || isAnalyzing || hasResult) && (
-        <div className="card feynman-feedback-card">
-          <h2 className="feynman-feedback-title">
-            <CheckCircle size={20} color="var(--color-success)" />
-            Feedback Analysis
-          </h2>
-          <div className="markdown-body" style={{ color: 'var(--color-text)' }}>
-            <MarkdownRenderer content={feedback || 'Waiting for AI...'} />
-            <div ref={feedbackEndRef} />
-          </div>
+      {result && (
+        <div className="space-y-4">
+          <RubricFeedbackCard
+            result={result}
+            title={`Feynman Teach-Back Verdict · ${result.conceptName || effectiveConceptName}`}
+          />
 
-          {hasResult && !isAnalyzing && (
-            <div style={{
-              display: 'flex',
-              gap: 'var(--space-2)',
-              flexWrap: 'wrap',
-              marginTop: 'var(--space-4)',
-              paddingTop: 'var(--space-4)',
-              borderTop: '1px solid var(--color-border)',
-            }}>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={handlePracticeInChat}
-                id="feynman-practice-chat-btn"
-              >
-                <MessageSquare size={13} /> Practice Gaps in Chat
-              </button>
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => navigate('/study')}
-                id="feynman-study-flashcards-btn"
-              >
-                <GraduationCap size={13} /> Study Flashcards
-              </button>
-              <button
-                className="btn btn-ghost btn-sm"
-                onClick={handleReset}
-                id="feynman-reset-btn"
-              >
-                <RotateCcw size={13} /> New Topic
-              </button>
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handlePracticeInChat}
+              id="feynman-practice-chat-btn"
+              data-testid="feynman-practice-chat-btn"
+            >
+              <MessageSquare size={13} /> Practice Missing Gaps in Socratic Chat
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => navigate(`${prefix}/study`)}
+              id="feynman-study-flashcards-btn"
+            >
+              <GraduationCap size={13} /> Study Flashcards
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={handleReset}
+              id="feynman-reset-btn"
+            >
+              <RotateCcw size={13} /> New Topic
+            </button>
+          </div>
         </div>
       )}
     </div>

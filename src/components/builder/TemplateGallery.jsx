@@ -1,19 +1,98 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Layout, X, ChevronRight } from 'lucide-react'
 import { ARCHITECTURE_TEMPLATES } from '../../utils/templates'
+import { useActiveKit } from '../../stores/useKitStore'
+
+const CONCEPT_STARTER_TEMPLATES = [
+  {
+    id: 'concept-causal-chain',
+    name: 'Causal Mechanism & Evidence Map',
+    category: 'Concept Maps',
+    description: 'Links a core concept to its underlying mechanism, theorem, concrete example, and boundary edge case.',
+    nodes: [
+      { id: 'c-core', name: 'Core Concept', icon: 'brain', category: 'Foundations', x: 260, y: 60 },
+      { id: 'c-mech', name: 'Mechanism / Process', icon: 'cog', category: 'Mechanisms', x: 110, y: 190 },
+      { id: 'c-principle', name: 'Theorem / Principle', icon: 'scale', category: 'Foundations', x: 410, y: 190 },
+      { id: 'c-example', name: 'Concrete Example', icon: 'file-text', category: 'Evidence', x: 110, y: 320 },
+      { id: 'c-counter', name: 'Counterexample / Edge Case', icon: 'alert-triangle', category: 'Evidence', x: 410, y: 320 },
+    ],
+    edges: [
+      { id: 'ce-1', from: 'c-core', to: 'c-mech', label: 'operates via' },
+      { id: 'ce-2', from: 'c-core', to: 'c-principle', label: 'governed by' },
+      { id: 'ce-3', from: 'c-mech', to: 'c-example', label: 'example of' },
+      { id: 'ce-4', from: 'c-principle', to: 'c-counter', label: 'contrasts with' },
+    ],
+  },
+  {
+    id: 'concept-hypothesis-inquiry',
+    name: 'Hypothesis & Falsification Triad',
+    category: 'Inquiry',
+    description: 'Structures a central question/hypothesis against supporting drivers and falsifying counterexamples.',
+    nodes: [
+      { id: 'h-q', name: 'Question / Hypothesis', icon: 'help-circle', category: 'Inquiry', x: 250, y: 60 },
+      { id: 'h-driver', name: 'Causal Driver / Force', icon: 'zap', category: 'Mechanisms', x: 100, y: 210 },
+      { id: 'h-edge', name: 'Counterexample / Edge Case', icon: 'alert-triangle', category: 'Evidence', x: 400, y: 210 },
+    ],
+    edges: [
+      { id: 'he-1', from: 'h-driver', to: 'h-q', label: 'causes' },
+      { id: 'he-2', from: 'h-edge', to: 'h-q', label: 'contrasts with' },
+    ],
+  },
+]
+
+function parseKitTemplate(t, fallbackCategory) {
+  let nodes = Array.isArray(t.nodes) ? t.nodes : []
+  let edges = Array.isArray(t.edges) ? t.edges : []
+  if (!nodes.length && typeof t.nodesJson === 'string') {
+    try {
+      const parsed = JSON.parse(t.nodesJson)
+      if (Array.isArray(parsed)) nodes = parsed
+    } catch {
+      nodes = []
+    }
+  }
+  if (!edges.length && typeof t.edgesJson === 'string') {
+    try {
+      const parsed = JSON.parse(t.edgesJson)
+      if (Array.isArray(parsed)) edges = parsed
+    } catch {
+      edges = []
+    }
+  }
+  return {
+    id: t.id,
+    name: t.name,
+    category: t.category || fallbackCategory,
+    description: t.description || '',
+    nodes,
+    edges,
+  }
+}
 
 /**
- * Template Gallery — shows pre-built architecture templates users can
- * load onto the builder canvas with one click.
+ * Template Gallery — shows Kit-configured and pre-built canvas templates
+ * users can load onto the builder or concept canvas with one click.
  */
 export default function TemplateGallery({ onSelect, onClose }) {
+  const { skeleton, capabilities } = useActiveKit()
+  const isConceptMode = capabilities?.canvas === 'concept'
   const [selectedCategory, setSelectedCategory] = useState('All')
 
-  const categories = ['All', ...new Set(ARCHITECTURE_TEMPLATES.map((t) => t.category))]
+  const templates = useMemo(() => {
+    const rawKitTemplates = skeleton?.canvasConfig?.templates || []
+    const kitTemplates = rawKitTemplates.map((t) =>
+      parseKitTemplate(t, isConceptMode ? 'Kit Templates' : 'Kit Architectures')
+    )
+    const defaults = isConceptMode ? CONCEPT_STARTER_TEMPLATES : ARCHITECTURE_TEMPLATES
+    const seen = new Set(kitTemplates.map((t) => t.id))
+    return [...kitTemplates, ...defaults.filter((d) => !seen.has(d.id))]
+  }, [skeleton, isConceptMode])
+
+  const categories = ['All', ...new Set(templates.map((t) => t.category))]
   const filtered =
     selectedCategory === 'All'
-      ? ARCHITECTURE_TEMPLATES
-      : ARCHITECTURE_TEMPLATES.filter((t) => t.category === selectedCategory)
+      ? templates
+      : templates.filter((t) => t.category === selectedCategory)
 
   return (
     <div className="template-gallery" id="template-gallery">

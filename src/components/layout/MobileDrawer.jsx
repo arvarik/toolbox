@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react'
-import { X, Layers, Settings, Sun, Moon, Globe, FolderKanban } from 'lucide-react'
+import { X, Layers, Settings, Sun, Moon, Globe, FolderKanban, Flame } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import PomodoroWidget from './PomodoroWidget'
 import { buildStudyNavItems } from './Sidebar'
@@ -63,6 +63,17 @@ export default function MobileDrawer({ open, onClose }) {
             <span>Library</span>
           </NavLink>
           <NavLink
+            to="/review"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `mobile-drawer-link${isActive ? ' active' : ''}`
+            }
+            id="drawer-nav-review"
+          >
+            <Flame size={18} />
+            <span>Daily Review</span>
+          </NavLink>
+          <NavLink
             to="/shared"
             onClick={onClose}
             className={({ isActive }) =>
@@ -80,6 +91,7 @@ export default function MobileDrawer({ open, onClose }) {
               <NavLink
                 key={item.to}
                 to={item.to}
+                end={Boolean(item.exact)}
                 onClick={onClose}
                 className={({ isActive }) =>
                   `mobile-drawer-link${isActive ? ' active' : ''}`

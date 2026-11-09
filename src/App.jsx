@@ -1,5 +1,5 @@
 import { useEffect, lazy, Suspense } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route } from 'react-router-dom'
 import Layout from './components/layout/Layout'
 import { processSyncQueue } from './utils/db'
 import AhaMoment from './components/shared/AhaMoment'
@@ -9,6 +9,9 @@ import CalculatorModal from './components/calculator/CalculatorModal'
 
 const LibraryHomePage = lazy(() => import('./pages/LibraryHomePage'))
 const SharedLibraryPage = lazy(() => import('./pages/SharedLibraryPage'))
+const ReviewPage = lazy(() => import('./pages/ReviewPage'))
+const KitPathPage = lazy(() => import('./pages/KitPathPage'))
+const DrillsPage = lazy(() => import('./pages/DrillsPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const GuidePage = lazy(() => import('./pages/GuidePage'))
 const BuilderPage = lazy(() => import('./pages/BuilderPage'))
@@ -70,13 +73,15 @@ export default function App() {
           <Route element={<Layout />}>
             <Route path="/" element={<LibraryHomePage />} />
             <Route path="/shared" element={<SharedLibraryPage />} />
+            <Route path="/review" element={<ReviewPage />} />
 
             {/* Multi-Kit Workspace Routes */}
-            <Route path="/k/:slug" element={<Navigate to="guide" replace />} />
+            <Route path="/k/:slug" element={<KitPathPage />} />
             <Route path="/k/:slug/chat" element={<ChatPage />} />
             <Route path="/k/:slug/guide" element={<GuidePage />} />
             <Route path="/k/:slug/guide/:pillarId" element={<GuidePage />} />
             <Route path="/k/:slug/guide/:pillarId/:topicId" element={<GuidePage />} />
+            <Route path="/k/:slug/drills" element={<DrillsPage />} />
             <Route path="/k/:slug/builder" element={<BuilderPage />} />
             <Route path="/k/:slug/canvas" element={<BuilderPage />} />
             <Route path="/k/:slug/study" element={<StudyPage />} />
@@ -90,6 +95,7 @@ export default function App() {
             <Route path="/guide" element={<GuidePage />} />
             <Route path="/guide/:pillarId" element={<GuidePage />} />
             <Route path="/guide/:pillarId/:topicId" element={<GuidePage />} />
+            <Route path="/drills" element={<DrillsPage />} />
             <Route path="/builder" element={<BuilderPage />} />
             <Route path="/study" element={<StudyPage />} />
             <Route path="/feynman" element={<FeynmanPage />} />
