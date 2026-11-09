@@ -45,6 +45,7 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:load": "node scripts/load-test.ts",
     "audit:contrast": "node scripts/contrast-audit.mjs",
     "preview": "vite preview"
   },
