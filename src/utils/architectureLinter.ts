@@ -48,7 +48,7 @@ interface AuditStats {
   infoCount: number
 }
 
-interface AuditReport {
+export interface AuditReport {
   score: number
   rating: string
   color: string

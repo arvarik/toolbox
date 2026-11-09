@@ -1,45 +1,10 @@
 import { useEffect, useCallback } from 'react'
 import { GitCommit, Check, Loader2, X, Sparkles, Eye, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
-import { chatApi } from '../../utils/api'
+import { chatApi, type CommitSectionUpdate } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
 import useCommitStore from '../../stores/useCommitStore'
 import { useActiveKit } from '../../stores/useKitStore'
-
-export interface CommitTopicContext {
-  pillarId: string
-  topicId: string
-  topicName: string
-}
-
-export interface CommitSectionUpdate {
-  sectionId: string
-  newContent: string
-  isNew?: boolean
-  reason?: string
-}
-
-interface CommitStoreSlice {
-  isOpen: boolean
-  phase: 'idle' | 'analyzing' | 'preview' | 'saving' | 'done' | 'error'
-  errorMsg: string
-  updates: CommitSectionUpdate[]
-  enabledSections: Set<string>
-  expandedSections: Set<string>
-  savedCount: number
-  messages: Array<{ role: string; content: string }>
-  topicContext: CommitTopicContext | null
-  currentCallId: number
-  closeCompletely: () => void
-  setMinimized: (min: boolean) => void
-  setPhase: (phase: CommitStoreSlice['phase']) => void
-  setError: (msg: string) => void
-  setUpdatesResult: (updates: CommitSectionUpdate[], enabled: Set<string>, expanded: Set<string>) => void
-  mergeUpdatesResult: (updates: CommitSectionUpdate[], targetSectionIds: string[]) => void
-  setEnabledSections: (updater: Set<string> | ((prev: Set<string>) => Set<string>)) => void
-  setExpandedSections: (updater: Set<string> | ((prev: Set<string>) => Set<string>)) => void
-  setSavedCount: (count: number) => void
-}
 
 /**
  * CommitModal — Intelligent session-to-guide commit.
@@ -71,7 +36,7 @@ export default function CommitModal() {
     setEnabledSections,
     setExpandedSections,
     setSavedCount,
-  } = useCommitStore() as CommitStoreSlice
+  } = useCommitStore()
 
   const analyze = useCallback(async (targetSectionIds: string[] = []) => {
     if (!topicContext) return
@@ -100,7 +65,7 @@ export default function CommitModal() {
 
       const result = (await chatApi.commitAnalyze(payload)) as { updates?: CommitSectionUpdate[] }
 
-      if (callId !== (useCommitStore.getState() as CommitStoreSlice).currentCallId) return
+      if (callId !== useCommitStore.getState().currentCallId) return
 
       if (!result.updates || result.updates.length === 0) {
         if (targetSectionIds.length === 0) {
@@ -119,7 +84,7 @@ export default function CommitModal() {
         setUpdatesResult(result.updates, initialEnabled, initialExpanded)
       }
     } catch (err) {
-      if (callId !== (useCommitStore.getState() as CommitStoreSlice).currentCallId) return
+      if (callId !== useCommitStore.getState().currentCallId) return
       setError(err instanceof Error ? err.message : 'Failed to analyze session.')
     }
   }, [messages, topicContext, selectedModel, setPhase, setUpdatesResult, setError, mergeUpdatesResult])

@@ -126,7 +126,7 @@ export interface ReverseCardDraft extends GeneratedFlashcardDraft {
   originalIndex: number
 }
 
-interface SharedKitApiEntry {
+export interface SharedKitListEntry {
   id: string
   slug: string
   name: string
@@ -148,7 +148,7 @@ interface SharedKitApiEntry {
   updatedAt: string
 }
 
-interface SharedKitDetailApiEntry extends SharedKitApiEntry {
+export interface SharedKitDetailEntry extends SharedKitListEntry {
   versions: Array<{
     version: number
     changelog: string
@@ -628,12 +628,12 @@ export const sharedKitsApi = {
     if (q) params.set('q', q)
     if (tag) params.set('tag', tag)
     const qs = params.toString()
-    return request<{ kits?: SharedKitApiEntry[] }>(
+    return request<{ kits?: SharedKitListEntry[] }>(
       `/shared-kits${qs ? `?${qs}` : ''}`,
     )
   },
   get: (slug: string) =>
-    request<{ sharedKit?: SharedKitDetailApiEntry }>(
+    request<{ sharedKit?: SharedKitDetailEntry }>(
       `/shared-kits/${encodeURIComponent(slug)}`,
     ),
   fork: (slug: string, data: Record<string, unknown> = {}) =>

@@ -5,15 +5,13 @@ import Toolbox from '../components/builder/Toolbox'
 import Canvas from '../components/builder/Canvas'
 import BoardList, { type BoardTabItem } from '../components/builder/BoardList'
 import TemplateGallery, { type CanvasTemplateItem } from '../components/builder/TemplateGallery'
-import ArchitectureAuditModal, {
-  type ArchitectureAuditReport,
-} from '../components/builder/ArchitectureAuditModal'
+import ArchitectureAuditModal from '../components/builder/ArchitectureAuditModal'
 import ChatPanel from '../components/shared/ChatPanel'
 import useAppStore from '../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
 import useIsMobile from '../hooks/useIsMobile'
 import { boardsApi } from '../utils/api'
-import { auditArchitecture } from '../utils/architectureLinter'
+import { auditArchitecture, type AuditReport } from '../utils/architectureLinter'
 import {
   toFlowNodes,
   toFlowEdges,
@@ -64,8 +62,8 @@ export default function BuilderPage() {
   const [activeBoard, setActiveBoard] = useState<string | null>(null)
   const [showTemplates, setShowTemplates] = useState(false)
   const [showAuditModal, setShowAuditModal] = useState(false)
-  const auditReport = useMemo<ArchitectureAuditReport>(
-    () => auditArchitecture(nodes, edges, { mode: canvasMode }) as ArchitectureAuditReport,
+  const auditReport = useMemo<AuditReport>(
+    () => auditArchitecture(nodes, edges, { mode: canvasMode }),
     [nodes, edges, canvasMode]
   )
   const isMobile = useIsMobile()

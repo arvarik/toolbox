@@ -12,13 +12,10 @@ import {
   Search,
   ShieldCheck,
 } from "lucide-react";
-import {
-  SharedKitChangelogModal,
-  type SharedKitListEntry,
-} from "../components/kits/KitModals";
+import { SharedKitChangelogModal } from "../components/kits/KitModals";
 import useAppStore from "../stores/appStore";
 import useKitStore from "../stores/useKitStore";
-import { sharedKitsApi } from "../utils/api";
+import { sharedKitsApi, type SharedKitListEntry } from "../utils/api";
 
 export default function SharedLibraryPage() {
   const navigate = useNavigate();

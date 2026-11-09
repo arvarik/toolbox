@@ -3,7 +3,7 @@ import { X } from 'lucide-react'
 import type { Pillar } from '../../shared/kits/kitSkeleton'
 import LearningChat, { type ActiveStudyTopic } from '../components/chat/LearningChat'
 import type { ChatMessage } from '../components/chat/SessionPicker'
-import type { CommitTopicContext } from '../components/chat/CommitModal'
+import type { CommitTopicContext } from '../stores/useCommitStore'
 import LearningTodo from '../components/chat/LearningTodo'
 import useIsMobile from '../hooks/useIsMobile'
 import useCommitStore from '../stores/useCommitStore'
@@ -94,9 +94,7 @@ export default function ChatPage() {
   const routeKitSlug = prefix ? decodeURIComponent(prefix.slice(3)) : null
 
   const [todoDrawerOpen, setTodoDrawerOpen] = useState(false)
-  const startAnalysis = useCommitStore(
-    (s: { startAnalysis: (msgs: ChatMessage[], ctx: CommitTopicContext | null) => void }) => s.startAnalysis,
-  )
+  const startAnalysis = useCommitStore((s) => s.startAnalysis)
   const [activeStudyTopic, setActiveStudyTopic] = useState<ActiveStudyTopic | null>(null)
 
   // Reset dangling topic selection & drawer when switching Kits on /k/:slug/chat

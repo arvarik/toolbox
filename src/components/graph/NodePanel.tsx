@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { graphApi } from '../../utils/api'
 import { HEALTH_COLORS, HEALTH_LABELS, type HealthBucket } from './graphLayout'
+import type { GraphNodeItem } from './GraphCanvas'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 
 const STATE_LABELS: Record<number, string> = { 0: 'New', 1: 'Learning', 2: 'Review', 3: 'Relearning' }
@@ -31,18 +32,7 @@ export interface StudySessionCard {
 }
 
 interface NodeDetailResponse {
-  node: {
-    id: string
-    name: string
-    pillarId: string
-    pillarName?: string
-    pillarColor?: string
-    topicId?: string | null
-    summary: string
-    health: HealthBucket
-    strength: number
-    locked?: boolean
-  }
+  node: GraphNodeItem
   cards: StudySessionCard[]
   prereqs: Array<{ id: string; name: string; health: HealthBucket; strength: number }>
   dependents: Array<{ id: string; name: string; health: HealthBucket; strength: number }>
