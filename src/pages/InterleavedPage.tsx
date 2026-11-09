@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { ArrowLeft, Layers } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import FlashcardView, { type FlashcardItem } from '../components/study/FlashcardView'
 import { flashcardsApi } from '../utils/api'
 import useAppStore from '../stores/appStore'

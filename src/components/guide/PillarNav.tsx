@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router'
 import { ChevronRight, ChevronDown } from 'lucide-react'
 import type { Pillar } from '../../../shared/kits/kitSkeleton'
 import { guideContentApi } from '../../utils/api'

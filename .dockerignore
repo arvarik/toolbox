@@ -34,6 +34,8 @@ coverage
 test-results
 playwright-report
 tests
+**/__tests__
+**/*.test.*
 
 # Documentation & container configs not needed inside build context
 docs

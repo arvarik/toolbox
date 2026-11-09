@@ -1,10 +1,11 @@
-import { useState, useEffect, Suspense } from 'react'
-import { Outlet, useLocation } from 'react-router-dom'
+import { lazy, useState, useEffect, Suspense } from 'react'
+import { Outlet, useLocation } from 'react-router'
 import Sidebar from './Sidebar'
 import MobileHeader from './MobileHeader'
 import MobileDrawer from './MobileDrawer'
-import ChatPanel from '../shared/ChatPanel'
 import ToastContainer from '../shared/ToastContainer'
+
+const ChatPanel = lazy(() => import('../shared/ChatPanel'))
 import ErrorBoundary from '../shared/ErrorBoundary'
 import SearchDialog from '../shared/SearchDialog'
 import useAppStore from '../../stores/appStore'
@@ -153,16 +154,18 @@ export default function Layout() {
       </main>
       {isMobile && <MobileDrawer open={menuOpen} onClose={() => setMenuOpen(false)} />}
       {showMobileChatPanel && (
-        <ChatPanel
-          page={pageKey}
-          title={
-            pageKey === 'guide'
-              ? `Ask about ${skeleton.identity.name}`
-              : pageKey === 'builder'
-                ? 'Verify Architecture'
-                : 'AI Card Generator'
-          }
-        />
+        <Suspense fallback={null}>
+          <ChatPanel
+            page={pageKey}
+            title={
+              pageKey === 'guide'
+                ? `Ask about ${skeleton.identity.name}`
+                : pageKey === 'builder'
+                  ? 'Verify Architecture'
+                  : 'AI Card Generator'
+            }
+          />
+        </Suspense>
       )}
       <ToastContainer />
       <SearchDialog open={searchOpen} onClose={() => setSearchOpen(false)} />

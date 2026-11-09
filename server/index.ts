@@ -1,4 +1,4 @@
-import "dotenv/config";
+import "./utils/loadEnv.ts";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";

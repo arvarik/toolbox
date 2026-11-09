@@ -7,6 +7,7 @@
  *   node scripts/fetch-models.ts [destDir]
  *   node scripts/fetch-models.ts --check [destDir]
  */
+import "../server/utils/loadEnv.ts";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

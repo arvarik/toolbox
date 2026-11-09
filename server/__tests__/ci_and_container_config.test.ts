@@ -1,5 +1,6 @@
 // @vitest-environment node
 import fs from "node:fs";
+import { builtinModules } from "node:module";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -128,5 +129,66 @@ describe("GitHub Actions supply-chain & container config invariants", () => {
     expect(publish).toContain("platform: linux/amd64");
     expect(publish).toContain("platform: linux/arm64");
     expect(publish).toContain('--title "$TAG"');
+  });
+
+  it("keeps production dependencies exact: every server/shared/CLI external import is in dependencies and pure-client packages stay in devDependencies", () => {
+    const pkg = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "package.json"), "utf8"),
+    ) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    };
+    const prodDeps = new Set(Object.keys(pkg.dependencies ?? {}));
+
+    const runtimeFiles: string[] = [
+      path.join(ROOT, "scripts", "reset-password.ts"),
+      path.join(ROOT, "scripts", "fetch-models.ts"),
+    ];
+    for (const dir of ["server", "shared"]) {
+      const walk = (d: string) => {
+        for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+          if (entry.name === "__tests__") continue;
+          const full = path.join(d, entry.name);
+          if (entry.isDirectory()) walk(full);
+          else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) {
+            runtimeFiles.push(full);
+          }
+        }
+      };
+      walk(path.join(ROOT, dir));
+    }
+
+    const builtins = new Set(builtinModules);
+    const importedPackages = new Set<string>();
+    const specRe =
+      /(?:^\s*import\s+(?:type\s+)?(?:\{[\s\S]*?\}|[^"'\n]+?)\s+from\s+|^\s*import\s+|\bimport\s*\(\s*)["'](@[a-z0-9._-]+\/[a-z0-9._-]+|[a-z0-9][a-z0-9._-]*)(?:\/[^"']*)?["']/gm;
+    for (const file of runtimeFiles) {
+      const content = fs
+        .readFileSync(file, "utf8")
+        .replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+      for (const m of content.matchAll(specRe)) {
+        const pkgName = m[1] ?? "";
+        if (pkgName && !builtins.has(pkgName)) importedPackages.add(pkgName);
+      }
+    }
+
+    for (const mod of importedPackages) {
+      expect(
+        prodDeps.has(mod),
+        `Server runtime imports "${mod}" which is missing from package.json dependencies`,
+      ).toBe(true);
+    }
+    for (const dep of prodDeps) {
+      expect(
+        importedPackages.has(dep),
+        `package.json dependencies contains "${dep}" which is never imported by server/shared/CLI at runtime (move to devDependencies)`,
+      ).toBe(true);
+    }
+
+    const pagesTs = fs.readFileSync(
+      path.join(ROOT, "server", "platform", "research", "pages.ts"),
+      "utf8",
+    );
+    expect(pagesTs).toContain('from "cheerio/slim"');
   });
 });

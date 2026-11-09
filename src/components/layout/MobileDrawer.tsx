@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { X, Layers, Settings, Sun, Moon, Globe, FolderKanban, Flame } from 'lucide-react'
-import { NavLink } from 'react-router-dom'
+import { NavLink } from 'react-router'
 import PomodoroWidget from './PomodoroWidget'
 import { buildStudyNavItems } from './Sidebar'
 import useAppStore from '../../stores/appStore'

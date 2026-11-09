@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link } from 'react-router'
 import {
   X, BookOpen, PenTool, GraduationCap, Loader2, Lock,
   ArrowUpLeft, ArrowDownRight, Layers, Calculator, Wrench,

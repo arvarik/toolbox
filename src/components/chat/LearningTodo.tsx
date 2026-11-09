@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, type CSSProperties } from 'react'
 import { CheckCircle2, Circle, ChevronRight, ChevronDown, BookOpen, Sparkles } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import type { Pillar } from '../../../shared/kits/kitSkeleton'
 import { guideContentApi } from '../../utils/api'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'

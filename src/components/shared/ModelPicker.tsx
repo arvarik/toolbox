@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate } from 'react-router'
 import { Search, Check, RefreshCw, ChevronsUpDown, Settings2, Boxes } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import type { ModelCatalogItem, ModelGroup } from '../../utils/api'
