@@ -2,8 +2,6 @@ import { useState, useEffect, useCallback, type ReactNode } from 'react'
 import { X } from 'lucide-react'
 import type { Pillar } from '../../shared/kits/kitSkeleton'
 import LearningChat, { type ActiveStudyTopic } from '../components/chat/LearningChat'
-import type { ChatMessage } from '../components/chat/SessionPicker'
-import type { CommitTopicContext } from '../stores/useCommitStore'
 import LearningTodo from '../components/chat/LearningTodo'
 import useIsMobile from '../hooks/useIsMobile'
 import useCommitStore from '../stores/useCommitStore'
@@ -109,10 +107,6 @@ export default function ChatPage() {
     return () => window.removeEventListener('toggle-study-plan', handler)
   }, [])
 
-  const handleCommitClick = useCallback((messages: ChatMessage[], topicContext: CommitTopicContext | null) => {
-    startAnalysis(messages, topicContext || null)
-  }, [startAnalysis])
-
   const handleStudyTopic = useCallback((pillar: Pillar, topic: Pillar['topics'][number]) => {
     setTodoDrawerOpen(false)
     requestAnimationFrame(() => setActiveStudyTopic({ pillar, topic }))
@@ -127,7 +121,7 @@ export default function ChatPage() {
       <div className="learning-hub-main">
         <LearningChat
           activeTopic={activeStudyTopic}
-          onCommitClick={handleCommitClick}
+          onCommitClick={startAnalysis}
           routeKitSlug={routeKitSlug}
         />
       </div>

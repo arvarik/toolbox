@@ -29,10 +29,8 @@ export interface CommitStoreState {
   savedCount: number
   messages: CommitMessage[]
   topicContext: CommitTopicContext | null
-  kitSlug: string | null
   currentCallId: number
 
-  setOpen: (open: boolean) => void
   setMinimized: (min: boolean) => void
   closeCompletely: () => void
   startAnalysis: (messages: CommitMessage[], topicContext: CommitTopicContext | null) => void
@@ -62,10 +60,8 @@ const useCommitStore = create<CommitStoreState>((set) => ({
 
   messages: [],
   topicContext: null,
-  kitSlug: null,
   currentCallId: 0,
 
-  setOpen: (open) => set({ isOpen: open, isMinimized: false }),
   setMinimized: (min) => set({ isMinimized: min, isOpen: !min }),
   closeCompletely: () =>
     set((s) => ({
@@ -78,7 +74,6 @@ const useCommitStore = create<CommitStoreState>((set) => ({
       savedCount: 0,
       messages: [],
       topicContext: null,
-      kitSlug: null,
       errorMsg: '',
       currentCallId: s.currentCallId + 1,
     })),
@@ -95,7 +90,6 @@ const useCommitStore = create<CommitStoreState>((set) => ({
       savedCount: 0,
       messages,
       topicContext,
-      kitSlug: useKitStore.getState().activeKitSlug,
     }),
 
   setPhase: (phase) => set({ phase }),

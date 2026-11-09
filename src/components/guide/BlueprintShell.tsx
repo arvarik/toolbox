@@ -12,7 +12,7 @@ import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import Skeleton from '../shared/Skeleton'
 import PullToRefresh from '../shared/PullToRefresh'
-import { guideContentApi, chatApi } from '../../utils/api'
+import { guideContentApi, chatApi, type GeneratedFlashcardDraft } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 import useIsMobile from '../../hooks/useIsMobile'
@@ -41,12 +41,6 @@ const iconMap: Record<string, LucideIcon> = {
 interface CommittedSection {
   content: string
   committedAt: string | null
-}
-
-interface GeneratedCard {
-  front: string
-  back: string
-  source_section_id?: string
 }
 
 /**
@@ -87,7 +81,7 @@ export default function BlueprintShell() {
   // Flashcards state
   const selectedModel = useAppStore((s) => s.model)
   const [showReviewModal, setShowReviewModal] = useState(false)
-  const [generatedCards, setGeneratedCards] = useState<GeneratedCard[]>([])
+  const [generatedCards, setGeneratedCards] = useState<GeneratedFlashcardDraft[]>([])
   const [isGeneratingCards, setIsGeneratingCards] = useState(false)
 
   // Reset expanded/edit state when Kit, pillar, or topic changes
@@ -229,13 +223,13 @@ export default function BlueprintShell() {
 
     setIsGeneratingCards(true)
     try {
-      const res = (await chatApi.generateFlashcards({
+      const res = await chatApi.generateFlashcards({
         sections: sectionEntries,
         topicName: topic?.name,
         model: selectedModel,
         pillarId,
         topicId,
-      })) as { cards?: GeneratedCard[] }
+      })
       if (res.cards && res.cards.length > 0) {
         setGeneratedCards(res.cards)
         setShowReviewModal(true)
@@ -473,6 +467,26 @@ export default function BlueprintShell() {
           const committed = sectionContent[section.id]
           const hasContent = Boolean(committed?.content && committed.content.trim().length > 0)
           const isEditing = editingSection === section.id
+          const editActions = isEditing && (
+            <div className="blueprint-edit-actions-bottom">
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={cancelEdit}
+                disabled={isSaving}
+              >
+                <X size={12} />
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => { void saveEdit(section.id) }}
+                disabled={isSaving || !editDraft.trim()}
+              >
+                {isSaving ? <RefreshCw size={12} className="spin" /> : <Save size={12} />}
+                Save Notes
+              </button>
+            </div>
+          )
 
           return (
             <div
@@ -548,24 +562,7 @@ export default function BlueprintShell() {
                         placeholder="Write markdown notes for this section..."
                         className="blueprint-edit-textarea"
                       />
-                      <div className="blueprint-edit-actions-bottom">
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={cancelEdit}
-                          disabled={isSaving}
-                        >
-                          <X size={12} />
-                          Cancel
-                        </button>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          onClick={() => { void saveEdit(section.id) }}
-                          disabled={isSaving || !editDraft.trim()}
-                        >
-                          {isSaving ? <RefreshCw size={12} className="spin" /> : <Save size={12} />}
-                          Save Notes
-                        </button>
-                      </div>
+                      {editActions}
                     </div>
                   )}
 
@@ -606,24 +603,7 @@ export default function BlueprintShell() {
                     placeholder="Write markdown notes for this section..."
                     className="blueprint-edit-textarea blueprint-edit-textarea-mobile"
                   />
-                  <div className="blueprint-edit-actions-bottom">
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={cancelEdit}
-                      disabled={isSaving}
-                    >
-                      <X size={12} />
-                      Cancel
-                    </button>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      onClick={() => { void saveEdit(section.id) }}
-                      disabled={isSaving || !editDraft.trim()}
-                    >
-                      {isSaving ? <RefreshCw size={12} className="spin" /> : <Save size={12} />}
-                      Save Notes
-                    </button>
-                  </div>
+                  {editActions}
                 </div>
               )}
             </div>
