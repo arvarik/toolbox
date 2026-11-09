@@ -6,12 +6,15 @@ import {
   type CardForNodeMatching,
 } from "../../shared/kits/kitSkeleton.ts";
 import { SYSTEM_DESIGN_KIT_SKELETON } from "../../shared/kits/systemDesignKit.ts";
+import { retrievability } from "../srs/scheduler.ts";
 
 export const MASTERED_MIN_EASE = 2.5;
 export const MASTERED_MIN_INTERVAL_DAYS = 21;
 export const DUE_SOON_HOURS = 48;
 export const FRAGILE_EASE = 2.0;
 export const PREREQ_SATISFIED_RATIO = 0.6;
+
+const DAY_MS = 24 * 3600 * 1000;
 
 export type CardHealthStatus =
   | "new"
@@ -29,6 +32,10 @@ export interface HealthCardRow extends CardForNodeMatching {
   ease_factor?: number | null;
   interval?: number | null;
   next_review?: string | null;
+  last_reviewed?: string | null;
+  stability?: number | null;
+  difficulty?: number | null;
+  lapses?: number | null;
 }
 
 export interface NodeHealthCounts {
@@ -51,6 +58,15 @@ export interface ComputedNodeHealth {
   ready: boolean;
 }
 
+const SCORE: Record<CardHealthStatus, number> = {
+  new: 0,
+  learning: 0.25,
+  lapsed: 0.1,
+  due: 0.4,
+  maturing: 0.7,
+  mastered: 1,
+};
+
 export function cardStatus(
   card: HealthCardRow,
   now: Date = new Date(),
@@ -69,6 +85,33 @@ export function cardStatus(
     return "mastered";
   }
   return "maturing";
+}
+
+export function cardStrength(
+  card: HealthCardRow,
+  nowOrMs: Date | number = new Date(),
+): number {
+  const state = card.state ?? 0;
+  if (state === 2 && card.stability != null && card.stability > 0) {
+    const nowMs =
+      typeof nowOrMs === "number" ? nowOrMs : nowOrMs.getTime();
+    let elapsedDays = 0;
+    if (card.last_reviewed) {
+      const lastMs = Date.parse(card.last_reviewed);
+      if (Number.isFinite(lastMs)) {
+        elapsedDays = Math.max(0, (nowMs - lastMs) / DAY_MS);
+      }
+    } else if (card.next_review) {
+      const nextMs = Date.parse(card.next_review);
+      if (Number.isFinite(nextMs)) {
+        const daysUntilDue = (nextMs - nowMs) / DAY_MS;
+        elapsedDays = Math.max(0, (card.interval || 0) - daysUntilDue);
+      }
+    }
+    return retrievability(elapsedDays, card.stability);
+  }
+  const nowDate = typeof nowOrMs === "number" ? new Date(nowOrMs) : nowOrMs;
+  return SCORE[cardStatus(card, nowDate)];
 }
 
 export function nodeHealth(
@@ -91,14 +134,6 @@ export function nodeHealth(
     return { health: "unseen", strength: 0, counts };
   }
 
-  const SCORE: Record<CardHealthStatus, number> = {
-    new: 0,
-    learning: 0.25,
-    lapsed: 0.1,
-    due: 0.4,
-    maturing: 0.7,
-    mastered: 1,
-  };
   let scoreSum = 0;
   let hasRemediation = false;
   let dueSoon = false;
@@ -107,7 +142,7 @@ export function nodeHealth(
   for (const card of cards) {
     const status = cardStatus(card, now);
     counts[status] += 1;
-    scoreSum += SCORE[status];
+    scoreSum += cardStrength(card, now);
     if (remediationCardIds.has(card.id)) hasRemediation = true;
     if (
       (card.state === 2 || card.state === 1 || card.state === 3) &&

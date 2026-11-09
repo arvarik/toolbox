@@ -5,11 +5,14 @@ import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import { resolveActiveKit, resolveKitById } from "../kits/kitContext.ts";
 import {
   calculateNextSrsState,
+  clampDesiredRetention,
   getCardPreviews,
   formatRelativeTime,
   parseDeckSettings,
   type DeckSettings,
 } from "../srs/scheduler.ts";
+import { nodesForCard } from "../../shared/kits/kitSkeleton.ts";
+import { applyImplicitPrerequisiteCredit } from "../graph/encompassing.ts";
 import { planRemediation, type RemediationCardRow } from "../graph/remediation.ts";
 import logger from "../utils/logger.ts";
 
@@ -43,6 +46,9 @@ interface FlashcardRow {
   last_reviewed: string | null;
   state: number;
   learning_step: number;
+  stability: number | null;
+  difficulty: number | null;
+  lapses: number;
   prerequisite_id: string | null;
   embedding: string | null;
   source_pillar_id: string | null;
@@ -194,9 +200,41 @@ router.get("/", (req, res) => {
 
 router.get("/all/cards/due", (req, res) => {
   const scope = scopeOf(req);
-  const allDecks = db
-    .prepare("SELECT id, name, settings FROM decks WHERE ownerId = ?")
-    .all(scope.ownerId) as Array<{ id: string; name: string; settings: string }>;
+  const kitFilter =
+    typeof req.query.kitId === "string" ? req.query.kitId.trim() : "";
+
+  interface JoinedDeckRow {
+    id: string;
+    name: string;
+    settings: string;
+    kit_id: string;
+    kit_slug: string;
+    kit_name: string;
+    kit_icon: string;
+    kit_color: string;
+  }
+
+  const allDecks = (
+    kitFilter
+      ? db
+          .prepare(
+            `SELECT d.id, d.name, d.settings, d.kit_id,
+                    k.slug AS kit_slug, k.name AS kit_name, k.icon AS kit_icon, k.color AS kit_color
+             FROM decks d
+             JOIN kits k ON k.ownerId = d.ownerId AND k.id = d.kit_id
+             WHERE d.ownerId = ? AND (k.id = ? OR k.slug = ?)`,
+          )
+          .all(scope.ownerId, kitFilter, kitFilter)
+      : db
+          .prepare(
+            `SELECT d.id, d.name, d.settings, d.kit_id,
+                    k.slug AS kit_slug, k.name AS kit_name, k.icon AS kit_icon, k.color AS kit_color
+             FROM decks d
+             JOIN kits k ON k.ownerId = d.ownerId AND k.id = d.kit_id
+             WHERE d.ownerId = ?`,
+          )
+          .all(scope.ownerId)
+  ) as JoinedDeckRow[];
 
   let allDueCards: Array<FlashcardRow & Record<string, unknown>> = [];
 
@@ -245,7 +283,9 @@ router.get("/all/cards/due", (req, res) => {
      LIMIT ?`,
   );
 
-  const deckNames = new Map<string, string>(allDecks.map((d) => [d.id, d.name]));
+  const deckMeta = new Map<string, JoinedDeckRow>(
+    allDecks.map((d) => [d.id, d]),
+  );
   const deckSettings = new Map<string, DeckSettings>(
     allDecks.map((d) => [d.id, parseDeckSettings(d.settings)]),
   );
@@ -286,6 +326,11 @@ router.get("/all/cards/due", (req, res) => {
     const combinedWithPreviews = combined.map((c) => ({
       ...c,
       deckName: deck.name,
+      kit_id: deck.kit_id,
+      kit_slug: deck.kit_slug,
+      kit_name: deck.kit_name,
+      kit_icon: deck.kit_icon,
+      kit_color: deck.kit_color,
       srs_previews: getCardPreviews(c, settings),
     }));
 
@@ -297,13 +342,26 @@ router.get("/all/cards/due", (req, res) => {
     [allDueCards[i], allDueCards[j]] = [allDueCards[j], allDueCards[i]];
   }
 
-  const withRemediation = applyRemediation(scope, allDueCards, null).map((c) => ({
-    ...c,
-    deckName: (c.deckName as string | undefined) ?? (deckNames.get(c.deck_id) || ""),
-    srs_previews:
-      c.srs_previews ??
-      getCardPreviews(c, deckSettings.get(c.deck_id) || parseDeckSettings(null)),
-  }));
+  const withRemediation = applyRemediation(scope, allDueCards, null)
+    .filter((c) => deckMeta.has(c.deck_id))
+    .map((c) => {
+      const meta = deckMeta.get(c.deck_id)!;
+      return {
+        ...c,
+        deckName: (c.deckName as string | undefined) ?? meta.name,
+        kit_id: meta.kit_id,
+        kit_slug: meta.kit_slug,
+        kit_name: meta.kit_name,
+        kit_icon: meta.kit_icon,
+        kit_color: meta.kit_color,
+        srs_previews:
+          c.srs_previews ??
+          getCardPreviews(
+            c,
+            deckSettings.get(c.deck_id) || parseDeckSettings(null),
+          ),
+      };
+    });
 
   res.json(withRemediation);
 });
@@ -425,14 +483,21 @@ router.put("/:id", (req, res) => {
 
 router.put("/:deckId/settings", (req, res) => {
   const scope = scopeOf(req);
-  const { new_limit, review_limit, steps, lapse_steps, easy_bonus } =
-    req.body as {
-      new_limit?: number | string;
-      review_limit?: number | string;
-      steps?: string;
-      lapse_steps?: string;
-      easy_bonus?: number | string;
-    };
+  const {
+    new_limit,
+    review_limit,
+    steps,
+    lapse_steps,
+    easy_bonus,
+    desired_retention,
+  } = req.body as {
+    new_limit?: number | string;
+    review_limit?: number | string;
+    steps?: string;
+    lapse_steps?: string;
+    easy_bonus?: number | string;
+    desired_retention?: number | string;
+  };
 
   const existing = getOwnedDeck(scope, req.params.deckId);
   if (!existing) {
@@ -461,6 +526,10 @@ router.put("/:deckId/settings", (req, res) => {
       easy_bonus !== undefined
         ? parseFloat(String(easy_bonus))
         : currentSettings.easy_bonus || 1.3,
+    desired_retention:
+      desired_retention !== undefined
+        ? clampDesiredRetention(parseFloat(String(desired_retention)))
+        : currentSettings.desired_retention,
   };
 
   db.prepare(
@@ -861,6 +930,9 @@ function handleReview(req: Request, res: Response): void {
        last_reviewed = ?,
        state = ?,
        learning_step = ?,
+       stability = ?,
+       difficulty = ?,
+       lapses = ?,
        updated_at = datetime('now')
      WHERE ownerId = ? AND id = ?`,
   ).run(
@@ -871,6 +943,9 @@ function handleReview(req: Request, res: Response): void {
     updated.last_reviewed,
     updated.state,
     updated.learning_step,
+    updated.stability,
+    updated.difficulty,
+    updated.lapses,
     scope.ownerId,
     card.id,
   );
@@ -886,6 +961,25 @@ function handleReview(req: Request, res: Response): void {
      WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL`,
   ).run(scope.ownerId, card.id);
 
+  let implicitCreditCount = 0;
+  if (quality >= 4 && (card.state === 2 || updated.state === 2)) {
+    try {
+      const matchedNodes = nodesForCard(card, kit.skeleton.graph.nodes);
+      const creditedIds = new Set<string>();
+      for (const nodeId of matchedNodes) {
+        const credit = applyImplicitPrerequisiteCredit(db, scope, kit, {
+          nodeId,
+          excludeCardId: card.id,
+        });
+        for (const id of credit.updatedCardIds) creditedIds.add(id);
+      }
+      implicitCreditCount = creditedIds.size;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error("[decks/review] Implicit credit propagation failed:", msg);
+    }
+  }
+
   const remediation: Array<{
     cardId: string;
     front: string;
@@ -897,9 +991,13 @@ function handleReview(req: Request, res: Response): void {
     try {
       const allCards = db
         .prepare(
-          "SELECT id, node_id, front, back, state, ease_factor, interval, next_review, prerequisite_id, source_topic_id FROM flashcards WHERE ownerId = ?",
+          `SELECT f.id, f.node_id, f.front, f.back, f.state, f.ease_factor, f.interval,
+                  f.next_review, f.prerequisite_id, f.source_topic_id
+           FROM flashcards f
+           JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+           WHERE f.ownerId = ? AND d.kit_id = ?`,
         )
-        .all(scope.ownerId) as RemediationCardRow[];
+        .all(scope.ownerId, kit.id) as RemediationCardRow[];
       const plan = planRemediation(card, allCards, {
         nodes: kit.skeleton.graph.nodes,
         edges: kit.skeleton.graph.edges,
@@ -945,6 +1043,7 @@ function handleReview(req: Request, res: Response): void {
     ...result,
     srs_previews: getCardPreviews(result, settings),
     remediation,
+    implicit_credit_count: implicitCreditCount,
   });
 }
 

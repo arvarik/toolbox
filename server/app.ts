@@ -41,6 +41,7 @@ import searchRoutes from "./routes/search.ts";
 import graphRoutes from "./routes/graph.ts";
 import calculatorRoutes from "./routes/calculator.ts";
 import { seedApiKeysFromEnv } from "./providers/index.ts";
+import { mountPedagogyRoutes } from "./srs/pedagogyRoutesMount.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -90,6 +91,7 @@ export function createApp(): Express {
   app.use("/api/search", ...authed, searchRoutes);
   app.use("/api/graph", ...authed, graphRoutes);
   app.use("/api/calculator", ...authed, calculatorRoutes);
+  mountPedagogyRoutes(app, authed);
 
   app.use("/api", notFoundHandler);
 
