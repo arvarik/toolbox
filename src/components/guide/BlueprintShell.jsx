@@ -10,9 +10,9 @@ import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import Skeleton from '../shared/Skeleton'
 import PullToRefresh from '../shared/PullToRefresh'
-import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
 import { guideContentApi, chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
+import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 import useIsMobile from '../../hooks/useIsMobile'
 
 const EMPTY_ARRAY = []
@@ -45,10 +45,12 @@ export default function BlueprintShell() {
   const { pillarId, topicId } = useParams()
   const navigate = useNavigate()
   const addToast = useAppStore((s) => s.addToast)
+  const { skeleton, pillars, sectionsByPillar } = useActiveKit()
+  const prefix = useKitRoutePrefix()
 
-  const pillar = PILLARS.find((p) => p.id === pillarId)
+  const pillar = pillars.find((p) => p.id === pillarId)
   const topic = pillar?.topics.find((t) => t.id === topicId)
-  const sections = BLUEPRINT_SECTIONS[pillarId] || EMPTY_ARRAY
+  const sections = (pillarId && sectionsByPillar[pillarId]) || EMPTY_ARRAY
 
   const [expandedSections, setExpandedSections] = useState(() => {
     return sections.length > 0 ? { [sections[0].id]: true } : {}
@@ -227,8 +229,8 @@ export default function BlueprintShell() {
   // ── No pillar selected — Library overview landing ───────────────────────────
   if (!pillar) {
     // Calculate per-pillar progress
-    const pillarStats = PILLARS.map((p) => {
-      const bpSections = BLUEPRINT_SECTIONS[p.id] || []
+    const pillarStats = pillars.map((p) => {
+      const bpSections = sectionsByPillar[p.id] || []
       const total = p.topics.length * bpSections.length
       const filled = p.topics.reduce((acc, t) => {
         return acc + bpSections.filter((s) => progress[`${p.id}__${t.id}__${s.id}`]).length
@@ -240,6 +242,12 @@ export default function BlueprintShell() {
     const totalFilled = pillarStats.reduce((a, p) => a + p.filled, 0)
     const overallPercent = totalSections > 0 ? Math.round((totalFilled / totalSections) * 100) : 0
 
+    const heroDescription =
+      skeleton.identity.slug === 'system-design'
+        ? 'Your authoritative library of system design knowledge across seven pillars. Study through chat, then commit insights here for reference.'
+        : skeleton.identity.description ||
+          `Your authoritative library of ${skeleton.identity.name} knowledge across ${pillars.length} pillars. Study through chat, then commit insights here for reference.`
+
     return (
       <PullToRefresh onRefresh={fetchProgress}>
         <div className="page-wrapper blueprint-library-wrapper">
@@ -249,11 +257,10 @@ export default function BlueprintShell() {
             <BookOpen size={28} style={{ color: 'var(--color-accent)' }} />
           </div>
           <h1 className="page-title blueprint-hero-title">
-            System Design Guide
+            {skeleton.identity.name} Guide
           </h1>
           <p className="page-description blueprint-hero-desc">
-            Your authoritative library of system design knowledge across seven pillars.
-            Study through chat, then commit insights here for reference.
+            {heroDescription}
           </p>
         </div>
 
@@ -285,7 +292,7 @@ export default function BlueprintShell() {
           <button
             className="btn btn-primary"
             style={{ width: '100%', justifyContent: 'center', fontSize: 'var(--text-sm)' }}
-            onClick={() => navigate('/chat')}
+            onClick={() => navigate(`${prefix}/chat`)}
           >
             <Sparkles size={15} />
             {totalFilled > 0 ? 'Continue Studying →' : 'Start Studying →'}
@@ -302,7 +309,7 @@ export default function BlueprintShell() {
             <div
               key={p.id}
               className="blueprint-pillar-card"
-              onClick={() => navigate(`/guide/${p.id}`)}
+              onClick={() => navigate(`${prefix}/guide/${p.id}`)}
               style={{ '--dynamic-color': p.color }}
             >
               <div className="blueprint-pillar-card-header">
@@ -364,7 +371,7 @@ export default function BlueprintShell() {
             <div
               key={t.id}
               className="blueprint-pillar-card"
-              onClick={() => navigate(`/guide/${pillar.id}/${t.id}`)}
+              onClick={() => navigate(`${prefix}/guide/${pillar.id}/${t.id}`)}
               style={{ '--dynamic-color': pillar.color }}
             >
               <div className="blueprint-pillar-card-header">
@@ -417,7 +424,7 @@ export default function BlueprintShell() {
           <button
             className="btn btn-primary btn-sm"
             style={{ fontSize: 'var(--text-xs)', color: 'var(--color-bg-primary)', whiteSpace: 'nowrap' }}
-            onClick={() => navigate('/chat')}
+            onClick={() => navigate(`${prefix}/chat`)}
           >
             <Sparkles size={12} />
             Study in Chat

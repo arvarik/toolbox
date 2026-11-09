@@ -1,19 +1,10 @@
-import { useEffect } from 'react'
-import { X, Layers, BookOpen, PenTool, GraduationCap, Settings, BrainCircuit, Shuffle, MessageSquare, Waypoints, Calculator, Sun, Moon } from 'lucide-react'
+import { useEffect, useMemo } from 'react'
+import { X, Layers, Settings, Sun, Moon, Globe, FolderKanban } from 'lucide-react'
 import { NavLink } from 'react-router-dom'
 import PomodoroWidget from './PomodoroWidget'
+import { buildStudyNavItems } from './Sidebar'
 import useAppStore from '../../stores/appStore'
-
-const navItems = [
-  { to: '/chat', icon: MessageSquare, label: 'Chat' },
-  { to: '/guide', icon: BookOpen, label: 'Guide' },
-  { to: '/builder', icon: PenTool, label: 'Builder' },
-  { to: '/study', icon: GraduationCap, label: 'Flashcards' },
-  { to: '/feynman', icon: BrainCircuit, label: 'Feynman' },
-  { to: '/interleaved', icon: Shuffle, label: 'Interleaved' },
-  { to: '/graph', icon: Waypoints, label: 'Graph' },
-  { to: '/calculator', icon: Calculator, label: 'Calculator' },
-]
+import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 
 export default function MobileDrawer({ open, onClose }) {
   const model = useAppStore((s) => s.model)
@@ -22,6 +13,13 @@ export default function MobileDrawer({ open, onClose }) {
   const toggleTheme = useAppStore((s) => s.toggleTheme)
   const availableModels = useAppStore((s) => s.availableModels)
   const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
+  const { capabilities } = useActiveKit()
+  const prefix = useKitRoutePrefix()
+
+  const studyItems = useMemo(
+    () => buildStudyNavItems(prefix, capabilities),
+    [prefix, capabilities],
+  )
 
   useEffect(() => {
     if (open) fetchAvailableModels()
@@ -52,7 +50,31 @@ export default function MobileDrawer({ open, onClose }) {
         </div>
 
         <nav className="mobile-drawer-nav" role="navigation" aria-label="mobile">
-          {navItems.map((item) => {
+          <NavLink
+            to="/"
+            end
+            onClick={onClose}
+            className={({ isActive }) =>
+              `mobile-drawer-link${isActive ? ' active' : ''}`
+            }
+            id="drawer-nav-library"
+          >
+            <FolderKanban size={18} />
+            <span>Library</span>
+          </NavLink>
+          <NavLink
+            to="/shared"
+            onClick={onClose}
+            className={({ isActive }) =>
+              `mobile-drawer-link${isActive ? ' active' : ''}`
+            }
+            id="drawer-nav-shared"
+          >
+            <Globe size={18} />
+            <span>Shared Kits</span>
+          </NavLink>
+
+          {studyItems.map((item) => {
             const Icon = item.icon
             return (
               <NavLink
@@ -62,7 +84,7 @@ export default function MobileDrawer({ open, onClose }) {
                 className={({ isActive }) =>
                   `mobile-drawer-link${isActive ? ' active' : ''}`
                 }
-                id={`drawer-nav-${item.label.toLowerCase()}`}
+                id={`drawer-${item.navId}`}
               >
                 <Icon size={18} />
                 <span>{item.label}</span>

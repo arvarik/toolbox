@@ -1,20 +1,24 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ChevronRight, ChevronDown } from 'lucide-react'
-import { PILLARS, BLUEPRINT_SECTIONS } from '../../utils/constants'
 import { guideContentApi } from '../../utils/api'
+import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 import useIsMobile from '../../hooks/useIsMobile'
 
 /**
- * Left sidebar navigation listing the 7 pillars with collapsible topic lists.
+ * Left sidebar navigation listing the active Kit's pillars with collapsible topic lists.
  * Shows per-topic progress badges (filled section count / total sections).
  */
 export default function PillarNav() {
   const { pillarId, topicId } = useParams()
   const navigate = useNavigate()
-  const [expanded, setExpanded] = useState(
-    pillarId ? { [pillarId]: true } : { compute: true }
-  )
+  const { pillars, sectionsByPillar } = useActiveKit()
+  const prefix = useKitRoutePrefix()
+  const defaultPillarId = pillars[0]?.id || 'compute'
+
+  const [expanded, setExpanded] = useState(() => ({
+    [pillarId || defaultPillarId]: true,
+  }))
   const isMobile = useIsMobile()
 
   // Progress data from the backend
@@ -24,7 +28,7 @@ export default function PillarNav() {
     guideContentApi.progress()
       .then((data) => setProgress(data || {}))
       .catch(() => {})
-  }, [])
+  }, [prefix])
 
   const toggleExpand = (id) => {
     setExpanded((prev) => ({ ...prev, [id]: !prev[id] }))
@@ -32,28 +36,30 @@ export default function PillarNav() {
 
   const handlePillarClick = (pillar) => {
     toggleExpand(pillar.id)
-    navigate(`/guide/${pillar.id}`)
+    navigate(`${prefix}/guide/${pillar.id}`)
   }
 
   const handleTopicClick = (pillar, topic) => {
-    navigate(`/guide/${pillar.id}/${topic.id}`)
+    navigate(`${prefix}/guide/${pillar.id}/${topic.id}`)
   }
 
   // Returns { filled, total } for a topic
-  const getTopicProgress = (pillarId, topicId) => {
-    const sections = BLUEPRINT_SECTIONS[pillarId] || []
-    const filled = sections.filter((s) => progress[`${pillarId}__${topicId}__${s.id}`]).length
+  const getTopicProgress = (pId, tId) => {
+    const sections = sectionsByPillar[pId] || []
+    const filled = sections.filter((s) => progress[`${pId}__${tId}__${s.id}`]).length
     return { filled, total: sections.length }
   }
 
   if (isMobile) {
-    const activePillar = PILLARS.find((p) => p.id === (pillarId || 'compute')) || PILLARS[0]
+    const activePillar =
+      pillars.find((p) => p.id === (pillarId || defaultPillarId)) || pillars[0]
 
     return (
       <div className="mobile-pillar-nav" id="guide-pillar-nav">
         <div className="mobile-pillars-scroll">
-          {PILLARS.map((pillar) => {
-            const isActive = pillarId === pillar.id || (!pillarId && pillar.id === 'compute')
+          {pillars.map((pillar) => {
+            const isActive =
+              pillarId === pillar.id || (!pillarId && pillar.id === defaultPillarId)
             return (
               <button
                 key={pillar.id}
@@ -120,7 +126,7 @@ export default function PillarNav() {
         </div>
       </div>
 
-      {PILLARS.map((pillar) => {
+      {pillars.map((pillar) => {
         const isExpanded = expanded[pillar.id]
         const isPillarActive = pillarId === pillar.id
 
@@ -154,7 +160,6 @@ export default function PillarNav() {
                       style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)' }}
                     >
                       <span style={{ flex: 1, textAlign: 'left' }}>{topic.name}</span>
-                      {/* Progress badge */}
                       {filled > 0 && (
                         <span style={{
                           fontSize: '10px',

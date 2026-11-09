@@ -7,6 +7,8 @@ import CommitModal from './components/chat/CommitModal'
 import TaskWorkingBar from './components/shared/TaskWorkingBar'
 import CalculatorModal from './components/calculator/CalculatorModal'
 
+const LibraryHomePage = lazy(() => import('./pages/LibraryHomePage'))
+const SharedLibraryPage = lazy(() => import('./pages/SharedLibraryPage'))
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const GuidePage = lazy(() => import('./pages/GuidePage'))
 const BuilderPage = lazy(() => import('./pages/BuilderPage'))
@@ -65,7 +67,24 @@ export default function App() {
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route element={<Layout />}>
-            <Route path="/" element={<Navigate to="/chat" replace />} />
+            <Route path="/" element={<LibraryHomePage />} />
+            <Route path="/shared" element={<SharedLibraryPage />} />
+
+            {/* Multi-Kit Workspace Routes */}
+            <Route path="/k/:slug" element={<Navigate to="guide" replace />} />
+            <Route path="/k/:slug/chat" element={<ChatPage />} />
+            <Route path="/k/:slug/guide" element={<GuidePage />} />
+            <Route path="/k/:slug/guide/:pillarId" element={<GuidePage />} />
+            <Route path="/k/:slug/guide/:pillarId/:topicId" element={<GuidePage />} />
+            <Route path="/k/:slug/builder" element={<BuilderPage />} />
+            <Route path="/k/:slug/canvas" element={<BuilderPage />} />
+            <Route path="/k/:slug/study" element={<StudyPage />} />
+            <Route path="/k/:slug/feynman" element={<FeynmanPage />} />
+            <Route path="/k/:slug/interleaved" element={<InterleavedPage />} />
+            <Route path="/k/:slug/calculator" element={<CalculatorPage />} />
+            <Route path="/k/:slug/graph" element={<GraphPage />} />
+
+            {/* Legacy Top-Level Workspace Routes */}
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/guide" element={<GuidePage />} />
             <Route path="/guide/:pillarId" element={<GuidePage />} />

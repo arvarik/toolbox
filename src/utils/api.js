@@ -2,17 +2,35 @@ import { getCache, setCache, enqueueSync } from './db'
 
 const API_BASE = '/api'
 
+function activeKitHeader() {
+  if (typeof window !== 'undefined' && window.location?.pathname) {
+    const match = window.location.pathname.match(/^\/k\/([^/]+)/)
+    if (match) return { 'X-Toolbox-Kit': decodeURIComponent(match[1]) }
+  }
+  const slug = globalThis.__toolboxActiveKitSlug
+  return slug ? { 'X-Toolbox-Kit': slug } : {}
+}
+
 /**
  * Generic fetch wrapper with offline and sync support.
  */
 async function request(path, options = {}) {
   const url = `${API_BASE}${path}`
-  const config = {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
+  const isFormData =
+    typeof FormData !== 'undefined' && options.body instanceof FormData
+
+  const headers = {
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...activeKitHeader(),
+    ...(options.headers || {}),
   }
 
-  if (config.body && typeof config.body === 'object') {
+  const config = {
+    ...options,
+    headers,
+  }
+
+  if (!isFormData && config.body && typeof config.body === 'object') {
     config.body = JSON.stringify(config.body)
   }
 
@@ -24,7 +42,7 @@ async function request(path, options = {}) {
       const cached = await getCache(url)
       if (cached) return cached
       throw new Error('Offline and no cache available')
-    } else {
+    } else if (!isFormData) {
       await enqueueSync(url, config)
       return { _offline: true, message: 'Queued for sync' } // Mock success for optimistic UI
     }
@@ -38,7 +56,7 @@ async function request(path, options = {}) {
     if (isGet) {
       const cached = await getCache(url)
       if (cached) return cached
-    } else {
+    } else if (!isFormData) {
       await enqueueSync(url, config)
       return { _offline: true, message: 'Queued for sync' }
     }
@@ -52,6 +70,7 @@ async function request(path, options = {}) {
     const err = new Error(message)
     err.status = res.status
     err.code = body?.error?.code
+    err.details = body?.error?.details
     if (res.status === 401 && typeof window !== 'undefined') {
       window.dispatchEvent(
         new CustomEvent('toolbox:unauthorized', { detail: { code: err.code } }),
@@ -158,7 +177,10 @@ export const chatApi = {
   stream: async (data, onChunk, onTool, signal) => {
     const res = await fetch(`${API_BASE}/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...activeKitHeader(),
+      },
       body: JSON.stringify(data),
       signal,
     })
@@ -343,4 +365,106 @@ export const graphApi = {
 export const calculatorApi = {
   /** AI sanity check. data: { scenario, inputs, results, model } */
   audit: (data) => request('/calculator/audit', { method: 'POST', body: data }),
+}
+
+/* ---- Personal Kits & Archive ---- */
+export const kitsApi = {
+  list: () => request('/kits'),
+  get: (idOrSlug) => request(`/kits/${encodeURIComponent(idOrSlug)}`),
+  update: (idOrSlug, patch) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}`, { method: 'PATCH', body: patch }),
+  delete: (idOrSlug) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}`, { method: 'DELETE' }),
+  touch: (idOrSlug) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}/touch`, { method: 'POST' }),
+  getArchivedNotes: (idOrSlug) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}/archived-notes`),
+  refileArchivedNote: (idOrSlug, data) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}/archived-notes/refile`, {
+      method: 'POST',
+      body: data,
+    }),
+  deleteArchivedNote: (idOrSlug, data) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}/archived-notes`, {
+      method: 'DELETE',
+      body: data,
+    }),
+  syncUpstream: (idOrSlug) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}/sync-upstream`, { method: 'POST' }),
+  syncSkeleton: (idOrSlug, skeleton) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}/sync`, {
+      method: 'POST',
+      body: { skeleton },
+    }),
+  publish: (idOrSlug, data) =>
+    request(`/kits/${encodeURIComponent(idOrSlug)}/publish`, {
+      method: 'POST',
+      body: data,
+    }),
+  importKitJson: (skeleton, onCollision = 'error') =>
+    request('/kits/import-kit', {
+      method: 'POST',
+      body: { skeleton, onCollision },
+    }),
+  importBackupZip: (file, onCollision = 'error') => {
+    const fd = new FormData()
+    fd.append('file', file)
+    fd.append('onCollision', onCollision)
+    return request('/kits/import-backup', {
+      method: 'POST',
+      body: fd,
+    })
+  },
+  exportUrl: (idOrSlug, { mode = 'kit', includeGuideNotes = false } = {}) => {
+    const params = new URLSearchParams({ mode })
+    if (mode === 'kit' && includeGuideNotes) {
+      params.set('includeGuideNotes', 'true')
+    }
+    return `${API_BASE}/kits/${encodeURIComponent(idOrSlug)}/export?${params.toString()}`
+  },
+  downloadExport: async (idOrSlug, { mode = 'kit', includeGuideNotes = false } = {}) => {
+    const url = kitsApi.exportUrl(idOrSlug, { mode, includeGuideNotes })
+    const res = await fetch(url, { headers: activeKitHeader() })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ message: res.statusText }))
+      const msg = body?.error?.message || body?.message || `Export failed (${res.status})`
+      throw new Error(msg)
+    }
+    const disposition = res.headers.get('Content-Disposition') || ''
+    const match = disposition.match(/filename="([^"]+)"/)
+    const fallbackName =
+      mode === 'backup'
+        ? `${idOrSlug}.toolbox-backup.zip`
+        : `${idOrSlug}.toolbox-kit.json`
+    const filename = match ? match[1] : fallbackName
+    const blob = await res.blob()
+    const blobUrl = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = blobUrl
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 5000)
+    return { filename }
+  },
+  sourceFileUrl: (idOrSlug, sourceId) =>
+    `${API_BASE}/kits/${encodeURIComponent(idOrSlug)}/sources/${encodeURIComponent(sourceId)}/file`,
+}
+
+/* ---- Shared Community Library ---- */
+export const sharedKitsApi = {
+  list: ({ q, tag } = {}) => {
+    const params = new URLSearchParams()
+    if (q) params.set('q', q)
+    if (tag) params.set('tag', tag)
+    const qs = params.toString()
+    return request(`/shared-kits${qs ? `?${qs}` : ''}`)
+  },
+  get: (slug) => request(`/shared-kits/${encodeURIComponent(slug)}`),
+  fork: (slug, data = {}) =>
+    request(`/shared-kits/${encodeURIComponent(slug)}/fork`, {
+      method: 'POST',
+      body: data,
+    }),
 }

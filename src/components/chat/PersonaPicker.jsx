@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { ChevronDown } from 'lucide-react'
-import { PERSONAS } from './personas'
+import { buildPersonasForKit } from './personas'
+import { useActiveKit } from '../../stores/useKitStore'
 
 /**
  * PersonaPicker Dropdown — switches between the 4 tutoring styles.
@@ -8,6 +9,12 @@ import { PERSONAS } from './personas'
 export default function PersonaPicker({ activeId, onSelect }) {
   const [open, setOpen] = useState(false)
   const dropRef = useRef(null)
+  const { kit, skeleton, tutor } = useActiveKit()
+  const isCustomKit = Boolean(kit && skeleton.identity.slug !== 'system-design')
+  const personas = useMemo(
+    () => buildPersonasForKit(tutor, isCustomKit),
+    [tutor, isCustomKit],
+  )
 
   useEffect(() => {
     const handler = (e) => {
@@ -17,7 +24,7 @@ export default function PersonaPicker({ activeId, onSelect }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const current = PERSONAS[activeId]
+  const current = personas[activeId] || personas.socratic
 
   return (
     <div ref={dropRef} style={{ position: 'relative' }}>
@@ -53,7 +60,7 @@ export default function PersonaPicker({ activeId, onSelect }) {
           minWidth: 200, zIndex: 200, overflow: 'hidden',
           display: 'flex', flexDirection: 'column'
         }}>
-          {Object.values(PERSONAS).map((p) => (
+          {Object.values(personas).map((p) => (
             <button
               key={p.id}
               onClick={() => { onSelect(p.id); setOpen(false) }}

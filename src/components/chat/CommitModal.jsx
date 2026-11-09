@@ -4,7 +4,7 @@ import MarkdownRenderer from '../shared/MarkdownRenderer'
 import { chatApi } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
 import useCommitStore from '../../stores/useCommitStore'
-import { BLUEPRINT_SECTIONS } from '../../utils/constants'
+import { useActiveKit } from '../../stores/useKitStore'
 
 /**
  * CommitModal — Intelligent session-to-guide commit.
@@ -15,6 +15,7 @@ import { BLUEPRINT_SECTIONS } from '../../utils/constants'
 export default function CommitModal() {
   const selectedModel = useAppStore((s) => s.model)
   const addToast = useAppStore((s) => s.addToast)
+  const { sectionsByPillar } = useActiveKit()
   
   const { 
     isOpen, 
@@ -145,7 +146,7 @@ export default function CommitModal() {
   }
 
   const enabledCount = enabledSections.size
-  const allSections = topicContext ? (BLUEPRINT_SECTIONS[topicContext.pillarId] || []) : []
+  const allSections = topicContext ? (sectionsByPillar[topicContext.pillarId] || []) : []
   const updateMap = new Map(updates.map(u => [u.sectionId, u]))
   const identifiedIds = new Set(updates.map(u => u.sectionId))
   const requiresReanalysis = Array.from(enabledSections).some(id => !identifiedIds.has(id))
