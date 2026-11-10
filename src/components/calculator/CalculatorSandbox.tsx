@@ -17,6 +17,7 @@ import {
 import LatencyReference from './LatencyReference'
 import AuditPanel from './AuditPanel'
 import ExportMenu from './ExportMenu'
+import './calculator.css'
 
 const SLIDER_STEPS = 200
 
