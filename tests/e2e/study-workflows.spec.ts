@@ -135,6 +135,20 @@ test.describe("Multi-Kit Study Workflows (/k/euclidean-geometry)", () => {
     await expect(page.locator("#blueprint-core-postulates")).toContainText(
       "Equivalent to Euclid's 5th Postulate",
     );
+
+    // Fold a notebook dogear on the topic page and verify it persists & surfaces Resume reading on `/`
+    await page.getByRole("button", { name: "Dogear this page" }).first().click();
+    await expect(
+      page.getByRole("button", { name: "Remove page dogear" }).first(),
+    ).toBeVisible();
+
+    await page.goto("/");
+    const geoCard = page.getByTestId("kit-card-euclidean-geometry");
+    await expect(
+      page.getByTestId("kit-resume-link-euclidean-geometry"),
+    ).toBeVisible();
+    await expect(geoCard).toContainText("1 dogeared");
+
     expect(pageErrors).toEqual([]);
   });
 
