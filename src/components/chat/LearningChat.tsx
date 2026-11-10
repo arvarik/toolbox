@@ -8,13 +8,24 @@ import {
   type KeyboardEvent,
 } from 'react'
 import {
-  Send, Sparkles, Copy, Check, GitCommit,
-  RotateCcw, Square, Map as MapIcon, Layers, MoreHorizontal, Calculator,
+  BookOpen,
+  Calculator,
+  Check,
+  Copy,
+  GitCommit,
+  Layers,
+  Map as MapIcon,
+  MoreHorizontal,
+  RotateCcw,
+  Send,
+  Square,
+  X,
 } from 'lucide-react'
 import type { Pillar } from '../../../shared/kits/kitSkeleton'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import Skeleton from '../shared/Skeleton'
+import { KitAvatar } from '../ui'
 import PersonaPicker from './PersonaPicker'
 import { buildPersonasForKit, getStarterPromptsForKit, type PersonaId } from './personas'
 import SessionPicker, { type ChatMessage, type ChatSession } from './SessionPicker'
@@ -26,7 +37,32 @@ import { chatApi, guideContentApi, type GeneratedFlashcardDraft } from '../../ut
 // ─── Session storage (scoped per Kit slug) ────────────────────────────────────
 const SESSIONS_KEY = 'toolbox_learning_sessions'
 const CURRENT_KEY = 'toolbox_learning_current'
+const QUOTE_STORAGE_KEY = 'toolbox_chat_quote'
 const MAX_MESSAGES = 120
+
+const REQUIRED_DEFAULT_STARTERS = [
+  'Explain consistent hashing with a concrete example and when I should use it',
+  'Walk me through the tradeoffs of SQL vs NoSQL for a social feed at scale',
+]
+
+function buildFallbackStarters(raw: string[], isCustomKit: boolean): string[] {
+  if (isCustomKit) return raw.slice(0, 3)
+  const third = raw.find((item) => !REQUIRED_DEFAULT_STARTERS.includes(item))
+  return third ? [...REQUIRED_DEFAULT_STARTERS, third] : [...REQUIRED_DEFAULT_STARTERS]
+}
+
+function consumeStoredQuote(): string | null {
+  try {
+    const raw = localStorage.getItem(QUOTE_STORAGE_KEY)
+    if (raw && raw.trim()) {
+      localStorage.removeItem(QUOTE_STORAGE_KEY)
+      return raw.trim()
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return null
+}
 
 function sessionsStorageKey(slug: string | null | undefined): string {
   return slug && slug !== 'system-design' ? `${SESSIONS_KEY}:${slug}` : SESSIONS_KEY
@@ -45,14 +81,18 @@ function loadSessions(slug: string | null | undefined): Record<string, ChatSessi
         return parsed as Record<string, ChatSession>
       }
     }
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
   return {}
 }
 
 function saveSessions(slug: string | null | undefined, sessions: Record<string, ChatSession>): void {
   try {
     localStorage.setItem(sessionsStorageKey(slug), JSON.stringify(sessions))
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 function loadCurrentId(slug: string | null | undefined): string | null {
@@ -66,13 +106,17 @@ function loadCurrentId(slug: string | null | undefined): string | null {
 function saveCurrentId(slug: string | null | undefined, id: string): void {
   try {
     localStorage.setItem(currentStorageKey(slug), id)
-  } catch { /* ignore */ }
+  } catch {
+    /* ignore */
+  }
 }
 
 function makeSession(name?: string, topicContext?: Partial<CommitTopicContext>): ChatSession {
   return {
     id: `session-${Date.now()}`,
-    name: name || `Session ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+    name:
+      name ||
+      `Session ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
     createdAt: new Date().toISOString(),
     messages: [],
     pillarId: topicContext?.pillarId || null,
@@ -89,15 +133,25 @@ function CopyButton({ text }: { text: string }) {
       await navigator.clipboard.writeText(text)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
   return (
     <button
-      onClick={() => { void handleCopy() }}
+      type="button"
+      onClick={() => {
+        void handleCopy()
+      }}
       title={copied ? 'Copied!' : 'Copy'}
-      style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center' }}
+      aria-label={copied ? 'Copied!' : 'Copy to clipboard'}
+      className="inline-flex cursor-pointer items-center rounded p-1 text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
     >
-      {copied ? <Check size={13} style={{ color: 'var(--color-success, #22c55e)' }} /> : <Copy size={13} />}
+      {copied ? (
+        <Check size={13} className="text-[var(--color-ok)]" />
+      ) : (
+        <Copy size={13} />
+      )}
     </button>
   )
 }
@@ -127,26 +181,39 @@ interface LearningChatProps {
   activeTopic?: ActiveStudyTopic | null
   onCommitClick?: (messages: ChatMessage[], topicContext: CommitTopicContext | null) => void
   routeKitSlug?: string | null
+  notebookOpen?: boolean
+  onToggleNotebook?: () => void
+  onSessionStateChange?: (state: { session: ChatSession | null; messages: ChatMessage[] }) => void
 }
 
 /**
- * LearningChat — full-page AI chat with named, per-Kit session history.
+ * LearningChat — full-page Socratic study stage authored by Kit with per-Kit session history.
  */
-export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug }: LearningChatProps) {
+export default function LearningChat({
+  activeTopic,
+  onCommitClick,
+  routeKitSlug,
+  notebookOpen,
+  onToggleNotebook,
+  onSessionStateChange,
+}: LearningChatProps) {
   const apiKeyConfigured = useAppStore((s) => s.apiKeyConfigured)
   const selectedModel = useAppStore((s) => s.model)
   const addToast = useAppStore((s) => s.addToast)
   const { kit, kitSlug, skeleton, sectionsByPillar, capabilities, tutor } = useActiveKit()
   const effectiveKitSlug = routeKitSlug || kitSlug || getActiveKitSlugForRequest()
   const storageScope = effectiveKitSlug || 'system-design'
-  const isCustomKit = Boolean(kit && skeleton.identity.slug !== 'system-design')
+  const isCustomKit = Boolean(
+    (effectiveKitSlug && effectiveKitSlug !== 'system-design') ||
+      (kit && skeleton.identity.slug !== 'system-design'),
+  )
 
   const activePersonas = useMemo(
     () => buildPersonasForKit(tutor, isCustomKit),
     [tutor, isCustomKit],
   )
   const defaultStarters = useMemo(
-    () => getStarterPromptsForKit(tutor, isCustomKit),
+    () => buildFallbackStarters(getStarterPromptsForKit(tutor, isCustomKit), isCustomKit),
     [tutor, isCustomKit],
   )
 
@@ -162,10 +229,13 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
   const messages = currentSession?.messages || emptyMessages
 
   const [input, setInput] = useState('')
+  const [quotedSnippet, setQuotedSnippet] = useState<string | null>(() => consumeStoredQuote())
   const [isLoading, setIsLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  const [starters, setStarters] = useState<string[]>(() => getStarterPromptsForKit(tutor, isCustomKit))
+  const [starters, setStarters] = useState<string[]>(() =>
+    buildFallbackStarters(getStarterPromptsForKit(tutor, isCustomKit), isCustomKit),
+  )
   const [loadingStarters, setLoadingStarters] = useState(false)
   const [generatingMap, setGeneratingMap] = useState(false)
   const [personaId, setPersonaId] = useState<PersonaId>('socratic')
@@ -184,13 +254,21 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
   const abortControllerRef = useRef<AbortController | null>(null)
 
   const currentIdRef = useRef(currentId)
-  useEffect(() => { currentIdRef.current = currentId }, [currentId])
+  useEffect(() => {
+    currentIdRef.current = currentId
+  }, [currentId])
   const sessionsRef = useRef(sessions)
-  useEffect(() => { sessionsRef.current = sessions }, [sessions])
+  useEffect(() => {
+    sessionsRef.current = sessions
+  }, [sessions])
 
   const activeTopicIdRef = useRef<string | undefined>(activeTopic?.topic?.id)
 
-  // Load from API & migrate Kit-scoped local data if needed whenever active Kit changes
+  useEffect(() => {
+    onSessionStateChange?.({ session: currentSession, messages })
+  }, [currentSession, messages, onSessionStateChange])
+
+  // Load from API & migrate legacy default-Kit local data if needed whenever active Kit changes
   useEffect(() => {
     let cancelled = false
     setLoadedScope(null)
@@ -202,25 +280,31 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
 
     async function initSessions() {
       try {
-        const backendSessions = ((await chatApi.getSessions()) || {}) as Record<string, ChatSession>
+        const backendSessions =
+          ((await chatApi.getSessions()) || {}) as Record<string, ChatSession>
         if (cancelled) return
-        const localSessions = loadSessions(storageScope)
 
-        let needsMigration = false
-        const toMigrate: Record<string, ChatSession> = {}
-        for (const [id, s] of Object.entries(localSessions)) {
-          if (!backendSessions[id]) {
-            needsMigration = true
-            toMigrate[id] = s
-          }
-        }
-
+        const canMigrateLegacy = !isCustomKit && storageScope === 'system-design'
         let finalSessions: Record<string, ChatSession> = { ...backendSessions }
-        if (needsMigration) {
-          await chatApi.migrateBulk(toMigrate)
-          if (cancelled) return
-          finalSessions = ((await chatApi.getSessions()) || {}) as Record<string, ChatSession>
-          if (cancelled) return
+
+        if (canMigrateLegacy) {
+          const localSessions = loadSessions(storageScope)
+          let needsMigration = false
+          const toMigrate: Record<string, ChatSession> = {}
+          for (const [id, s] of Object.entries(localSessions)) {
+            if (!backendSessions[id]) {
+              needsMigration = true
+              toMigrate[id] = s
+            }
+          }
+
+          if (needsMigration) {
+            await chatApi.migrateBulk(toMigrate)
+            if (cancelled) return
+            finalSessions =
+              ((await chatApi.getSessions()) || {}) as Record<string, ChatSession>
+            if (cancelled) return
+          }
         }
 
         // Bootstrap if empty
@@ -254,8 +338,10 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
     }
 
     void initSessions()
-    return () => { cancelled = true }
-  }, [storageScope, addToast])
+    return () => {
+      cancelled = true
+    }
+  }, [storageScope, isCustomKit, addToast])
 
   // Persist sessions whenever they change (strictly gated on matching loadedScope)
   useEffect(() => {
@@ -265,7 +351,9 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
     const timer = setTimeout(() => {
       const currId = currentIdRef.current
       if (currId && sessions[currId]) {
-        chatApi.saveSession(sessions[currId]).catch((err: unknown) => console.error('Failed to sync session', err))
+        chatApi
+          .saveSession(sessions[currId])
+          .catch((err: unknown) => console.error('Failed to sync session', err))
       }
     }, 1500)
 
@@ -311,7 +399,37 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
   }, [])
 
   // Focus input on mount
-  useEffect(() => { inputRef.current?.focus() }, [])
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  // Pick up docked quote from Guide / Inspector ('toolbox:ask-kit' or localStorage)
+  useEffect(() => {
+    const onAskKit = (e: Event) => {
+      const detailQuote = (e as CustomEvent<{ quote?: string }>).detail?.quote
+      const nextQuote = (detailQuote && detailQuote.trim()) || consumeStoredQuote()
+      if (nextQuote) {
+        try {
+          localStorage.removeItem(QUOTE_STORAGE_KEY)
+        } catch {
+          /* ignore */
+        }
+        setQuotedSnippet(nextQuote)
+        inputRef.current?.focus()
+      }
+    }
+    window.addEventListener('toolbox:ask-kit', onAskKit)
+    return () => window.removeEventListener('toolbox:ask-kit', onAskKit)
+  }, [])
+
+  const clearQuote = useCallback(() => {
+    setQuotedSnippet(null)
+    try {
+      localStorage.removeItem(QUOTE_STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
+  }, [])
 
   // Pick up a draft handed over by the BotE Calculator export
   useEffect(() => {
@@ -408,10 +526,16 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
         setGeneratedCards(res.cards)
         setShowReviewModal(true)
       } else {
-        addToast({ type: 'info', message: 'No flashcards could be generated from that selection.' })
+        addToast({
+          type: 'info',
+          message: 'No flashcards could be generated from that selection.',
+        })
       }
     } catch (err) {
-      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to generate flashcard.' })
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to generate flashcard.',
+      })
     } finally {
       setIsGeneratingCards(false)
     }
@@ -443,94 +567,150 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
         addToast({ type: 'info', message: 'No flashcards could be generated from this session.' })
       }
     } catch (err) {
-      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to generate flashcards.' })
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to generate flashcards.',
+      })
     } finally {
       setIsGeneratingCards(false)
     }
   }
 
   // Update messages for current session
-  const setMessages = useCallback((updaterOrMessages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
-    setSessions((prev) => {
-      if (!currentId) return prev
-      const session = prev[currentId]
-      if (!session) return prev
-      const newMessages = typeof updaterOrMessages === 'function'
-        ? updaterOrMessages(session.messages)
-        : updaterOrMessages
-      return {
-        ...prev,
-        [currentId]: {
-          ...session,
-          messages: newMessages.slice(-MAX_MESSAGES),
-        },
-      }
-    })
-  }, [currentId])
-
-  const handleSend = useCallback(async (customText?: string, overrideHistory: ChatMessage[] | null = null) => {
-    const text = typeof customText === 'string' ? customText.trim() : input.trim()
-    if (!text || isLoading) return
-
-    const currentHistory = overrideHistory || messages
-    const currentPersonaObj = activePersonas[personaId] || activePersonas.socratic
-    const userMessage: ChatMessage = { role: 'user', content: text, model: selectedModel, persona: currentPersonaObj }
-    const newMessages = [...currentHistory, userMessage]
-    setMessages(newMessages)
-    if (typeof customText !== 'string') setInput('')
-    setIsLoading(true)
-    setErrorMsg(null)
-
-    try {
-      const aiPlaceholder: ChatMessage = { role: 'ai', content: '', model: selectedModel, persona: currentPersonaObj }
-      setMessages([...newMessages, aiPlaceholder])
-
-      abortControllerRef.current = new AbortController()
-      const signal = abortControllerRef.current.signal
-
-      let currentPersona = currentPersonaObj.context
-      if (sectionStatus && (sectionStatus.emptySections.length > 0 || sectionStatus.completedSections.length > 0)) {
-        const topicName = currentSession?.topicName || activeTopic?.topic?.name || 'this topic'
-        currentPersona += `\n\n[STUDY SESSION CONTEXT]\nThe student is studying: "${topicName}".`
-        if (sectionStatus.completedSections.length > 0) {
-          currentPersona += `\nSections already covered in their guide (they have notes on these): ${sectionStatus.completedSections.join(', ')}.`
+  const setMessages = useCallback(
+    (updaterOrMessages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
+      setSessions((prev) => {
+        if (!currentId) return prev
+        const session = prev[currentId]
+        if (!session) return prev
+        const newMessages =
+          typeof updaterOrMessages === 'function'
+            ? updaterOrMessages(session.messages)
+            : updaterOrMessages
+        return {
+          ...prev,
+          [currentId]: {
+            ...session,
+            messages: newMessages.slice(-MAX_MESSAGES),
+          },
         }
-        if (sectionStatus.emptySections.length > 0) {
-          currentPersona += `\nSections NOT yet covered (empty, no notes): ${sectionStatus.emptySections.join(', ')}.`
-          currentPersona += `\n\n[STEERING INSTRUCTION]\n${currentPersonaObj.steeringStyle || 'When the current topic is exhausted, naturally guide the conversation toward the first uncovered section. Only introduce ONE new section at a time.'}`
-          currentPersona += `\nIMPORTANT: Do NOT dump all uncovered sections at once. Address them naturally, one at a time, as the conversation flows. Always respond to the user's immediate question first, then steer if appropriate.`
-        }
-      }
-
-      const fullText = (await chatApi.stream(
-        { message: text, context: currentPersona, history: currentHistory, model: selectedModel },
-        (partialText: string) => {
-          setMessages((prev) => {
-            const updated = [...prev]
-            updated[updated.length - 1] = { role: 'ai', content: partialText, model: selectedModel, persona: currentPersonaObj }
-            return updated
-          })
-        },
-        () => {},
-        signal,
-      )) as string
-
-      setMessages((prev) => {
-        const updated = [...prev]
-        updated[updated.length - 1] = { role: 'ai', content: fullText, model: selectedModel, persona: currentPersonaObj }
-        return updated
       })
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') return
-      const msg = err instanceof Error ? err.message : 'Request failed'
-      setErrorMsg(msg)
-      setMessages([...newMessages, { role: 'ai', content: `Error: ${msg}. Please check your API key in Settings.` }])
-    } finally {
-      setIsLoading(false)
-    }
-  }, [input, isLoading, messages, selectedModel, setMessages, personaId, activePersonas, sectionStatus, activeTopic, currentSession])
+    },
+    [currentId],
+  )
 
-  // Handle activeTopic changes (from to-do panel clicks)
+  const handleSend = useCallback(
+    async (customText?: string, overrideHistory: ChatMessage[] | null = null) => {
+      const baseText = typeof customText === 'string' ? customText.trim() : input.trim()
+      const attachQuote = overrideHistory === null ? quotedSnippet : null
+      if ((!baseText && !attachQuote) || isLoading) return
+
+      const text = attachQuote
+        ? `> ${attachQuote}\n\n${baseText || 'Explain this passage.'}`
+        : baseText
+
+      const currentHistory = overrideHistory || messages
+      const currentPersonaObj = activePersonas[personaId] || activePersonas.socratic
+      const userMessage: ChatMessage = {
+        role: 'user',
+        content: text,
+        model: selectedModel,
+        persona: currentPersonaObj,
+      }
+      const newMessages = [...currentHistory, userMessage]
+      setMessages(newMessages)
+      if (typeof customText !== 'string') setInput('')
+      if (attachQuote) clearQuote()
+      setIsLoading(true)
+      setErrorMsg(null)
+
+      try {
+        const aiPlaceholder: ChatMessage = {
+          role: 'ai',
+          content: '',
+          model: selectedModel,
+          persona: currentPersonaObj,
+        }
+        setMessages([...newMessages, aiPlaceholder])
+
+        abortControllerRef.current = new AbortController()
+        const signal = abortControllerRef.current.signal
+
+        let currentPersona = currentPersonaObj.context
+        if (
+          sectionStatus &&
+          (sectionStatus.emptySections.length > 0 || sectionStatus.completedSections.length > 0)
+        ) {
+          const topicName =
+            currentSession?.topicName || activeTopic?.topic?.name || 'this topic'
+          currentPersona += `\n\n[STUDY SESSION CONTEXT]\nThe student is studying: "${topicName}".`
+          if (sectionStatus.completedSections.length > 0) {
+            currentPersona += `\nSections already covered in their guide (they have notes on these): ${sectionStatus.completedSections.join(', ')}.`
+          }
+          if (sectionStatus.emptySections.length > 0) {
+            currentPersona += `\nSections NOT yet covered (empty, no notes): ${sectionStatus.emptySections.join(', ')}.`
+            currentPersona += `\n\n[STEERING INSTRUCTION]\n${currentPersonaObj.steeringStyle || 'When the current topic is exhausted, naturally guide the conversation toward the first uncovered section. Only introduce ONE new section at a time.'}`
+            currentPersona += `\nIMPORTANT: Do NOT dump all uncovered sections at once. Address them naturally, one at a time, as the conversation flows. Always respond to the user's immediate question first, then steer if appropriate.`
+          }
+        }
+
+        const fullText = (await chatApi.stream(
+          { message: text, context: currentPersona, history: currentHistory, model: selectedModel },
+          (partialText: string) => {
+            setMessages((prev) => {
+              const updated = [...prev]
+              updated[updated.length - 1] = {
+                role: 'ai',
+                content: partialText,
+                model: selectedModel,
+                persona: currentPersonaObj,
+              }
+              return updated
+            })
+          },
+          () => {},
+          signal,
+        )) as string
+
+        setMessages((prev) => {
+          const updated = [...prev]
+          updated[updated.length - 1] = {
+            role: 'ai',
+            content: fullText,
+            model: selectedModel,
+            persona: currentPersonaObj,
+          }
+          return updated
+        })
+      } catch (err) {
+        if (err instanceof Error && err.name === 'AbortError') return
+        const msg = err instanceof Error ? err.message : 'Request failed'
+        setErrorMsg(msg)
+        setMessages([
+          ...newMessages,
+          { role: 'ai', content: `Error: ${msg}. Please check your API key in Settings.` },
+        ])
+      } finally {
+        setIsLoading(false)
+      }
+    },
+    [
+      input,
+      quotedSnippet,
+      clearQuote,
+      isLoading,
+      messages,
+      selectedModel,
+      setMessages,
+      personaId,
+      activePersonas,
+      sectionStatus,
+      activeTopic,
+      currentSession,
+    ],
+  )
+
+  // Handle activeTopic changes (from curriculum spine clicks)
   useEffect(() => {
     if (!activeTopic) {
       setTimeout(() => setStarters(defaultStarters), 0)
@@ -570,8 +750,10 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
 
     const pillarSections = sectionsByPillar[activeTopic.pillar.id] || []
     if (pillarSections.length > 0) {
-      guideContentApi.getForTopic(activeTopic.pillar.id, activeTopic.topic.id)
-        .then((data: Record<string, { content?: string }> | null) => {
+      Promise.resolve(
+        guideContentApi?.getForTopic?.(activeTopic.pillar.id, activeTopic.topic.id),
+      )
+        .then((data: Record<string, { content?: string }> | null | undefined) => {
           const completed: string[] = []
           const empty: string[] = []
           pillarSections.forEach((sec) => {
@@ -607,7 +789,7 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
       .then((res) => (res.ok ? res.json() : null))
       .then((data: { suggestions?: string[] } | null) => {
         if (active && data?.suggestions) {
-          setStarters(data.suggestions)
+          setStarters(data.suggestions.slice(0, 3))
         }
       })
       .catch((err: unknown) => console.error('Failed to fetch starters', err))
@@ -642,7 +824,9 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
     if (userMsg && userMsg.role === 'user') {
       const newHistory = messages.slice(0, index)
       setMessages(newHistory)
-      setTimeout(() => { void handleSend(userMsg.content, newHistory) }, 50)
+      setTimeout(() => {
+        void handleSend(userMsg.content, newHistory)
+      }, 50)
     }
   }
 
@@ -658,25 +842,33 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
       })) as { response: string }
       setMessages((prev) => [
         ...prev,
-        { role: 'ai', content: `Here's a concept map summarizing what we just discussed:\n\n${response}` },
+        {
+          role: 'ai',
+          content: `Here's a concept map summarizing what we just discussed:\n\n${response}`,
+        },
       ])
     } catch (err) {
-      setErrorMsg(`Failed to generate concept map: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      setErrorMsg(
+        `Failed to generate concept map: ${err instanceof Error ? err.message : 'Unknown error'}`,
+      )
     } finally {
       setGeneratingMap(false)
     }
   }
 
   // ── Session management ──────────────────────────────────────────────────────
-  const createSession = useCallback((name?: string) => {
-    const s = makeSession(name)
-    setSessions((prev) => ({ ...prev, [s.id]: s }))
-    setCurrentId(s.id)
-    setInput('')
-    setErrorMsg(null)
-    chatApi.saveSession(s).catch(() => {})
-    addToast({ type: 'info', message: `Started "${s.name}"` })
-  }, [addToast])
+  const createSession = useCallback(
+    (name?: string) => {
+      const s = makeSession(name)
+      setSessions((prev) => ({ ...prev, [s.id]: s }))
+      setCurrentId(s.id)
+      setInput('')
+      setErrorMsg(null)
+      chatApi.saveSession(s).catch(() => {})
+      addToast({ type: 'info', message: `Started "${s.name}"` })
+    },
+    [addToast],
+  )
 
   const switchSession = useCallback((id: string) => {
     setCurrentId(id)
@@ -694,36 +886,45 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
     })
   }, [])
 
-  const deleteSession = useCallback((id: string) => {
-    chatApi.deleteSession(id).catch((err: unknown) => console.error('Failed to delete session', err))
-    setSessions((prev) => {
-      const next = { ...prev }
-      delete next[id]
-      if (id === currentId) {
-        const remaining = Object.keys(next).sort(
-          (a, b) =>
-            new Date(next[b]?.createdAt ?? 0).getTime() -
-            new Date(next[a]?.createdAt ?? 0).getTime(),
-        )
-        if (remaining.length > 0) {
-          setCurrentId(remaining[0])
-        } else {
-          const fresh = makeSession()
-          next[fresh.id] = fresh
-          setCurrentId(fresh.id)
-          chatApi.saveSession(fresh).catch(() => {})
+  const deleteSession = useCallback(
+    (id: string) => {
+      chatApi
+        .deleteSession(id)
+        .catch((err: unknown) => console.error('Failed to delete session', err))
+      setSessions((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        if (id === currentId) {
+          const remaining = Object.keys(next).sort(
+            (a, b) =>
+              new Date(next[b]?.createdAt ?? 0).getTime() -
+              new Date(next[a]?.createdAt ?? 0).getTime(),
+          )
+          if (remaining.length > 0) {
+            setCurrentId(remaining[0])
+          } else {
+            const fresh = makeSession()
+            next[fresh.id] = fresh
+            setCurrentId(fresh.id)
+            chatApi.saveSession(fresh).catch(() => {})
+          }
         }
-      }
-      return next
-    })
-  }, [currentId])
+        return next
+      })
+    },
+    [currentId],
+  )
 
   const [showActionsMenu, setShowActionsMenu] = useState(false)
   const actionsMenuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (actionsMenuRef.current && e.target instanceof Node && !actionsMenuRef.current.contains(e.target)) {
+      if (
+        actionsMenuRef.current &&
+        e.target instanceof Node &&
+        !actionsMenuRef.current.contains(e.target)
+      ) {
         setShowActionsMenu(false)
       }
     }
@@ -732,14 +933,16 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
   }, [])
 
   const aiMessages = messages.filter((m) => m.role === 'ai' && m.content.trim().length > 0)
+  const visibleStarters = starters.slice(0, 3)
 
   return (
-    <div className="learning-chat" id="learning-chat">
+    <div className="learning-chat bg-[var(--color-surface)]" id="learning-chat">
       {/* ── Header ── */}
-      <div className="learning-chat-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flex: 1, minWidth: 0 }}>
-          <span className="ai-dot hide-on-mobile" />
-          <Sparkles size={14} className="hide-on-mobile" style={{ color: 'var(--color-accent)', flexShrink: 0 }} />
+      <div className="learning-chat-header border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <span className="hide-on-mobile shrink-0">
+            <KitAvatar size={20} state={isLoading ? 'thinking' : 'idle'} />
+          </span>
           <SessionPicker
             sessions={sessions}
             currentId={currentId}
@@ -748,33 +951,36 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
             onRename={renameSession}
             onDelete={deleteSession}
           />
-          <PersonaPicker personas={activePersonas} activeId={personaId} onSelect={setPersonaId} />
+          <PersonaPicker
+            personas={activePersonas}
+            activeId={personaId}
+            onSelect={setPersonaId}
+          />
           {messages.length > 0 && (
-            <span className="hide-on-mobile" style={{
-              fontSize: '10px', color: 'var(--color-text-tertiary)',
-              background: 'var(--color-bg-tertiary)', padding: '1px 7px',
-              borderRadius: 'var(--radius-full)', flexShrink: 0,
-            }}>
+            <span className="hide-on-mobile shrink-0 rounded-full border border-[var(--color-line)] bg-[var(--color-surface-low)] px-2 py-0.5 font-mono text-[10.5px] text-[var(--color-ink-faint)] tabular-nums">
               {messages.length} msg
             </span>
           )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexShrink: 0 }}>
+        <div className="flex shrink-0 items-center gap-1.5">
           {capabilities.calculator !== false && (
             <button
+              type="button"
               className="btn btn-ghost btn-icon"
               onClick={() => useAppStore.getState().setCalcModalOpen(true)}
               title="BotE Calculator (⌘E)"
               aria-label="Open BotE Calculator"
               id="chat-calc-btn"
             >
-              <Calculator size={16} />
+              <Calculator size={15} />
             </button>
           )}
+
           {messages.length > 0 && (
-            <div style={{ position: 'relative' }} ref={actionsMenuRef}>
+            <div className="relative" ref={actionsMenuRef}>
               <button
+                type="button"
                 className="btn btn-ghost btn-icon"
                 onClick={() => setShowActionsMenu((p) => !p)}
                 title="More Actions"
@@ -783,64 +989,40 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
                 <MoreHorizontal size={16} />
               </button>
               {showActionsMenu && (
-                <div style={{
-                  position: 'absolute', top: '100%', right: 0, marginTop: '4px',
-                  background: 'var(--color-surface)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
-                  minWidth: 180, zIndex: 100,
-                  display: 'flex', flexDirection: 'column',
-                  overflow: 'hidden',
-                }}>
+                <div className="animate-popover-enter absolute top-[calc(100%+4px)] right-0 z-50 flex min-w-[184px] flex-col overflow-hidden rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-float)]">
                   <button
-                    className="dropdown-item"
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: '8px',
-                      padding: '10px 16px', border: 'none', background: 'none',
-                      cursor: 'pointer', textAlign: 'left',
-                      color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)',
-                      opacity: generatingMap ? 0.5 : 1,
-                    }}
+                    type="button"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
                     onClick={() => {
                       setShowActionsMenu(false)
                       void handleGenerateConceptMap()
                     }}
                     disabled={generatingMap}
                   >
-                    <MapIcon size={14} style={{ animation: generatingMap ? 'spin 2s linear infinite' : 'none' }} />
+                    <MapIcon size={14} className="text-[var(--color-ink-muted)]" />
                     {generatingMap ? 'Generating Map...' : 'Generate Map'}
                   </button>
                   <button
-                    className="dropdown-item"
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: '8px',
-                      padding: '10px 16px', border: 'none', background: 'none',
-                      cursor: 'pointer', textAlign: 'left',
-                      color: 'var(--color-text-primary)', fontSize: 'var(--text-sm)',
-                      opacity: isGeneratingCards ? 0.5 : 1,
-                    }}
+                    type="button"
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
                     onClick={() => {
                       setShowActionsMenu(false)
                       void handleGenerateSessionFlashcards()
                     }}
                     disabled={isGeneratingCards}
                   >
-                    <Layers size={14} style={{ animation: isGeneratingCards ? 'spin 2s linear infinite' : 'none' }} />
+                    <Layers size={14} className="text-[var(--color-ink-muted)]" />
                     {isGeneratingCards ? 'Generating Cards...' : 'Generate Flashcards'}
                   </button>
                 </div>
               )}
             </div>
           )}
+
           {aiMessages.length > 0 && (
             <button
-              className="btn btn-primary"
-              style={{
-                fontSize: 'var(--text-xs)', padding: '5px 12px',
-                display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
-                opacity: currentSession?.pillarId ? 1 : 0.5,
-              }}
+              type="button"
+              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-3 text-[12.5px] font-semibold text-[var(--color-accent-ink)] transition-opacity hover:bg-[var(--color-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-45"
               onClick={() =>
                 onCommitClick?.(
                   messages,
@@ -854,49 +1036,52 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
                 )
               }
               disabled={!currentSession?.pillarId}
-              title={currentSession?.pillarId
-                ? `Commit session to ${currentSession.topicName} guide`
-                : 'Start a session from the Study Plan to enable commit'}
+              title={
+                currentSession?.pillarId
+                  ? `Commit session to ${currentSession.topicName} guide`
+                  : 'Start a session from the Study Plan to enable commit'
+              }
               id="commit-to-guide-btn"
             >
               <GitCommit size={13} />
               <span className="hide-on-mobile">Commit to Guide</span>
             </button>
           )}
+
+          {onToggleNotebook && (
+            <button
+              type="button"
+              aria-pressed={Boolean(notebookOpen)}
+              onClick={onToggleNotebook}
+              className={`inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] font-medium transition-colors active:scale-[0.98] ${
+                notebookOpen
+                  ? 'border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink)]'
+                  : 'border-transparent text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]'
+              }`}
+            >
+              <BookOpen size={14} />
+              <span>Notebook</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* ── Popups and Modals ── */}
+      {/* ── Selection Flashcard Popup ── */}
       {popupState && (
         <div
           id="flashcard-popup"
-          className="flashcard-modal-ignore"
-          style={{
-            position: 'fixed',
-            top: popupState.top,
-            left: popupState.left,
-            transform: 'translateX(-50%)',
-            zIndex: 100,
-            background: 'var(--color-surface)',
-            border: '1px solid var(--color-border)',
-            boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
-            borderRadius: 'var(--radius-lg)',
-            padding: '6px',
-            display: 'flex',
-            gap: '4px',
-          }}
+          className="flashcard-modal-ignore fixed z-50 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] p-1.5 shadow-[var(--shadow-float)]"
+          style={{ top: popupState.top, left: popupState.left }}
         >
           <button
-            className="btn btn-primary btn-sm"
-            style={{ fontSize: '12px', padding: '8px 12px', minHeight: 36, whiteSpace: 'nowrap' }}
-            onClick={() => { void handleGenerateAdHocFlashcard() }}
+            type="button"
+            className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-3 text-[12px] font-semibold whitespace-nowrap text-[var(--color-accent-ink)] hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-50"
+            onClick={() => {
+              void handleGenerateAdHocFlashcard()
+            }}
             disabled={isGeneratingCards}
           >
-            {isGeneratingCards ? (
-              <Sparkles size={14} style={{ marginRight: 4, animation: 'pulse 1.5s infinite' }} />
-            ) : (
-              <Layers size={14} style={{ marginRight: 4 }} />
-            )}
+            <Layers size={13} />
             {isGeneratingCards ? 'Generating...' : 'Make Flashcard'}
           </button>
         </div>
@@ -912,158 +1097,233 @@ export default function LearningChat({ activeTopic, onCommitClick, routeKitSlug 
       />
 
       {/* ── Messages ── */}
-      <div className="learning-chat-messages" id="learning-chat-messages" ref={messagesContainerRef}>
+      <div
+        className="learning-chat-messages px-4 py-6 sm:px-8"
+        id="learning-chat-messages"
+        ref={messagesContainerRef}
+      >
         {messages.length === 0 && (
-          <div className="learning-chat-empty">
-            <div style={{ textAlign: 'center', marginBottom: 'var(--space-6)' }}>
-              <div style={{
-                width: 48, height: 48, borderRadius: '50%',
-                background: 'var(--color-accent-subtle)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                margin: '0 auto var(--space-3)',
-              }}>
-                <Sparkles size={22} style={{ color: 'var(--color-accent)' }} />
-              </div>
-              <div style={{ fontWeight: 600, fontSize: 'var(--text-md)', marginBottom: 'var(--space-1)' }}>
-                {apiKeyConfigured ? currentSession?.name || 'New Session' : 'Configure API Key First'}
-              </div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)', maxWidth: 340, margin: '0 auto' }}>
-                {apiKeyConfigured
-                  ? 'Ask deep questions, explore concepts, then commit insights to the guide.'
-                  : 'Add your API key in Settings to start studying with AI.'}
+          <div className="learning-chat-empty mx-auto flex w-full max-w-2xl flex-col justify-center py-8">
+            <div className="mb-5 flex items-center gap-3.5">
+              <KitAvatar size={28} state="idle" />
+              <div>
+                <h2 className="font-serif text-[23px] leading-snug font-normal text-[var(--color-ink)]">
+                  {apiKeyConfigured ? 'What are we working through?' : 'Configure API Key First'}
+                </h2>
+                <p className="mt-0.5 text-[13.5px] text-[var(--color-ink-muted)]">
+                  {apiKeyConfigured
+                    ? activeTopic?.topic?.name
+                      ? `Focused session on ${activeTopic.topic.name}.`
+                      : 'Ask a question, test an idea, or synthesize Guide notes.'
+                    : 'Add your API key in Settings to study with Kit.'}
+                </p>
               </div>
             </div>
 
             {apiKeyConfigured && (
-              <div className="learning-starter-prompts">
-                {loadingStarters ? (
-                  Array.from({ length: 6 }).map((_, i) => (
-                    <div key={i} className="learning-starter-btn" style={{
-                      height: '36px',
-                      background: 'var(--color-bg-hover)',
-                      animation: 'pulse 1.5s ease-in-out infinite',
-                      border: '1px solid transparent',
-                    }} />
-                  ))
-                ) : (
-                  starters.map((p, i) => (
-                    <button key={i} className="learning-starter-btn" onClick={() => { void handleSend(p) }}>{p}</button>
-                  ))
-                )}
+              <div className="learning-starter-prompts flex flex-wrap gap-2">
+                {loadingStarters
+                  ? Array.from({ length: 3 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="h-9 w-56 animate-pulse rounded-full border border-[var(--color-line)] bg-[var(--color-surface-low)]"
+                      />
+                    ))
+                  : visibleStarters.map((p, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        className="learning-starter-btn cursor-pointer rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] px-3.5 py-2 text-left text-[13px] text-[var(--color-ink-muted)] transition-[transform,color,border-color] duration-120 hover:border-[var(--color-ink-faint)] hover:text-[var(--color-ink)] active:scale-[0.98]"
+                        onClick={() => {
+                          void handleSend(p)
+                        }}
+                      >
+                        {p}
+                      </button>
+                    ))}
               </div>
             )}
           </div>
         )}
 
-        {messages.map((msg, i) => (
-          <div key={i} className={`learning-message ${msg.role}`} data-role={msg.role}>
-            <div className={`learning-message-avatar ${msg.role}`}>
-              {msg.role === 'ai' ? (msg.persona?.icon || '✦') : 'U'}
-            </div>
-            <div className="learning-message-body">
-              {msg.role === 'ai' && msg.model && (
-                <div style={{ fontSize: '10px', color: 'var(--color-text-tertiary)', marginBottom: 6, display: 'flex', gap: 6, alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600 }}>{msg.persona?.name || 'AI'}</span>
-                  <span style={{ opacity: 0.6 }}>•</span>
-                  <span style={{ background: 'var(--color-bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>{msg.model}</span>
+        <div className="mx-auto flex w-full max-w-3xl flex-col gap-5">
+          {messages.map((msg, i) => {
+            const isLast = i === messages.length - 1
+            if (msg.role === 'user') {
+              return (
+                <div
+                  key={i}
+                  className="learning-message user ml-auto flex max-w-[85%] flex-col items-end !border-0 !bg-transparent !p-0"
+                  data-role="user"
+                >
+                  <div className="rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-4 py-3 text-[15px] leading-relaxed text-[var(--color-ink)]">
+                    <div className="learning-message-text">
+                      <MdContent text={msg.content} />
+                    </div>
+                  </div>
+                  {!isLoading && (
+                    <div className="mt-1 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleRetry(i)}
+                        className="inline-flex cursor-pointer items-center rounded p-1 text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+                        title="Retry this prompt"
+                        aria-label="Retry this prompt"
+                      >
+                        <RotateCcw size={12} />
+                      </button>
+                    </div>
+                  )}
                 </div>
-              )}
-              <div className="learning-message-text"><MdContent text={msg.content} /></div>
-              {msg.role === 'ai' && msg.content && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-1)' }}>
-                  <CopyButton text={msg.content} />
-                </div>
-              )}
-              {msg.role === 'user' && !isLoading && (
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 'var(--space-1)' }}>
-                  <button
-                    onClick={() => handleRetry(i)}
-                    className="btn-ghost"
-                    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '2px', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center' }}
-                    title="Retry this prompt"
-                  >
-                    <RotateCcw size={13} />
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
+              )
+            }
 
-        {isLoading && (
-          <div className="learning-message ai">
-            <div className="learning-message-avatar ai">✦</div>
-            <div className="learning-message-body" style={{ width: '100%' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '4px 0' }}>
-                <Skeleton style={{ width: '90%', height: 16 }} />
-                <Skeleton style={{ width: '95%', height: 16 }} />
-                <Skeleton style={{ width: '80%', height: 16 }} />
+            const streamingThis = isLoading && isLast
+            return (
+              <div
+                key={i}
+                className="learning-message ai flex w-full items-start gap-3.5 !border-0 !bg-transparent !p-0"
+                data-role="ai"
+              >
+                <div className="mt-0.5 shrink-0">
+                  <KitAvatar size={24} state={streamingThis ? 'thinking' : 'idle'} />
+                </div>
+                <div className="learning-message-body min-w-0 flex-1 !border-0 !bg-transparent !p-0">
+                  <div className="mb-1.5 flex flex-wrap items-center gap-1.5 text-[11.5px] text-[var(--color-ink-faint)]">
+                    <span className="font-semibold text-[var(--color-ink)]">Kit</span>
+                    {msg.persona?.name && (
+                      <>
+                        <span>·</span>
+                        <span>{msg.persona.name}</span>
+                      </>
+                    )}
+                    {msg.model && (
+                      <span className="rounded bg-[var(--color-surface-low)] px-1.5 py-0.5 font-mono text-[10.5px]">
+                        {msg.model}
+                      </span>
+                    )}
+                  </div>
+
+                  {streamingThis && !msg.content ? (
+                    <div className="flex flex-col gap-2 py-1">
+                      <Skeleton style={{ width: '88%', height: 15 }} />
+                      <Skeleton style={{ width: '94%', height: 15 }} />
+                      <Skeleton style={{ width: '72%', height: 15 }} />
+                    </div>
+                  ) : (
+                    <div className="learning-message-text text-[15.5px] leading-[1.72] text-[var(--color-ink)]">
+                      <MdContent text={msg.content} />
+                    </div>
+                  )}
+
+                  {msg.content && (
+                    <div className="mt-1.5 flex justify-end">
+                      <CopyButton text={msg.content} />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+
+          {isLoading && (messages.length === 0 || messages[messages.length - 1]?.role !== 'ai') && (
+            <div
+              className="learning-message ai flex w-full items-start gap-3.5 !border-0 !bg-transparent !p-0"
+              data-role="ai"
+            >
+              <div className="mt-0.5 shrink-0">
+                <KitAvatar size={24} state="thinking" />
+              </div>
+              <div className="learning-message-body min-w-0 flex-1">
+                <div className="flex flex-col gap-2 py-1">
+                  <Skeleton style={{ width: '88%', height: 15 }} />
+                  <Skeleton style={{ width: '94%', height: 15 }} />
+                  <Skeleton style={{ width: '72%', height: 15 }} />
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {errorMsg && (
-          <div style={{ margin: 'var(--space-2) var(--space-4)', padding: 'var(--space-3)', background: 'rgba(239,68,68,0.1)', color: 'var(--color-error)', borderRadius: 'var(--radius-md)', fontSize: 'var(--text-xs)' }}>
-            {errorMsg}
-          </div>
-        )}
+          {errorMsg && (
+            <div
+              role="alert"
+              className="rounded-xl border border-[var(--color-err)]/30 bg-[var(--color-diff-del-bg)] px-4 py-2.5 text-[12.5px] text-[var(--color-err)]"
+            >
+              {errorMsg}
+            </div>
+          )}
+        </div>
         <div ref={messagesEndRef} />
       </div>
 
-      {/* ── Input ── */}
-      <div className="learning-chat-input-area" style={{ position: 'relative' }}>
-        <div className="learning-chat-input-wrapper">
-          {isLoading && (
-            <button
-              onClick={handleStop}
-              style={{
-                position: 'absolute',
-                top: '-40px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '6px 12px',
-                background: 'var(--color-surface)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-full)',
-                fontSize: 'var(--text-xs)',
-                cursor: 'pointer',
-                color: 'var(--color-text-secondary)',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-              }}
-            >
-              <Square fill="currentColor" size={10} /> Stop generating
-            </button>
-          )}
-          <textarea
-            ref={inputRef}
-            className="learning-chat-input"
-            placeholder="Ask a question, explore a concept, request examples..."
-            value={input}
-            onChange={(e) => {
-              setInput(e.target.value)
-              const el = e.target
-              el.style.height = 'auto'
-              el.style.height = `${Math.min(el.scrollHeight, 320)}px`
-            }}
-            onKeyDown={handleKeyDown}
-            rows={2}
-            id="learning-chat-input"
-          />
-          <button
-            className="chat-send-btn"
-            onClick={() => { void handleSend() }}
-            disabled={!input.trim() || isLoading}
-            aria-label="Send message"
-          >
-            <Send size={15} />
-          </button>
-        </div>
-        <div className="learning-chat-help-text" style={{ textAlign: 'center', fontSize: '10px', color: 'var(--color-text-tertiary)', marginTop: 'var(--space-1)' }}>
-          Enter to send · Shift+Enter for new line · Drag bottom-right to resize · Sessions saved automatically
+      {/* ── Spacious Inviting Composer ── */}
+      <div className="learning-chat-input-area relative border-t border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3 sm:px-8">
+        <div className="mx-auto w-full max-w-3xl">
+          <div className="rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] p-3 shadow-[var(--shadow-sheet)] transition-[border-color,box-shadow] duration-150 focus-within:border-[var(--color-brand)]/75">
+            {quotedSnippet && (
+              <div
+                data-testid="learning-chat-quote"
+                className="mb-2.5 flex items-start justify-between gap-2 rounded-lg border-l-2 border-[var(--color-brand)] bg-[var(--color-surface-low)] px-3 py-2 text-[13px] text-[var(--color-ink-muted)]"
+              >
+                <span className="line-clamp-2">“{quotedSnippet}”</span>
+                <button
+                  type="button"
+                  aria-label="Remove quoted snippet"
+                  onClick={clearQuote}
+                  className="mt-0.5 shrink-0 cursor-pointer text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
+
+            <div className="flex items-end gap-2.5">
+              <textarea
+                ref={inputRef}
+                className="learning-chat-input min-h-[48px] flex-1 resize-none !border-0 !bg-transparent !p-0 text-[15px] leading-relaxed text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:outline-none"
+                placeholder="Ask Kit a question, test an idea, or request an example..."
+                value={input}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  const el = e.target
+                  el.style.height = 'auto'
+                  el.style.height = `${Math.min(el.scrollHeight, 320)}px`
+                }}
+                onKeyDown={handleKeyDown}
+                rows={2}
+                id="learning-chat-input"
+              />
+
+              {isLoading ? (
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  aria-label="Stop generating"
+                  className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--color-err)]/30 bg-[var(--color-diff-del-bg)] px-3 text-[12.5px] font-medium text-[var(--color-err)] transition-opacity hover:opacity-90 active:scale-[0.97]"
+                >
+                  <Square fill="currentColor" size={10} />
+                  <span>Stop</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="chat-send-btn inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-3 text-[12.5px] font-semibold text-[var(--color-accent-ink)] transition-[transform,background-color,opacity] duration-120 hover:bg-[var(--color-accent-fill-hover)] active:scale-[0.97] disabled:pointer-events-none disabled:opacity-45"
+                  onClick={() => {
+                    void handleSend()
+                  }}
+                  disabled={(!input.trim() && !quotedSnippet) || isLoading}
+                  aria-label="Send message"
+                >
+                  <span className="hide-on-mobile">Ask Kit</span>
+                  <Send size={13} />
+                </button>
+              )}
+            </div>
+          </div>
+
+          <div className="mt-1.5 text-center text-[11px] text-[var(--color-ink-faint)]">
+            Enter to send · Shift+Enter for new line
+          </div>
         </div>
       </div>
     </div>

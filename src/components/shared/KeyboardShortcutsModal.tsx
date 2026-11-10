@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { X, Keyboard } from 'lucide-react'
+import { Kbd } from '../ui'
 
 export interface KeyboardShortcutsModalProps {
   open: boolean
@@ -10,9 +11,9 @@ const SHORTCUT_SECTIONS = [
   {
     category: 'Global Navigation',
     items: [
-      { label: 'Chat', keys: ['⌘', '1'] },
+      { label: 'Learn', keys: ['⌘', '1'] },
       { label: 'Guide', keys: ['⌘', '2'] },
-      { label: 'Builder / Concept Map', keys: ['⌘', '3'] },
+      { label: 'Architecture / Concept Map', keys: ['⌘', '3'] },
       { label: 'Flashcards', keys: ['⌘', '4'] },
       { label: 'Feynman', keys: ['⌘', '5'] },
       { label: 'Interleaved', keys: ['⌘', '6'] },
@@ -21,7 +22,8 @@ const SHORTCUT_SECTIONS = [
       { label: 'Quick Calculator', keys: ['⌘', 'E'] },
       { label: 'Toggle Pomodoro', keys: ['⌘', '9'] },
       { label: 'Settings', keys: ['⌘', ','] },
-      { label: 'Command Palette / Search', keys: ['⌘', 'K'] },
+      { label: 'Command Palette / Search', keys: ['⌘', '/'] },
+      { label: 'Show Shortcut Sheet', keys: ['⌘', '?'] },
       { label: 'Contextual Chat Panel', keys: ['⌘', 'J'] },
       { label: 'Toggle Sidebar', keys: ['⌘', 'B'] },
     ],
@@ -29,7 +31,7 @@ const SHORTCUT_SECTIONS = [
   {
     category: 'Study & Flashcards',
     items: [
-      { label: 'Flip Card / Submit', keys: ['Space'] },
+      { label: 'Flip Card / Reveal', keys: ['Space'] },
       { label: 'Rate: Again', keys: ['1'] },
       { label: 'Rate: Hard', keys: ['2'] },
       { label: 'Rate: Good', keys: ['3'] },
@@ -37,7 +39,7 @@ const SHORTCUT_SECTIONS = [
     ],
   },
   {
-    category: 'Chat',
+    category: 'Learn & Composer',
     items: [
       { label: 'Send Message', keys: ['Enter'] },
       { label: 'New Line', keys: ['Shift', 'Enter'] },
@@ -61,80 +63,60 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
   if (!open) return null
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[400] flex items-center justify-center bg-black/50 px-4 backdrop-blur-[2px]"
+      onClick={onClose}
+    >
       <div
-        className="modal-content"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="keyboard-shortcuts-heading"
+        className="animate-popover-enter w-full max-w-[500px] overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] text-[var(--color-ink)] shadow-[var(--shadow-float)]"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: 500, width: '90%' }}
       >
-        <div className="modal-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <Keyboard size={20} className="text-accent" />
-            <h2 style={{ fontSize: '1.25rem', fontWeight: 600 }}>Keyboard Shortcuts</h2>
+        <div className="flex items-center justify-between border-b border-[var(--color-line)] px-5 py-3.5">
+          <div className="flex items-center gap-2.5">
+            <Keyboard size={18} className="text-[var(--color-ink-muted)]" />
+            <h2
+              id="keyboard-shortcuts-heading"
+              className="text-[15.5px] font-semibold tracking-tight text-[var(--color-ink)]"
+            >
+              Keyboard Shortcuts
+            </h2>
           </div>
-          <button className="close-btn" onClick={onClose} aria-label="Close shortcuts">
-            <X size={20} />
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close shortcuts"
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+          >
+            <X size={16} />
           </button>
         </div>
 
-        <div className="modal-body" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-6)' }}>
-            {SHORTCUT_SECTIONS.map((section) => (
-              <div key={section.category}>
-                <h3
-                  style={{
-                    fontSize: '0.85rem',
-                    textTransform: 'uppercase',
-                    color: 'var(--color-text-tertiary)',
-                    fontWeight: 700,
-                    letterSpacing: '0.05em',
-                    marginBottom: 'var(--space-3)',
-                  }}
-                >
-                  {section.category}
-                </h3>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
-                  {section.items.map((item, itemIdx) => (
-                    <div
-                      key={item.label}
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        alignItems: 'center',
-                        padding: 'var(--space-2) 0',
-                        borderBottom:
-                          itemIdx < section.items.length - 1
-                            ? '1px solid var(--color-border)'
-                            : 'none',
-                      }}
-                    >
-                      <span style={{ color: 'var(--color-text-primary)' }}>{item.label}</span>
-                      <div style={{ display: 'flex', gap: 'var(--space-1)' }}>
-                        {item.keys.map((k, kIdx) => (
-                          <kbd
-                            key={kIdx}
-                            style={{
-                              background: 'var(--color-bg-secondary)',
-                              border: '1px solid var(--color-border)',
-                              borderRadius: '4px',
-                              padding: '2px 6px',
-                              fontSize: '0.75rem',
-                              fontFamily: 'monospace',
-                              color: 'var(--color-text-secondary)',
-                              minWidth: 24,
-                              textAlign: 'center',
-                            }}
-                          >
-                            {k}
-                          </kbd>
-                        ))}
-                      </div>
+        <div className="max-h-[64vh] space-y-5 overflow-y-auto px-5 py-4">
+          {SHORTCUT_SECTIONS.map((section) => (
+            <div key={section.category}>
+              <h3 className="mb-2 text-[11px] font-semibold tracking-wider text-[var(--color-ink-faint)] uppercase">
+                {section.category}
+              </h3>
+              <div className="divide-y divide-[var(--color-line)] rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-low)] px-3.5">
+                {section.items.map((item) => (
+                  <div
+                    key={item.label}
+                    className="flex items-center justify-between gap-3 py-2 text-[13px]"
+                  >
+                    <span className="text-[var(--color-ink)]">{item.label}</span>
+                    <div className="flex items-center gap-1">
+                      {item.keys.map((k, kIdx) => (
+                        <Kbd key={kIdx}>{k}</Kbd>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>

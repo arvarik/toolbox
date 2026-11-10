@@ -1,7 +1,8 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { Send, X, Sparkles, Copy, Check, RotateCcw, Square } from 'lucide-react'
+import { Send, X, Copy, Check, RotateCcw, Square } from 'lucide-react'
 import MarkdownRenderer from './MarkdownRenderer'
+import { KitAvatar } from '../ui'
 import useAppStore from '../../stores/appStore'
 import useKitStore, {
   extractKitSlugFromPathname,
@@ -24,6 +25,8 @@ export interface ChatPanelProps {
   context?: string
 }
 
+const QUOTE_STORAGE_KEY = 'toolbox_chat_quote'
+
 // Safe storage wrapper to prevent SSR or restricted environment crashes
 const safeStorage = {
   getItem: (key: string): string | null => {
@@ -45,6 +48,15 @@ const safeStorage = {
       // Ignore
     }
   },
+  removeItem: (key: string): void => {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(key)
+      }
+    } catch {
+      // Ignore
+    }
+  },
 }
 
 const getHistoryForKey = (storageKey: string): ChatPanelMessage[] => {
@@ -59,7 +71,8 @@ const getHistoryForKey = (storageKey: string): ChatPanelMessage[] => {
             (m): m is ChatPanelMessage =>
               Boolean(m) &&
               typeof m === 'object' &&
-              ('role' in m && (m.role === 'user' || m.role === 'ai')) &&
+              'role' in m &&
+              (m.role === 'user' || m.role === 'ai') &&
               typeof (m as { content?: unknown }).content === 'string',
           )
         }
@@ -116,22 +129,14 @@ function CopyButton({ text }: { text: string }) {
 
   return (
     <button
-      className="btn-copy-chat"
+      type="button"
+      className="btn-copy-chat inline-flex cursor-pointer items-center rounded p-1 text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
       onClick={() => void handleCopy()}
       aria-label={copied ? 'Copied!' : 'Copy to clipboard'}
       title={copied ? 'Copied!' : 'Copy to clipboard'}
-      style={{
-        background: 'none',
-        border: 'none',
-        cursor: 'pointer',
-        padding: '2px',
-        display: 'flex',
-        alignItems: 'center',
-        color: 'var(--color-text-muted)',
-      }}
     >
       {copied ? (
-        <Check size={14} style={{ color: 'var(--color-success, #22c55e)' }} />
+        <Check size={14} className="text-[var(--color-ok)]" />
       ) : (
         <Copy size={14} />
       )}
@@ -174,6 +179,7 @@ function ChatPanelContent({
   })
 
   const [input, setInput] = useState('')
+  const [quotedSnippet, setQuotedSnippet] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
@@ -191,12 +197,52 @@ function ChatPanelContent({
     }
   }, [])
 
+  const clearQuote = useCallback(() => {
+    setQuotedSnippet(null)
+    safeStorage.removeItem(QUOTE_STORAGE_KEY)
+  }, [])
+
+  // Consume stored quote when panel opens or when 'toolbox:ask-kit' fires
+  useEffect(() => {
+    if (isOpen) {
+      const stored = safeStorage.getItem(QUOTE_STORAGE_KEY)
+      if (stored && stored.trim()) {
+        safeStorage.removeItem(QUOTE_STORAGE_KEY)
+        setQuotedSnippet(stored.trim())
+      }
+      inputRef.current?.focus()
+    }
+  }, [isOpen])
+
+  useEffect(() => {
+    const onAskKit = (e: Event) => {
+      const detailQuote = (e as CustomEvent<{ quote?: string }>).detail?.quote
+      const stored = safeStorage.getItem(QUOTE_STORAGE_KEY)
+      const nextQuote = (detailQuote && detailQuote.trim()) || (stored && stored.trim()) || null
+      if (nextQuote) {
+        if (isOpen || page === 'guide') {
+          safeStorage.removeItem(QUOTE_STORAGE_KEY)
+        }
+        setQuotedSnippet(nextQuote)
+        inputRef.current?.focus()
+      }
+    }
+    window.addEventListener('toolbox:ask-kit', onAskKit)
+    return () => window.removeEventListener('toolbox:ask-kit', onAskKit)
+  }, [isOpen, page])
+
   const handleSend = async (
     customText?: string,
     overrideHistory: ChatPanelMessage[] | null = null,
+    skipQuote = false,
   ) => {
-    const text = typeof customText === 'string' ? customText : input.trim()
-    if (!text || isLoading) return
+    const baseText = typeof customText === 'string' ? customText : input.trim()
+    const attachQuote = overrideHistory === null && !skipQuote ? quotedSnippet : null
+    if ((!baseText && !attachQuote) || isLoading) return
+
+    const text = attachQuote
+      ? `> ${attachQuote}\n\n${baseText || 'Explain this passage.'}`
+      : baseText
 
     const currentHistory = overrideHistory ?? messages
     const userMessage: ChatPanelMessage = { role: 'user', content: text }
@@ -205,6 +251,9 @@ function ChatPanelContent({
 
     if (typeof customText !== 'string') {
       setInput('')
+    }
+    if (attachQuote) {
+      clearQuote()
     }
 
     setIsLoading(true)
@@ -286,12 +335,6 @@ function ChatPanelContent({
   handleSendRef.current = handleSend
 
   useEffect(() => {
-    if (isOpen && inputRef.current) {
-      inputRef.current.focus()
-    }
-  }, [isOpen])
-
-  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
@@ -313,7 +356,7 @@ function ChatPanelContent({
         clearTimeout(timeoutRef.current)
       }
       timeoutRef.current = setTimeout(() => {
-        void handleSendRef.current('Verify my architecture design')
+        void handleSendRef.current('Verify my architecture design', null, true)
         hasTriggeredRef.current = true
       }, 0)
     }
@@ -343,7 +386,7 @@ function ChatPanelContent({
     if (userMsg && userMsg.role === 'user') {
       const newHistory = messages.slice(0, index)
       setMessages(newHistory)
-      setTimeout(() => void handleSend(userMsg.content, newHistory), 50)
+      setTimeout(() => void handleSend(userMsg.content, newHistory, true), 50)
     }
   }
 
@@ -420,7 +463,9 @@ function ChatPanelContent({
 
   return (
     <div
-      className={`chat-panel${isMobile ? ' mobile-fullscreen' : ''}`}
+      className={`chat-panel border-l border-[var(--color-line)] bg-[var(--color-surface)]${
+        isMobile ? ' mobile-fullscreen' : ''
+      }`}
       id={`chat-panel-${page}`}
       style={isMobile ? { width: '100%' } : { width: `${width}px` }}
       data-testid="chat-panel-container"
@@ -442,31 +487,25 @@ function ChatPanelContent({
         />
       )}
 
-      <div className="chat-panel-header">
-        <div className="chat-panel-title" data-testid="chat-title">
-          <span className="ai-dot" />
-          <Sparkles size={14} />
-          {displayTitle}
-        </div>
+      <div className="chat-panel-header border-b border-[var(--color-line)] bg-[var(--color-surface-low)]">
         <div
-          className="chat-header-actions"
-          style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}
+          className="chat-panel-title flex items-center gap-2 text-[13.5px] font-medium text-[var(--color-ink)]"
+          data-testid="chat-title"
         >
+          <KitAvatar size={20} state={isLoading ? 'thinking' : 'idle'} />
+          <span>{displayTitle}</span>
+        </div>
+        <div className="chat-header-actions flex items-center gap-1.5">
           <button
+            type="button"
             aria-label="Clear conversation"
             onClick={handleClear}
-            className="btn-clear-chat"
-            style={{
-              fontSize: 'var(--text-xs)',
-              background: 'none',
-              border: 'none',
-              cursor: 'pointer',
-              color: 'var(--color-text-secondary)',
-            }}
+            className="btn-clear-chat cursor-pointer rounded px-2 py-1 text-[12px] text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
           >
             Clear
           </button>
           <button
+            type="button"
             className="btn btn-ghost btn-icon"
             onClick={() => toggleChat(page)}
             aria-label="Close chat"
@@ -478,11 +517,11 @@ function ChatPanelContent({
 
       <div className="chat-messages" data-testid="chat-messages-container">
         {messages.length === 0 && (
-          <div className="empty-state" style={{ padding: 'var(--space-8) var(--space-4)' }}>
-            <div className="empty-state-icon">
-              <Sparkles size={24} />
+          <div className="empty-state px-4 py-8">
+            <div className="mb-3 flex justify-center">
+              <KitAvatar size={28} state="idle" />
             </div>
-            <div className="empty-state-title" style={{ fontSize: 'var(--text-md)' }}>
+            <div className="empty-state-title font-serif text-[17px] text-[var(--color-ink)]">
               {apiKeyConfigured
                 ? `Ask about ${
                     page === 'guide'
@@ -493,28 +532,22 @@ function ChatPanelContent({
                   }`
                 : 'Configure API Key'}
             </div>
-            <div className="empty-state-description" style={{ fontSize: 'var(--text-xs)' }}>
+            <div className="empty-state-description mt-1 text-[12.5px] text-[var(--color-ink-muted)]">
               {apiKeyConfigured
                 ? 'Type a question below to get started.'
                 : 'Add your API key in Settings to enable AI features.'}
             </div>
             {apiKeyConfigured && (
               <div
-                className="starter-prompts"
+                className="starter-prompts mt-4 flex flex-col gap-2"
                 data-testid="starter-prompts"
-                style={{
-                  marginTop: 'var(--space-4)',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 'var(--space-2)',
-                }}
               >
                 {starterPrompts.map((prompt, i) => (
                   <button
                     key={i}
-                    className="starter-prompt-btn"
+                    type="button"
+                    className="starter-prompt-btn w-full cursor-pointer rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] px-3 py-2 text-left text-[12.5px] text-[var(--color-ink-muted)] transition-colors hover:border-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
                     onClick={() => void handleSend(prompt)}
-                    style={{ textAlign: 'left', width: '100%' }}
                   >
                     {prompt}
                   </button>
@@ -524,62 +557,58 @@ function ChatPanelContent({
           </div>
         )}
 
-        {messages.map((msg, i) => (
-          <div key={i} className={`chat-message ${msg.role}`} data-testid={`message-${msg.role}`}>
-            <div className={`chat-message-avatar ${msg.role}`}>
-              {msg.role === 'ai' ? '✦' : 'U'}
-            </div>
-            <div className="chat-message-content">
-              <div className="chat-message-text">
-                {msg.content ? <MarkdownRenderer content={msg.content} /> : null}
+        {messages.map((msg, i) => {
+          const isLast = i === messages.length - 1
+          return (
+            <div
+              key={i}
+              className={`chat-message ${msg.role}`}
+              data-testid={`message-${msg.role}`}
+            >
+              {msg.role === 'ai' ? (
+                <div className="mt-0.5 shrink-0">
+                  <KitAvatar
+                    size={20}
+                    state={isLoading && isLast ? 'thinking' : 'idle'}
+                  />
+                </div>
+              ) : (
+                <div className="chat-message-avatar user">U</div>
+              )}
+              <div className="chat-message-content">
+                <div className="chat-message-text">
+                  {msg.content ? <MarkdownRenderer content={msg.content} /> : null}
+                </div>
+                {msg.role === 'ai' && (
+                  <div className="mt-1.5 flex justify-end">
+                    <CopyButton text={msg.content} />
+                  </div>
+                )}
+                {msg.role === 'user' && !isLoading && (
+                  <div className="mt-1 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleRetry(i)}
+                      className="btn-ghost inline-flex cursor-pointer items-center rounded p-1 text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+                      title="Retry this prompt"
+                      aria-label="Retry this prompt"
+                    >
+                      <RotateCcw size={13} />
+                    </button>
+                  </div>
+                )}
               </div>
-              {msg.role === 'ai' && (
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    marginTop: 'var(--space-2)',
-                  }}
-                >
-                  <CopyButton text={msg.content} />
-                </div>
-              )}
-              {msg.role === 'user' && !isLoading && (
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'flex-end',
-                    marginTop: 'var(--space-1)',
-                  }}
-                >
-                  <button
-                    onClick={() => handleRetry(i)}
-                    className="btn-ghost"
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      padding: '2px',
-                      color: 'var(--color-text-muted)',
-                      display: 'flex',
-                      alignItems: 'center',
-                    }}
-                    title="Retry this prompt"
-                    aria-label="Retry this prompt"
-                  >
-                    <RotateCcw size={13} />
-                  </button>
-                </div>
-              )}
             </div>
-          </div>
-        ))}
+          )
+        })}
 
         {isLoading && (
           <div className="chat-message ai loading" data-testid="chat-loading">
-            <div className="chat-message-avatar ai">✦</div>
-            <div className="chat-message-content" style={{ width: '100%' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            <div className="mt-0.5 shrink-0">
+              <KitAvatar size={20} state="thinking" />
+            </div>
+            <div className="chat-message-content w-full">
+              <div className="flex flex-col gap-2">
                 <Skeleton style={{ width: '90%', height: 16 }} />
                 <Skeleton style={{ width: '95%', height: 16 }} />
                 <Skeleton style={{ width: '80%', height: 16 }} />
@@ -591,15 +620,8 @@ function ChatPanelContent({
         {errorMsg && (
           <div
             role="alert"
-            className="chat-error-alert"
+            className="chat-error-alert m-2 rounded-lg border border-[var(--color-err)]/30 bg-[var(--color-diff-del-bg)] p-3 text-[12.5px] text-[var(--color-err)]"
             data-testid="chat-error"
-            style={{
-              color: 'var(--color-error)',
-              padding: 'var(--space-3)',
-              margin: 'var(--space-2)',
-              borderRadius: 'var(--radius-md)',
-              background: 'rgba(239, 68, 68, 0.1)',
-            }}
           >
             Error: {errorMsg}
           </div>
@@ -608,29 +630,31 @@ function ChatPanelContent({
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="chat-input-area">
-        <div className="chat-input-wrapper">
+      <div className="chat-input-area border-t border-[var(--color-line)] bg-[var(--color-surface)] p-3">
+        {quotedSnippet && (
+          <div
+            data-testid="chat-quoted-snippet"
+            className="mb-2 flex items-start justify-between gap-2 rounded-lg border-l-2 border-[var(--color-brand)] bg-[var(--color-surface-low)] px-2.5 py-1.5 text-[12px] text-[var(--color-ink-muted)]"
+          >
+            <span className="line-clamp-2">“{quotedSnippet}”</span>
+            <button
+              type="button"
+              aria-label="Remove quoted snippet"
+              onClick={clearQuote}
+              className="mt-0.5 shrink-0 cursor-pointer text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
+
+        <div className="chat-input-wrapper relative rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)]">
           {isLoading && (
             <button
+              type="button"
               onClick={handleStop}
-              style={{
-                position: 'absolute',
-                top: '-32px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                padding: '4px 10px',
-                background: 'var(--color-surface)',
-                border: '1px solid var(--color-border)',
-                borderRadius: 'var(--radius-full)',
-                fontSize: 'var(--text-xs)',
-                cursor: 'pointer',
-                color: 'var(--color-text-secondary)',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
-                zIndex: 10,
-              }}
+              aria-label="Stop generating"
+              className="absolute -top-9 left-1/2 z-10 flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-3 py-1 text-[11.5px] text-[var(--color-ink)] shadow-[var(--shadow-float)]"
             >
               <Square fill="currentColor" size={10} /> Stop generating
             </button>
@@ -646,9 +670,10 @@ function ChatPanelContent({
             id={`chat-input-${page}`}
           />
           <button
+            type="button"
             className="chat-send-btn"
             onClick={() => void handleSend()}
-            disabled={!input.trim() || isLoading}
+            disabled={(!input.trim() && !quotedSnippet) || isLoading}
             aria-label="Send message"
           >
             <Send size={14} />
@@ -662,9 +687,16 @@ function ChatPanelContent({
 export default function ChatPanel(props: ChatPanelProps) {
   const activeKitSlug = useKitStore((s) => s.activeKitSlug)
   const { kit } = useActiveKit()
-  const effectiveKitSlug = extractKitSlugFromPathname(window.location.pathname) || activeKitSlug
+  const effectiveKitSlug =
+    extractKitSlugFromPathname(window.location.pathname) || activeKitSlug
   const storageKey = effectiveKitSlug ? `${effectiveKitSlug}:${props.page}` : props.page
-  const kitName = effectiveKitSlug && kit ? kit.name : null
+  const isCustomKit = Boolean(
+    effectiveKitSlug &&
+      effectiveKitSlug !== 'system-design' &&
+      kit &&
+      (kit as { slug?: string }).slug !== 'system-design',
+  )
+  const kitName = isCustomKit && kit ? kit.name : null
 
   return (
     <ChatPanelContent
