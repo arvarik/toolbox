@@ -5,8 +5,9 @@
 # package version is usually found and pulled within days, so the wait keeps
 # most of them out of this repository.
 #
-# A security update ignores the cooldown and the schedule. Those come from the
-# "Dependabot security updates" setting, not from this file.
+# A security update ignores the cooldown and the schedule. The "Dependabot
+# security updates" setting turns them on, and the `npm-security` group below
+# puts every npm security update in one pull request.
 version: 2
 updates:
   - package-ecosystem: npm
@@ -26,6 +27,10 @@ updates:
       production-dependencies:
         dependency-type: production
         update-types: [minor, patch]
+      # One pull request for all npm security updates, not one per package.
+      npm-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   # Keep workflow actions up to date weekly.
   - package-ecosystem: github-actions
