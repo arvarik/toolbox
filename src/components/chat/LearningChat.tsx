@@ -782,11 +782,13 @@ export default function LearningChat({
       topicName: activeTopic.topic.name,
       model: selectedModel,
     })
-    fetch(`/api/chat/starters?${params.toString()}`, {
-      cache: 'no-store',
-      headers: activeSlug ? { 'X-Toolbox-Kit': activeSlug } : undefined,
-    })
-      .then((res) => (res.ok ? res.json() : null))
+    Promise.resolve(
+      fetch(`/api/chat/starters?${params.toString()}`, {
+        cache: 'no-store',
+        headers: activeSlug ? { 'X-Toolbox-Kit': activeSlug } : undefined,
+      }),
+    )
+      .then((res) => (res?.ok ? res.json() : null))
       .then((data: { suggestions?: string[] } | null) => {
         if (active && data?.suggestions) {
           setStarters(data.suggestions.slice(0, 3))
