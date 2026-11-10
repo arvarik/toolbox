@@ -15,12 +15,12 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
-  Sparkles,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
 import type { KitSkeletonV1, Pillar } from "../../shared/kits/kitSkeleton.ts";
+import { DomainGlyph, resolveKitGlyph } from "../components/ui/DomainGlyph";
 import useAppStore from "../stores/appStore";
 import useKitStore from "../stores/useKitStore";
 import {
@@ -83,7 +83,7 @@ export default function NewKitStudioPage() {
     null,
   );
   const [suggestedTitle, setSuggestedTitle] = useState("");
-  const [suggestedIcon, setSuggestedIcon] = useState("📚");
+  const [suggestedIcon, setSuggestedIcon] = useState("");
   const [suggestedDescription, setSuggestedDescription] = useState("");
   const [canvasMode, setCanvasMode] = useState<
     "none" | "concept" | "architecture"
@@ -204,7 +204,7 @@ export default function NewKitStudioPage() {
       });
       setCalibration(res.calibration);
       setSuggestedTitle(res.calibration.suggestedTitle);
-      setSuggestedIcon(res.calibration.suggestedIcon || "📚");
+      setSuggestedIcon(res.calibration.suggestedIcon || "");
       setSuggestedDescription(res.calibration.suggestedDescription);
       setCanvasMode(res.calibration.suggestedCapabilities.canvas);
       setEnableCalculator(res.calibration.suggestedCapabilities.calculator);
@@ -327,7 +327,7 @@ export default function NewKitStudioPage() {
         number: prev.pillars.length + 1,
         name: `New Pillar ${prev.pillars.length + 1}`,
         shortName: `Pillar ${prev.pillars.length + 1}`,
-        color: "#006a91",
+        color: "#857f74",
         // Server-validated drafts always have a pillar, and handleRemovePillar keeps one.
         sections: prev.pillars[0].sections,
         topics: [{ id: topicId, name: "Core Concepts" }],
@@ -498,20 +498,18 @@ export default function NewKitStudioPage() {
             <ArrowLeft size={14} />
             Back to My Library
           </Link>
-          <h1 className="text-2xl font-bold text-on-surface tracking-tight flex items-center gap-2.5">
-            <Sparkles size={24} className="text-primary" />
+          <h1 className="text-2xl sm:text-3xl font-serif font-semibold text-on-surface tracking-tight">
             Deep Research Kit Studio
           </h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            Compile grounded, cycle-verified Study Kits from any topic, PDF,
-            syllabus, or technical URL.
+            Compile grounded, cycle-verified Study Kits from topics, PDFs, or URLs.
           </p>
         </div>
 
         {/* Step Indicator */}
         <ol
           aria-label="Compiler Progress"
-          className="flex items-center gap-2 text-xs font-medium"
+          className="flex items-center gap-2 text-xs font-medium tabular-nums"
         >
           {[
             { num: 1, label: "Sources & Topic" },
@@ -625,7 +623,7 @@ export default function NewKitStudioPage() {
             {/* Web Research Toggle */}
             <label className="flex items-center justify-between gap-3 rounded-xl border border-outline-variant bg-surface-container-lowest p-3.5 cursor-pointer">
               <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-lg bg-primary/12 text-on-primary-wash flex items-center justify-center shrink-0">
+                <div className="w-9 h-9 rounded-lg border border-outline-variant bg-surface-container-high text-on-surface flex items-center justify-center shrink-0">
                   <Globe size={18} />
                 </div>
                 <div>
@@ -838,24 +836,25 @@ export default function NewKitStudioPage() {
         <div className="space-y-6">
           {/* Suggested Kit Identity & Capabilities */}
           <section className="rounded-2xl border border-outline-variant bg-surface-container-low p-5 sm:p-6 space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-[80px_1fr] gap-3">
+            <div className="flex items-end gap-3">
               <div>
-                <label
-                  htmlFor="studio-kit-icon"
-                  className="block text-xs font-semibold text-on-surface mb-1"
-                >
-                  Icon
-                </label>
-                <input
+                <span className="block text-xs font-semibold text-on-surface mb-1">
+                  Glyph
+                </span>
+                <span
                   id="studio-kit-icon"
-                  type="text"
-                  maxLength={8}
-                  value={suggestedIcon}
-                  onChange={(e) => setSuggestedIcon(e.target.value)}
-                  className="w-full text-center rounded-xl border border-outline-variant bg-surface-container-lowest px-2 py-2 text-lg text-on-surface"
-                />
+                  aria-hidden="true"
+                  className="w-10 h-10 rounded-xl border border-outline-variant bg-surface-container-high text-on-surface flex items-center justify-center shrink-0"
+                >
+                  <DomainGlyph
+                    kind={resolveKitGlyph(
+                      `${suggestedTitle} ${topicPrompt} ${suggestedIcon}`,
+                    )}
+                    size={18}
+                  />
+                </span>
               </div>
-              <div>
+              <div className="flex-1 min-w-0">
                 <label
                   htmlFor="studio-kit-title"
                   className="block text-xs font-semibold text-on-surface mb-1"
@@ -868,7 +867,7 @@ export default function NewKitStudioPage() {
                   type="text"
                   value={suggestedTitle}
                   onChange={(e) => setSuggestedTitle(e.target.value)}
-                  className="w-full rounded-xl border border-outline-variant bg-surface-container-lowest px-3.5 py-2 text-sm font-semibold text-on-surface"
+                  className="w-full rounded-xl border border-outline-variant bg-surface-container-lowest px-3.5 py-2 text-sm font-serif font-semibold text-on-surface"
                 />
               </div>
             </div>
@@ -935,7 +934,7 @@ export default function NewKitStudioPage() {
                   className="rounded-2xl border border-outline-variant bg-surface-container-low p-5 space-y-3"
                 >
                   <div>
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-on-primary-wash bg-primary/12 px-2 py-0.5 rounded-full">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-on-surface-variant border border-outline-variant bg-surface-container-high px-2 py-0.5 rounded-full">
                       {dim.label}
                     </span>
                     <h3 className="text-sm font-semibold text-on-surface mt-2">
@@ -965,7 +964,7 @@ export default function NewKitStudioPage() {
                         >
                           {option}
                           {option === dim.recommended && (
-                            <span className="ml-1.5 text-[10px] opacity-80">
+                            <span className="ml-1.5 text-[10px]">
                               (Recommended)
                             </span>
                           )}
@@ -1040,8 +1039,16 @@ export default function NewKitStudioPage() {
           {/* Summary Banner */}
           <section className="rounded-2xl border border-outline-variant bg-surface-container-low p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-start gap-3.5">
-              <span className="w-12 h-12 rounded-2xl border border-outline-variant bg-surface-container-high flex items-center justify-center text-2xl shrink-0">
-                {draftSkeleton.identity.icon || "📚"}
+              <span
+                className="w-12 h-12 rounded-2xl border border-outline-variant bg-surface-container-high text-on-surface flex items-center justify-center shrink-0"
+                aria-hidden="true"
+              >
+                <DomainGlyph
+                  kind={resolveKitGlyph(
+                    `${draftSkeleton.identity.slug || ""} ${draftSkeleton.identity.name} ${draftSkeleton.identity.icon || ""}`,
+                  )}
+                  size={20}
+                />
               </span>
               <div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1062,14 +1069,14 @@ export default function NewKitStudioPage() {
                           : prev,
                       )
                     }
-                    className="text-lg font-bold text-on-surface bg-transparent border-b border-transparent hover:border-outline-variant focus:border-primary focus:outline-none"
+                    className="text-lg font-serif font-semibold text-on-surface bg-transparent border-b border-transparent hover:border-outline-variant focus:border-primary focus:outline-none"
                   />
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-primary/12 text-on-primary-wash">
-                    <ShieldCheck size={13} />
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium border border-outline-variant bg-surface-container-high text-on-surface">
+                    <ShieldCheck size={13} className="text-success" />
                     Acyclic DAG Verified
                   </span>
                 </div>
-                <p className="text-xs text-on-surface-variant mt-1">
+                <p className="text-xs text-on-surface-variant mt-1 tabular-nums">
                   {draftSkeleton.pillars.length} Pillars • {totalTopics} Topics
                   • {draftSkeleton.graph.nodes.length} Concept Nodes •{" "}
                   {draftSkeleton.graph.edges.length} Prerequisite Edges •{" "}
@@ -1181,14 +1188,7 @@ export default function NewKitStudioPage() {
                   {/* Pillar Header */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2.5 flex-1 min-w-0">
-                      <span
-                        className="px-2.5 py-1 rounded-lg text-xs font-bold bg-primary/15 text-on-primary-wash shrink-0"
-                        style={
-                          pillar.color
-                            ? { borderLeft: `3px solid ${pillar.color}` }
-                            : undefined
-                        }
-                      >
+                      <span className="px-2.5 py-1 rounded-lg text-xs font-mono font-semibold tabular-nums border border-outline-variant bg-surface-container-high text-on-surface shrink-0">
                         P{pillar.number}
                       </span>
                       <input
@@ -1198,7 +1198,7 @@ export default function NewKitStudioPage() {
                         onChange={(e) =>
                           handleRenamePillar(pillar.id, e.target.value)
                         }
-                        className="w-full font-semibold text-sm text-on-surface bg-surface-container-lowest border border-outline-variant rounded-lg px-2.5 py-1.5"
+                        className="w-full font-serif font-semibold text-sm text-on-surface bg-surface-container-lowest border border-outline-variant rounded-lg px-2.5 py-1.5"
                       />
                     </div>
 
@@ -1306,8 +1306,8 @@ export default function NewKitStudioPage() {
                   {/* Concept DAG Nodes Preview */}
                   {pillarNodes.length > 0 && (
                     <div className="pt-2 border-t border-outline-variant space-y-2">
-                      <div className="text-xs font-semibold text-on-surface-variant flex items-center gap-1.5">
-                        <GitBranch size={13} className="text-primary" />
+                      <div className="text-xs font-semibold text-on-surface-variant flex items-center gap-1.5 tabular-nums">
+                        <GitBranch size={13} className="text-on-surface-variant" />
                         Concept DAG Nodes ({pillarNodes.length})
                       </div>
                       <div className="flex flex-wrap gap-2">
@@ -1360,7 +1360,7 @@ export default function NewKitStudioPage() {
                           className="rounded-xl border border-outline-variant bg-surface-container-lowest px-3 py-2 flex flex-wrap items-center justify-between gap-2"
                         >
                           <div className="flex items-center gap-2 min-w-0">
-                            <span className="px-2 py-0.5 rounded-md font-mono font-semibold bg-primary/12 text-on-primary-wash">
+                            <span className="px-2 py-0.5 rounded-md font-mono font-semibold tabular-nums border border-outline-variant bg-surface-container-high text-on-surface">
                               [{entry.id}]
                             </span>
                             {entry.url ? (
@@ -1389,7 +1389,7 @@ export default function NewKitStudioPage() {
                         key={`${item.title}-${idx}`}
                         className="rounded-xl border border-outline-variant bg-surface-container-lowest px-3 py-2 flex items-center gap-2"
                       >
-                        <span className="px-2 py-0.5 rounded-md font-mono font-semibold bg-primary/12 text-on-primary-wash">
+                        <span className="px-2 py-0.5 rounded-md font-mono font-semibold tabular-nums border border-outline-variant bg-surface-container-high text-on-surface">
                           [S{idx + 1}]
                         </span>
                         <span className="font-medium text-on-surface">

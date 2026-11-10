@@ -2,16 +2,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   ArrowLeft,
-  Award,
-  CheckCircle2,
   Flame,
   Keyboard,
   Layers,
   Loader2,
+  PenLine,
   Wrench,
 } from "lucide-react";
 import MarkdownRenderer from "../components/shared/MarkdownRenderer";
 import type { SrsPreviews } from "../components/study/FlashcardView";
+import {
+  DomainGlyph,
+  Kbd,
+  KitAvatar,
+  resolveKitGlyph,
+} from "../components/ui";
 import useAppStore from "../stores/appStore";
 import { useKitStore } from "../stores/useKitStore";
 import { flashcardsApi } from "../utils/api";
@@ -71,12 +76,13 @@ export default function ReviewPage() {
   const [queue, setQueue] = useState<DueReviewCard[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
-  const [confidence, setConfidence] = useState<"low" | "medium" | "high">(
-    "medium",
-  );
+  const [typeAnswerOpen, setTypeAnswerOpen] = useState(false);
+  const [typedAnswer, setTypedAnswer] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
+
+  const confidence = "medium" as const;
 
   // Session telemetry & live FSRS/FIRe feedback
   const [reviewedCount, setReviewedCount] = useState(0);
@@ -175,7 +181,7 @@ export default function ReviewPage() {
 
         const nextIdx = currentIndex + 1;
         setRevealed(false);
-        setConfidence("medium");
+        setTypedAnswer("");
 
         if (nextIdx >= nextQueueLen) {
           setSessionDone(true);
@@ -191,7 +197,7 @@ export default function ReviewPage() {
         setSubmitting(false);
       }
     },
-    [currentCard, submitting, confidence, queue.length, currentIndex, addToast],
+    [currentCard, submitting, queue.length, currentIndex, addToast],
   );
 
   // Keyboard shortcuts: Space to reveal, 1 Again / 2 Hard / 3 Good / 4 Easy
@@ -241,7 +247,7 @@ export default function ReviewPage() {
         className="max-w-3xl mx-auto px-4 py-16 flex items-center justify-center gap-2 text-sm text-on-surface-variant"
       >
         <Loader2 size={18} className="animate-spin" />
-        Loading Cross-Kit FSRS-6 Daily Queue…
+        Loading daily review queue…
       </div>
     );
   }
@@ -253,14 +259,14 @@ export default function ReviewPage() {
         data-testid="review-empty-state"
         className="max-w-xl mx-auto px-4 py-16 text-center space-y-4"
       >
-        <div className="w-12 h-12 rounded-2xl bg-success/15 text-success flex items-center justify-center mx-auto">
-          <CheckCircle2 size={24} />
+        <div className="flex justify-center">
+          <KitAvatar size={36} state="done" />
         </div>
-        <h1 className="text-2xl font-bold text-on-surface">
-          All Caught Up Across Every Kit!
+        <h1 className="font-serif text-2xl font-normal text-on-surface">
+          All caught up across every Kit
         </h1>
         <p className="text-sm text-on-surface-variant">
-          Zero due cards remain in your unified FSRS-6 review queue right now.
+          Zero due cards remain in your unified FSRS-6 review queue.
         </p>
         <div className="pt-2">
           <Link to="/" className="btn btn-primary">
@@ -281,16 +287,16 @@ export default function ReviewPage() {
         data-testid="review-completion-summary"
         className="max-w-xl mx-auto px-4 py-12 space-y-6"
       >
-        <section className="rounded-2xl border border-outline-variant bg-surface-container-low p-6 sm:p-8 text-center space-y-5">
-          <div className="w-14 h-14 rounded-2xl bg-success/15 text-success flex items-center justify-center mx-auto">
-            <Award size={28} />
+        <section className="notebook-sheet rounded-2xl p-6 sm:p-8 text-center space-y-5">
+          <div className="flex justify-center">
+            <KitAvatar size={36} state="done" />
           </div>
           <div className="space-y-1">
-            <h1 className="text-2xl font-bold text-on-surface">
-              Daily Review Complete!
+            <h1 className="font-serif text-2xl font-normal text-on-surface">
+              Daily review complete
             </h1>
-            <p className="text-sm text-on-surface-variant">
-              FSRS-6 stability curves updated across{" "}
+            <p className="text-sm text-on-surface-variant tabular-nums">
+              FSRS-6 stability updated across{" "}
               {Math.max(1, kitsTouchedRef.current.size)}{" "}
               {kitsTouchedRef.current.size === 1 ? "Study Kit" : "Study Kits"}.
             </p>
@@ -299,13 +305,13 @@ export default function ReviewPage() {
           <div className="grid grid-cols-3 gap-3 text-left">
             <div className="rounded-xl bg-surface-container p-3 border border-outline-variant">
               <div className="text-xs text-on-surface-variant">Reviewed</div>
-              <div className="text-lg font-extrabold text-on-surface">
+              <div className="text-lg font-mono font-bold text-on-surface tabular-nums">
                 {reviewedCount}
               </div>
             </div>
             <div className="rounded-xl bg-surface-container p-3 border border-outline-variant">
               <div className="text-xs text-on-surface-variant">Retention</div>
-              <div className="text-lg font-extrabold text-success">
+              <div className="text-lg font-mono font-bold text-success tabular-nums">
                 {accuracy}%
               </div>
             </div>
@@ -313,7 +319,7 @@ export default function ReviewPage() {
               <div className="text-xs text-on-surface-variant">FIRe Credits</div>
               <div
                 data-testid="summary-fire-credits"
-                className="text-lg font-extrabold text-on-primary-wash"
+                className="text-lg font-mono font-bold text-on-primary-wash tabular-nums"
               >
                 +{totalFireCredits}
               </div>
@@ -323,7 +329,7 @@ export default function ReviewPage() {
           {lastFeedbackBanner && lastFeedbackBanner.fireCount > 0 && (
             <div
               data-testid="review-fire-credit-pill"
-              className="rounded-xl border border-success/35 bg-success/10 px-3 py-2 text-xs text-success font-semibold inline-flex items-center gap-1.5"
+              className="rounded-xl border border-success/35 bg-success/10 px-3 py-2 text-xs text-success font-semibold inline-flex items-center gap-1.5 tabular-nums"
             >
               <Flame size={14} />
               +{lastFeedbackBanner.fireCount} prerequisite{" "}
@@ -349,11 +355,11 @@ export default function ReviewPage() {
   }
 
   const kitName = currentCard.kit_name ?? "Study Kit";
-  const kitIcon = currentCard.kit_icon ?? "📚";
-  const kitColor = currentCard.kit_color ?? "#818cf8";
   const kitSlug = currentCard.kit_slug ?? "";
   const deckName = currentCard.deckName ?? "Deck";
   const retrievabilityPct = computeFsrsRetrievabilityPct(currentCard);
+  const remainingCards = queue.length - currentIndex;
+  const stackLayers = Math.min(2, Math.max(0, remainingCards - 1));
   const previews = currentCard.srs_previews ?? {
     again: "1m",
     hard: "5m",
@@ -375,7 +381,20 @@ export default function ReviewPage() {
         </Link>
 
         <div className="flex items-center gap-2 text-xs text-on-surface-variant">
-          <span>
+          <button
+            type="button"
+            aria-pressed={typeAnswerOpen}
+            onClick={() => setTypeAnswerOpen((v) => !v)}
+            className={`btn btn-sm ${
+              typeAnswerOpen
+                ? "bg-primary/15 text-on-primary-wash border-primary/35"
+                : "btn-ghost"
+            }`}
+          >
+            <PenLine size={13} />
+            Type answer
+          </button>
+          <span className="tabular-nums">
             Card <strong className="text-on-surface">{currentIndex + 1}</strong>{" "}
             of <strong className="text-on-surface">{queue.length}</strong>
           </span>
@@ -396,7 +415,7 @@ export default function ReviewPage() {
           {lastFeedbackBanner.fireCount > 0 && (
             <span
               data-testid="review-fire-credit-pill"
-              className="px-3 py-1 rounded-full text-xs font-semibold bg-success/15 text-success border border-success/35 inline-flex items-center gap-1.5"
+              className="px-3 py-1 rounded-full text-xs font-semibold bg-success/10 text-success border border-success/35 inline-flex items-center gap-1.5 tabular-nums"
             >
               <Flame size={13} />
               FIRe Credit: +{lastFeedbackBanner.fireCount} prerequisite{" "}
@@ -404,7 +423,7 @@ export default function ReviewPage() {
             </span>
           )}
           {lastFeedbackBanner.stability !== null && (
-            <span className="px-2.5 py-1 rounded-full text-[11px] font-mono bg-surface-container-low border border-outline-variant text-on-surface-variant">
+            <span className="px-2.5 py-1 rounded-full text-xs font-mono tabular-nums bg-surface-container-low border border-outline-variant text-on-surface-variant">
               Last FSRS-6: S={lastFeedbackBanner.stability.toFixed(1)}d
               {lastFeedbackBanner.difficulty !== null
                 ? ` · D=${lastFeedbackBanner.difficulty.toFixed(1)}`
@@ -432,185 +451,217 @@ export default function ReviewPage() {
         </div>
       )}
 
-      {/* Main Flashcard Surface */}
-      <article className="rounded-2xl border border-outline-variant bg-surface-container-low p-5 sm:p-7 space-y-5 shadow-sm">
-        {/* Prominent Kit Badge + FSRS-6 Telemetry */}
-        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-outline-variant">
+      {/* Physical Index-Card Stack + Active Notebook Sheet */}
+      <div className={stackLayers > 0 ? "relative pb-2.5" : "relative"}>
+        {stackLayers >= 2 && (
           <div
-            data-testid="review-kit-badge"
-            className="px-3 py-1 rounded-xl bg-surface-container-high border border-outline-variant text-xs font-semibold text-on-surface inline-flex items-center gap-2"
-            style={{ borderLeftWidth: 4, borderLeftColor: kitColor }}
-          >
-            <span aria-hidden="true">{kitIcon}</span>
-            {kitSlug ? (
-              <Link
-                to={`/k/${encodeURIComponent(kitSlug)}`}
-                className="hover:underline"
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-4 bottom-0 h-6 rounded-2xl border border-outline-variant bg-surface-container-low opacity-70"
+          />
+        )}
+        {stackLayers >= 1 && (
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-2 bottom-1 h-6 rounded-2xl border border-outline-variant bg-surface-container-low"
+          />
+        )}
+
+        <article className="notebook-sheet relative z-10 rounded-2xl p-5 sm:p-7 space-y-5">
+          {/* Kit Badge + FSRS-6 Telemetry */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-outline-variant">
+            <div
+              data-testid="review-kit-badge"
+              className="px-3 py-1 rounded-xl bg-surface-container-high border border-outline-variant text-xs font-semibold text-on-surface inline-flex items-center gap-2"
+            >
+              <DomainGlyph
+                kind={resolveKitGlyph(
+                  `${kitSlug} ${kitName} ${currentCard.kit_icon ?? ""}`,
+                )}
+                size={14}
+              />
+              {kitSlug ? (
+                <Link
+                  to={`/k/${encodeURIComponent(kitSlug)}`}
+                  className="hover:underline"
+                >
+                  {kitName}
+                </Link>
+              ) : (
+                <span>{kitName}</span>
+              )}
+              <span className="text-on-surface-variant">·</span>
+              <span className="text-on-surface-variant font-medium">
+                {deckName}
+              </span>
+            </div>
+
+            <div
+              data-testid="review-fsrs-telemetry"
+              className="text-xs font-mono tabular-nums text-on-surface-variant flex items-center gap-2"
+            >
+              {typeof currentCard.stability === "number" &&
+              currentCard.stability > 0 ? (
+                <>
+                  <span>S={currentCard.stability.toFixed(1)}d</span>
+                  {typeof currentCard.difficulty === "number" && (
+                    <span>D={currentCard.difficulty.toFixed(1)}</span>
+                  )}
+                  {retrievabilityPct !== null && (
+                    <span
+                      className={
+                        retrievabilityPct < 70
+                          ? "text-error font-semibold"
+                          : "text-on-surface font-semibold"
+                      }
+                    >
+                      R={retrievabilityPct}%
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span>New Card (FSRS-6 init)</span>
+              )}
+            </div>
+          </div>
+
+          {/* Question */}
+          <div className="space-y-2 py-2">
+            <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+              Prompt
+            </div>
+            <div
+              data-testid="review-card-front"
+              className="font-serif text-lg text-on-surface leading-relaxed"
+            >
+              <MarkdownRenderer content={currentCard.front} />
+            </div>
+          </div>
+
+          {/* Optional Scratchpad + Pure Anki Reveal or Answer + Rating Buttons */}
+          {!revealed ? (
+            <div className="pt-4 border-t border-outline-variant space-y-3">
+              {typeAnswerOpen && (
+                <textarea
+                  aria-label="Jot your recall before flipping"
+                  placeholder="Jot your recall before flipping…"
+                  value={typedAnswer}
+                  onChange={(e) => setTypedAnswer(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      setRevealed(true);
+                    }
+                  }}
+                  rows={2}
+                  className="input w-full text-sm"
+                />
+              )}
+
+              <button
+                type="button"
+                data-testid="reveal-answer-btn"
+                className="btn btn-primary w-full justify-center py-3"
+                onClick={() => setRevealed(true)}
               >
-                {kitName}
-              </Link>
-            ) : (
-              <span>{kitName}</span>
-            )}
-            <span className="text-on-surface-variant">·</span>
-            <span className="text-on-surface-variant font-medium">
-              {deckName}
-            </span>
-          </div>
+                <span>Reveal Answer</span>
+                <Kbd>Space</Kbd>
+              </button>
+            </div>
+          ) : (
+            <div className="pt-4 border-t border-outline-variant space-y-5">
+              {typedAnswer.trim() && (
+                <div className="rounded-xl border border-outline-variant bg-surface-container p-3 text-xs text-on-surface-variant">
+                  <span className="font-semibold text-on-surface">
+                    Your recall:
+                  </span>{" "}
+                  {typedAnswer.trim()}
+                </div>
+              )}
 
-          <div
-            data-testid="review-fsrs-telemetry"
-            className="text-[11px] font-mono text-on-surface-variant flex items-center gap-2"
-          >
-            {typeof currentCard.stability === "number" &&
-            currentCard.stability > 0 ? (
-              <>
-                <span>S={currentCard.stability.toFixed(1)}d</span>
-                {typeof currentCard.difficulty === "number" && (
-                  <span>D={currentCard.difficulty.toFixed(1)}</span>
-                )}
-                {retrievabilityPct !== null && (
-                  <span className="text-on-primary-wash font-semibold">
-                    R={retrievabilityPct}%
-                  </span>
-                )}
-              </>
-            ) : (
-              <span>New Card (FSRS-6 init)</span>
-            )}
-          </div>
-        </div>
+              <div className="space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+                  Answer
+                </div>
+                <div
+                  data-testid="review-card-back"
+                  className="text-sm sm:text-base text-on-surface leading-relaxed"
+                >
+                  <MarkdownRenderer content={currentCard.back} />
+                </div>
+              </div>
 
-        {/* Question */}
-        <div className="space-y-2 py-2">
-          <div className="text-[11px] font-bold uppercase tracking-wide text-on-surface-variant">
-            Prompt
-          </div>
-          <div
-            data-testid="review-card-front"
-            className="text-base text-on-surface leading-relaxed"
-          >
-            <MarkdownRenderer content={currentCard.front} />
-          </div>
-        </div>
-
-        {/* Reveal Gate or Answer + Rating Buttons */}
-        {!revealed ? (
-          <div className="pt-4 border-t border-outline-variant space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-on-surface-variant">
-              <span>Confidence before revealing:</span>
-              <div className="inline-flex rounded-lg border border-outline-variant bg-surface-container p-0.5">
-                {(["low", "medium", "high"] as const).map((lvl) => (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                {(
+                  [
+                    {
+                      keyHint: "1",
+                      quality: 1 as const,
+                      label: "Again",
+                      interval: previews.again,
+                      cls: "border-error/40 bg-error/8 text-error hover:bg-error/10",
+                    },
+                    {
+                      keyHint: "2",
+                      quality: 3 as const,
+                      label: "Hard",
+                      interval: previews.hard,
+                      cls: "border-warning/40 bg-warning/10 text-warning hover:bg-warning/14",
+                    },
+                    {
+                      keyHint: "3",
+                      quality: 4 as const,
+                      label: "Good",
+                      interval: previews.good,
+                      cls: "border-success/40 bg-success/10 text-success hover:bg-success/14",
+                    },
+                    {
+                      keyHint: "4",
+                      quality: 5 as const,
+                      label: "Easy",
+                      interval: previews.easy,
+                      cls: "border-primary/40 bg-primary/12 text-on-primary-wash hover:bg-primary/20",
+                    },
+                  ] as const
+                ).map((btn) => (
                   <button
-                    key={lvl}
+                    key={btn.quality}
                     type="button"
-                    onClick={() => setConfidence(lvl)}
-                    className={`px-2.5 py-1 rounded-md text-xs font-semibold capitalize cursor-pointer ${
-                      confidence === lvl
-                        ? "bg-primary text-on-primary"
-                        : "text-on-surface-variant hover:text-on-surface"
-                    }`}
+                    data-testid={`grade-btn-${btn.label.toLowerCase()}`}
+                    disabled={submitting}
+                    onClick={() => void handleGrade(btn.quality)}
+                    className={`rounded-xl border px-3 py-2.5 flex flex-col items-center gap-1 transition cursor-pointer active:scale-95 ${btn.cls}`}
                   >
-                    {lvl}
+                    <span className="text-sm font-semibold inline-flex items-center gap-1.5">
+                      {btn.label}
+                      <Kbd>{btn.keyHint}</Kbd>
+                    </span>
+                    <span className="text-xs font-mono tabular-nums opacity-85">
+                      {btn.interval}
+                    </span>
                   </button>
                 ))}
               </div>
             </div>
-
-            <button
-              type="button"
-              data-testid="reveal-answer-btn"
-              className="btn btn-primary w-full justify-center py-3"
-              onClick={() => setRevealed(true)}
-            >
-              Reveal Answer (Space)
-            </button>
-          </div>
-        ) : (
-          <div className="pt-4 border-t border-outline-variant space-y-5">
-            <div className="space-y-2">
-              <div className="text-[11px] font-bold uppercase tracking-wide text-success">
-                Answer
-              </div>
-              <div
-                data-testid="review-card-back"
-                className="text-sm sm:text-base text-on-surface leading-relaxed"
-              >
-                <MarkdownRenderer content={currentCard.back} />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {(
-                [
-                  {
-                    keyHint: "1",
-                    quality: 1 as const,
-                    label: "Again",
-                    interval: previews.again,
-                    cls: "border-error/40 bg-error/8 text-error hover:bg-error/10",
-                  },
-                  {
-                    keyHint: "2",
-                    quality: 3 as const,
-                    label: "Hard",
-                    interval: previews.hard,
-                    cls: "border-warning/40 bg-warning/10 text-warning hover:bg-warning/14",
-                  },
-                  {
-                    keyHint: "3",
-                    quality: 4 as const,
-                    label: "Good",
-                    interval: previews.good,
-                    cls: "border-success/40 bg-success/10 text-success hover:bg-success/14",
-                  },
-                  {
-                    keyHint: "4",
-                    quality: 5 as const,
-                    label: "Easy",
-                    interval: previews.easy,
-                    cls: "border-primary/40 bg-primary/12 text-on-primary-wash hover:bg-primary/20",
-                  },
-                ] as const
-              ).map((btn) => (
-                <button
-                  key={btn.quality}
-                  type="button"
-                  data-testid={`grade-btn-${btn.label.toLowerCase()}`}
-                  disabled={submitting}
-                  onClick={() => void handleGrade(btn.quality)}
-                  className={`rounded-xl border px-3 py-2.5 flex flex-col items-center gap-0.5 transition cursor-pointer ${btn.cls}`}
-                >
-                  <span className="text-sm font-bold">
-                    {btn.label}{" "}
-                    <kbd className="text-[10px] opacity-75 font-mono">
-                      [{btn.keyHint}]
-                    </kbd>
-                  </span>
-                  <span className="text-[11px] opacity-85">{btn.interval}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </article>
+          )}
+        </article>
+      </div>
 
       {showShortcuts && (
-        <div className="rounded-xl border border-outline-variant bg-surface-container-low p-3 text-xs text-on-surface-variant flex flex-wrap gap-x-5 gap-y-1">
-          <span>
-            <kbd className="font-mono text-on-surface">Space</kbd> Reveal answer
+        <div className="rounded-xl border border-outline-variant bg-surface-container-low p-3 text-xs text-on-surface-variant flex flex-wrap gap-x-5 gap-y-1.5 items-center">
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>Space</Kbd> Reveal answer
           </span>
-          <span>
-            <kbd className="font-mono text-on-surface">1</kbd> Again
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>1</Kbd> Again
           </span>
-          <span>
-            <kbd className="font-mono text-on-surface">2</kbd> Hard
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>2</Kbd> Hard
           </span>
-          <span>
-            <kbd className="font-mono text-on-surface">3</kbd> Good
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>3</Kbd> Good
           </span>
-          <span>
-            <kbd className="font-mono text-on-surface">4</kbd> Easy
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>4</Kbd> Easy
           </span>
         </div>
       )}

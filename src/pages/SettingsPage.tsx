@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, type ChangeEvent } from 'react'
-import { Eye, EyeOff, Download, Upload, Trash2, Sun, Moon, RefreshCw, Plus, Server } from 'lucide-react'
+import { Link } from 'react-router'
+import { ArrowRight, Blocks, Eye, EyeOff, Download, Upload, Trash2, Sun, Moon, RefreshCw, Plus, Server } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { useKitStore } from '../stores/useKitStore'
 import * as apiModule from '../utils/api'
@@ -61,7 +62,7 @@ const DEFAULT_PROVIDER_DEFS: ProviderDef[] = [
     name: 'Google Gemini',
     shortName: 'Gemini',
     configKey: 'gemini_api_key',
-    color: '#4285F4',
+    color: '#857f74',
     keyPlaceholder: 'AIza...',
     keyHelpUrl: 'https://aistudio.google.com/apikey',
     keyHelpLabel: 'Google AI Studio',
@@ -71,7 +72,7 @@ const DEFAULT_PROVIDER_DEFS: ProviderDef[] = [
     name: 'Anthropic Claude',
     shortName: 'Claude',
     configKey: 'claude_api_key',
-    color: '#D97757',
+    color: '#857f74',
     keyPlaceholder: 'sk-ant-...',
     keyHelpUrl: 'https://console.anthropic.com/settings/keys',
     keyHelpLabel: 'Anthropic Console',
@@ -81,7 +82,7 @@ const DEFAULT_PROVIDER_DEFS: ProviderDef[] = [
     name: 'OpenAI',
     shortName: 'OpenAI',
     configKey: 'openai_api_key',
-    color: '#10A37F',
+    color: '#857f74',
     keyPlaceholder: 'sk-...',
     keyHelpUrl: 'https://platform.openai.com/api-keys',
     keyHelpLabel: 'OpenAI Platform',
@@ -177,7 +178,17 @@ function ProviderKeySection({
   return (
     <div className="provider-card" id={`provider-card-${providerId}`}>
       <div className="provider-card-header">
-        <span className="provider-card-dot" style={{ background: providerDef.color }} />
+        <span
+          className="provider-card-dot"
+          style={{
+            background:
+              keyStatus === 'connected'
+                ? 'var(--color-success)'
+                : keyStatus === 'error'
+                  ? 'var(--color-error)'
+                  : 'var(--color-text-tertiary)',
+          }}
+        />
         <h3 className="provider-card-name">{providerDef.name}</h3>
         <span className={`status-pill ${keyStatus}`}>
           {keyStatus === 'connected' ? 'Connected' : keyStatus === 'error' ? 'Error' : 'Not configured'}
@@ -255,7 +266,7 @@ function ProviderKeySection({
             </button>
             <button
               className="btn btn-primary"
-              style={{ background: 'var(--color-error)' }}
+              style={{ background: 'var(--color-error)', color: 'var(--color-on-error, #2b0906)' }}
               onClick={() => {
                 void handleClearKey()
                 setShowConfirmModal(false)
@@ -392,7 +403,7 @@ function CustomEndpointsSection() {
 
   return (
     <div className="settings-section" id="custom-endpoints-section">
-      <h2 className="settings-section-title">Custom Endpoints — Bring Your Own Model</h2>
+      <h2 className="settings-section-title font-serif">Custom Endpoints — Bring Your Own Model</h2>
       <p className="settings-section-desc">
         Connect any OpenAI-compatible server (Ollama, LM Studio, vLLM, OpenRouter, Groq).
         Discovered models join the global model picker under the endpoint&apos;s name.
@@ -407,9 +418,9 @@ function CustomEndpointsSection() {
       {endpoints.map((ep) => (
         <div key={ep.id} className="provider-card">
           <div className="provider-card-header" style={{ marginBottom: 'var(--space-1)' }}>
-            <Server size={14} style={{ color: '#8B5CF6', flexShrink: 0 }} />
+            <Server size={14} style={{ color: 'var(--color-text-tertiary)', flexShrink: 0 }} />
             <h3 className="provider-card-name">{ep.name}</h3>
-            <span className={`status-pill ${(ep.models?.length ?? 0) > 0 ? 'connected' : 'disconnected'}`}>
+            <span className={`status-pill tabular-nums ${(ep.models?.length ?? 0) > 0 ? 'connected' : 'disconnected'}`}>
               {(ep.models?.length ?? 0) > 0 ? `${ep.models.length} models` : 'No models'}
             </span>
           </div>
@@ -741,9 +752,9 @@ export default function SettingsPage() {
   return (
     <div className="page-wrapper" id="settings-page">
       <div className="page-header">
-        <h1 className="page-title">Settings</h1>
+        <h1 className="page-title font-serif">Settings</h1>
         <p className="page-description">
-          Configure your Toolbox instance, manage your API keys, and customize your experience.
+          Configure instance authentication, AI providers, custom model endpoints, and data backups.
         </p>
       </div>
 
@@ -755,7 +766,7 @@ export default function SettingsPage() {
         {canManageInstanceAi && (
           <>
             <div className="settings-section">
-              <h2 className="settings-section-title">AI Provider API Keys</h2>
+              <h2 className="settings-section-title font-serif">AI Provider API Keys</h2>
               <p className="settings-section-desc">
                 Configure API keys for AI-powered features. Add keys for one or more providers — models will appear based on which keys are configured.
               </p>
@@ -786,7 +797,7 @@ export default function SettingsPage() {
 
         {/* AI Shadow Memory */}
         <div className="settings-section">
-          <h2 className="settings-section-title">AI Shadow Memory</h2>
+          <h2 className="settings-section-title font-serif">AI Shadow Memory</h2>
           <p className="settings-section-desc">
             The AI learns facts about you over time (e.g., &quot;Interviewing at Google in 2 weeks&quot;) to tailor its explanations. You can view or manually edit its memory here.
           </p>
@@ -814,7 +825,7 @@ export default function SettingsPage() {
         {/* Model Selection */}
         <div className="settings-section">
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 'var(--space-3)' }}>
-            <h2 className="settings-section-title">AI Model</h2>
+            <h2 className="settings-section-title font-serif">AI Model</h2>
             <button
               className="btn btn-secondary"
               id="refresh-models-btn"
@@ -843,7 +854,7 @@ export default function SettingsPage() {
                 style={{
                   width: 10,
                   height: 10,
-                  background: activeModelInfo?.providerColor ?? 'var(--color-text-tertiary)',
+                  background: activeModelInfo ? 'var(--color-success)' : 'var(--color-text-tertiary)',
                 }}
               />
               <div className="active-model-card-info">
@@ -852,7 +863,7 @@ export default function SettingsPage() {
                   {activeModelInfo?.family && (
                     <span
                       className="model-trigger-family"
-                      style={{ color: activeModelInfo.providerColor, borderColor: activeModelInfo.providerColor }}
+                      style={{ color: 'var(--color-text-secondary)', borderColor: 'var(--color-border)' }}
                     >
                       {activeModelInfo.family}
                     </span>
@@ -871,11 +882,11 @@ export default function SettingsPage() {
 
         <SectionRule />
 
-        {/* Appearance */}
+        {/* Appearance & Design System */}
         <div className="settings-section">
-          <h2 className="settings-section-title">Appearance</h2>
+          <h2 className="settings-section-title font-serif">Appearance</h2>
           <p className="settings-section-desc">
-            Toggle between dark and light themes.
+            Toggle between Warm Charcoal dark mode and Warm Paper light mode.
           </p>
 
           <button
@@ -893,13 +904,34 @@ export default function SettingsPage() {
               {isMac ? '⌘' : 'Ctrl+'}D
             </kbd>
           </p>
+
+          <Link
+            to="/design-system"
+            data-testid="settings-design-system-link"
+            className="mt-4 rounded-xl border border-outline-variant bg-surface-container-low hover:bg-surface-container p-4 flex items-center justify-between gap-3 transition"
+          >
+            <div className="flex items-start gap-3 min-w-0">
+              <span className="w-9 h-9 rounded-lg border border-outline-variant bg-surface-container-high text-on-surface flex items-center justify-center shrink-0">
+                <Blocks size={16} aria-hidden="true" />
+              </span>
+              <div className="min-w-0">
+                <div className="text-sm font-serif font-semibold text-on-surface">
+                  Component Library &amp; Design System
+                </div>
+                <div className="text-xs text-on-surface-variant mt-0.5">
+                  Inspect Tactile Notebook &amp; Precision Hardware tokens and interactive UI primitives
+                </div>
+              </div>
+            </div>
+            <ArrowRight size={16} className="text-on-surface-variant shrink-0" />
+          </Link>
         </div>
 
         <SectionRule />
 
         {/* System Diagnostics */}
         <div className="settings-section">
-          <h2 className="settings-section-title">System Diagnostics</h2>
+          <h2 className="settings-section-title font-serif">System Diagnostics</h2>
           <p className="settings-section-desc">
             View database statistics and clear caches.
           </p>
@@ -916,7 +948,7 @@ export default function SettingsPage() {
               ).map(([label, val]) => (
                 <div key={label} className="stat-card">
                   <div className="stat-card-label">{label}</div>
-                  <div className="stat-card-value">{val}</div>
+                  <div className="stat-card-value tabular-nums">{val}</div>
                 </div>
               ))}
             </div>
@@ -934,7 +966,7 @@ export default function SettingsPage() {
 
         {/* Data Management */}
         <div className="settings-section">
-          <h2 className="settings-section-title">Data Management</h2>
+          <h2 className="settings-section-title font-serif">Data Management</h2>
           <p className="settings-section-desc">
             Export Guide notes as Markdown, import portable Kits or personal backups, or download an instance database snapshot.
           </p>
@@ -983,7 +1015,7 @@ export default function SettingsPage() {
 
         {/* Keyboard Shortcuts */}
         <div className="settings-section">
-          <h2 className="settings-section-title">Keyboard Shortcuts</h2>
+          <h2 className="settings-section-title font-serif">Keyboard Shortcuts</h2>
           <p className="settings-section-desc">
             Boost your workflow with these shortcuts.
           </p>
@@ -1014,7 +1046,7 @@ export default function SettingsPage() {
 
         {/* About */}
         <div className="settings-section">
-          <h2 className="settings-section-title">About</h2>
+          <h2 className="settings-section-title font-serif">About</h2>
           <p className="settings-section-desc">
             Toolbox is a self-hosted, multi-domain active learning and mastery platform.
           </p>

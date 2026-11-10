@@ -19,17 +19,12 @@ export interface DeckCardProps<T extends DeckCardData = DeckCardData> {
   onClick: (deck: T) => void
 }
 
-const DECK_COLORS = [
-  '#818cf8', '#34d399', '#60a5fa', '#fbbf24', '#f472b6',
-  '#a78bfa', '#2dd4bf', '#fb923c',
-]
-
 /**
- * Deck card for the grid display.
+ * Deck card for the grid display — warm monochrome chrome with tabular progress.
  */
 export default function DeckCard<T extends DeckCardData>({ deck, onClick }: DeckCardProps<T>) {
-  const color = DECK_COLORS[(deck.colorIndex || 0) % DECK_COLORS.length] || '#818cf8'
   const tagList = deck.tags ? deck.tags.split(',').map((t) => t.trim()).filter(Boolean) : []
+  const progressPct = Math.min(100, Math.max(0, deck.progress ?? 0))
 
   return (
     <div
@@ -38,87 +33,63 @@ export default function DeckCard<T extends DeckCardData>({ deck, onClick }: Deck
       id={`deck-${deck.id}`}
     >
       <div className="deck-card-header">
-        <div className="deck-card-icon" style={{ background: `${color}15`, color }}>
-          <Layers size={18} />
+        <div className="deck-card-icon border border-outline-variant bg-surface-container-high text-on-surface-variant">
+          <Layers size={17} />
         </div>
       </div>
-      <div className="deck-card-title">{deck.name}</div>
+      <div className="deck-card-title font-serif text-lg font-normal text-on-surface">
+        {deck.name}
+      </div>
       {deck.description && (
-        <p
-          style={{
-            fontSize: 'var(--text-xs)',
-            color: 'var(--color-text-secondary)',
-            marginBottom: 'var(--space-3)',
-            lineHeight: 'var(--leading-relaxed)',
-            display: '-webkit-box',
-            WebkitLineClamp: 2,
-            WebkitBoxOrient: 'vertical',
-            overflow: 'hidden',
-          }}
-        >
+        <p className="text-xs text-on-surface-variant mb-3 leading-relaxed line-clamp-2">
           {deck.description}
         </p>
       )}
       {/* Tags */}
       {tagList.length > 0 && (
-        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', marginBottom: 'var(--space-2)' }}>
+        <div className="flex gap-1 flex-wrap mb-2.5">
           {tagList.slice(0, 3).map((tag, i) => (
             <span
               key={i}
-              style={{
-                fontSize: '10px',
-                padding: '1px 6px',
-                borderRadius: 'var(--radius-full)',
-                background: 'var(--color-accent-subtle)',
-                color: 'var(--color-accent)',
-                fontWeight: 500,
-              }}
+              className="text-xs px-2 py-0.5 rounded-full bg-surface-container-high border border-outline-variant text-on-surface-variant"
             >
               {tag}
             </span>
           ))}
           {tagList.length > 3 && (
-            <span style={{ fontSize: '10px', color: 'var(--color-text-tertiary)' }}>
+            <span className="text-xs font-mono tabular-nums text-on-surface-variant">
               +{tagList.length - 3}
             </span>
           )}
         </div>
       )}
       {/* Anki Counters */}
-      <div style={{ display: 'flex', gap: 6, margin: 'var(--space-2) 0 var(--space-3) 0', flexWrap: 'wrap' }}>
-        <span style={{
-          fontSize: '10px',
-          fontWeight: 700,
-          padding: '2px 8px',
-          borderRadius: 'var(--radius-md)',
-          background: 'rgba(96, 165, 250, 0.12)',
-          color: 'var(--color-info)',
-        }} title="New cards">
+      <div className="flex gap-1.5 my-2.5 flex-wrap font-mono text-xs tabular-nums">
+        <span
+          className="px-2 py-0.5 rounded-md border border-outline-variant bg-surface-container-low text-on-surface-variant"
+          title="New cards"
+        >
           {deck.newCount || 0} new
         </span>
-        <span style={{
-          fontSize: '10px',
-          fontWeight: 700,
-          padding: '2px 8px',
-          borderRadius: 'var(--radius-md)',
-          background: 'rgba(251, 191, 36, 0.12)',
-          color: 'var(--color-warning)',
-        }} title="Learning cards">
+        <span
+          className="px-2 py-0.5 rounded-md border border-outline-variant bg-surface-container-low text-on-surface-variant"
+          title="Learning cards"
+        >
           {deck.learnCount || 0} learn
         </span>
-        <span style={{
-          fontSize: '10px',
-          fontWeight: 700,
-          padding: '2px 8px',
-          borderRadius: 'var(--radius-md)',
-          background: 'rgba(52, 211, 153, 0.12)',
-          color: 'var(--color-success)',
-        }} title="Due reviews">
+        <span
+          className={`px-2 py-0.5 rounded-md border ${
+            (deck.dueCount || 0) > 0
+              ? 'border-primary/35 bg-primary/12 text-on-primary-wash font-semibold'
+              : 'border-outline-variant bg-surface-container-low text-on-surface-variant'
+          }`}
+          title="Due reviews"
+        >
           {deck.dueCount || 0} due
         </span>
       </div>
 
-      <div className="deck-card-meta">
+      <div className="deck-card-meta tabular-nums">
         <span>
           <Hash size={12} />
           {deck.cardCount || 0} cards
@@ -129,23 +100,18 @@ export default function DeckCard<T extends DeckCardData>({ deck, onClick }: Deck
         </span>
       </div>
 
-      {/* Mastery Progress Bar */}
-      <div style={{ marginTop: 'var(--space-3)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-          <span style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>Mastery</span>
-          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--color-text-primary)' }}>
-            {deck.progress !== undefined ? deck.progress : 0}%
+      {/* Monochrome Tabular Mastery Progress Bar */}
+      <div className="mt-3">
+        <div className="flex justify-between items-center mb-1.5 text-xs">
+          <span className="text-on-surface-variant">Mastery</span>
+          <span className="font-mono font-semibold text-on-surface tabular-nums">
+            {progressPct}%
           </span>
         </div>
-        <div style={{ height: '6px', background: 'var(--color-bg-hover, #f3f4f6)', borderRadius: '3px', overflow: 'hidden' }}>
+        <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden">
           <div
-            style={{
-              height: '100%',
-              width: `${deck.progress !== undefined ? deck.progress : 0}%`,
-              background: color,
-              borderRadius: '3px',
-              transition: 'width var(--duration-normal)',
-            }}
+            className="h-full rounded-full bg-on-surface transition-all"
+            style={{ width: `${progressPct}%` }}
           />
         </div>
       </div>

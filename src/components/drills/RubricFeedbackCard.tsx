@@ -65,9 +65,9 @@ export default function RubricFeedbackCard({
         <div className="flex items-center gap-3">
           <div
             data-testid="rubric-score-pill"
-            className={`px-3 py-1.5 rounded-xl text-base font-extrabold border ${
+            className={`px-3 py-1.5 rounded-xl font-mono text-base font-bold tabular-nums border ${
               isMasteryEligible
-                ? "bg-success/15 text-success border-success/30"
+                ? "bg-success/10 text-success border-success/30"
                 : isAssisted
                   ? "bg-warning/10 text-warning border-warning/30"
                   : "bg-error/10 text-error border-error/30"
@@ -76,8 +76,10 @@ export default function RubricFeedbackCard({
             {pct}%
           </div>
           <div>
-            <h3 className="text-sm font-bold text-on-surface">{title}</h3>
-            <div className="text-xs text-on-surface-variant flex flex-wrap items-center gap-2 mt-0.5">
+            <h3 className="font-serif text-base font-medium text-on-surface">
+              {title}
+            </h3>
+            <div className="text-xs text-on-surface-variant flex flex-wrap items-center gap-2 mt-0.5 tabular-nums">
               {isAssisted ? (
                 <span
                   data-testid="rubric-assisted-badge"
@@ -144,7 +146,7 @@ export default function RubricFeedbackCard({
       {creditCount > 0 && (
         <div
           data-testid="fire-credit-banner"
-          className="rounded-xl border border-success/35 bg-success/10 p-3 flex items-start gap-2.5 text-xs text-on-surface"
+          className="rounded-xl border border-success/35 bg-success/10 p-3 flex items-start gap-2.5 text-xs text-on-surface tabular-nums"
         >
           <Flame size={16} className="text-success shrink-0 mt-0.5" />
           <div>
@@ -168,7 +170,7 @@ export default function RubricFeedbackCard({
           role="alert"
           className="rounded-xl border border-error/40 bg-error/10 p-3.5 space-y-2"
         >
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-error">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-error tabular-nums">
             <AlertOctagon size={15} />
             Factual or Logical Contradictions ({result.factualOrLogicalErrors.length})
           </div>
@@ -206,7 +208,7 @@ export default function RubricFeedbackCard({
       {/* Rubric Dimension Checks */}
       {result.rubricChecks?.length > 0 && (
         <div className="space-y-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-on-surface-variant">
+          <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-on-surface-variant tabular-nums">
             <ListChecks size={14} />
             Rubric Criteria ({result.rubricChecks.filter((r) => r.met).length}/
             {result.rubricChecks.length} met)
@@ -249,7 +251,7 @@ export default function RubricFeedbackCard({
       {/* Extracted Claims */}
       {result.extractedClaims?.length > 0 && (
         <details className="rounded-xl border border-outline-variant bg-surface-container px-3 py-2 text-xs">
-          <summary className="cursor-pointer font-semibold text-on-surface-variant select-none">
+          <summary className="cursor-pointer font-semibold text-on-surface-variant select-none tabular-nums">
             Extracted Claims Verified ({result.extractedClaims.length})
           </summary>
           <ul className="list-disc pl-5 mt-2 space-y-1 text-on-surface">
@@ -283,10 +285,10 @@ export default function RubricFeedbackCard({
       {remediation.length > 0 && (
         <div
           data-testid="remediation-queue-callout"
-          className="rounded-xl border border-warning/35 bg-surface-container p-3.5 space-y-2.5"
+          className="rounded-xl border border-warning/35 bg-warning/10 p-3.5 space-y-2.5"
         >
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-bold text-warning">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-bold text-warning tabular-nums">
               <Wrench size={15} />
               Prerequisite Remediation Queued ({remediation.length})
             </div>

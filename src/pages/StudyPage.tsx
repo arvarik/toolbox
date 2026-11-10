@@ -21,6 +21,7 @@ import StudyHeatmap, { type StudySessionDay } from '../components/study/StudyHea
 import ChatPanel from '../components/shared/ChatPanel'
 import EmptyState from '../components/shared/EmptyState'
 import Modal from '../components/shared/Modal'
+import { DomainGlyph, resolveKitGlyph } from '../components/ui'
 
 import useAppStore from '../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
@@ -68,15 +69,6 @@ export interface StudyDeckItem {
 
 const errMsg = (err: unknown, fallback: string) =>
   err instanceof Error && err.message ? err.message : fallback
-
-const tagChipStyle = (active: boolean) => ({
-  fontSize: '11px',
-  padding: '2px 10px',
-  borderRadius: 'var(--radius-full)',
-  background: active ? 'var(--color-accent-subtle)' : 'transparent',
-  color: active ? 'var(--color-accent)' : 'var(--color-text-secondary)',
-  fontWeight: active ? 600 : 400,
-})
 
 const QUICK_BTN_STYLE = { width: 28, height: 28 } as const
 
@@ -229,8 +221,8 @@ export default function StudyPage() {
               .split(',')
               .map((t) => t.trim())
               .filter(Boolean)
-          : []
-      )
+          : [],
+      ),
     ),
   ].sort()
 
@@ -244,7 +236,7 @@ export default function StudyPage() {
         d.tags
           ?.split(',')
           .map((t) => t.trim())
-          .includes(activeTag)
+          .includes(activeTag),
       )
     return matchesSearch && matchesTag
   })
@@ -252,7 +244,7 @@ export default function StudyPage() {
   const openFullDeck = async (
     deck: StudyDeckItem,
     targetView: StudyViewMode,
-    eagerView = true
+    eagerView = true,
   ) => {
     setSelectedDeck(deck)
     if (eagerView) setView(targetView)
@@ -309,8 +301,8 @@ export default function StudyPage() {
                 cards: mappedCards,
                 cardCount: mappedCards.length,
               }
-            : d
-        )
+            : d,
+        ),
       )
     } else {
       const newDeck: StudyDeckItem = {
@@ -346,7 +338,7 @@ export default function StudyPage() {
         const currentCards = data.cards || []
 
         const deletedCards = existingCards.filter(
-          (ec) => !currentCards.some((cc) => cc.id === ec.id)
+          (ec) => !currentCards.some((cc) => cc.id === ec.id),
         )
         for (const card of deletedCards) {
           await flashcardsApi.delete(tempId, card.id)
@@ -378,7 +370,7 @@ export default function StudyPage() {
         const deckId = deck?.id || tempId
         if (deckId !== tempId) {
           setDecks((prev) =>
-            prev.map((d) => (d.id === tempId ? { ...d, id: deckId } : d))
+            prev.map((d) => (d.id === tempId ? { ...d, id: deckId } : d)),
           )
         }
         const currentCards = data.cards || []
@@ -442,7 +434,7 @@ export default function StudyPage() {
           void refreshDecks()
         }
       },
-      5000
+      5000,
     )
 
     addToast({
@@ -462,7 +454,7 @@ export default function StudyPage() {
 
   const handleSaveDeckSettings = async (
     deckId: string,
-    settingsData: DeckSchedulerSettings
+    settingsData: DeckSchedulerSettings,
   ) => {
     try {
       const updated = (await decksApi.updateSettings(deckId, settingsData)) as {
@@ -470,7 +462,7 @@ export default function StudyPage() {
       }
       const nextSettings = { ...DEFAULT_DECK_SETTINGS, ...(updated?.settings || settingsData) }
       setDecks((prev) =>
-        prev.map((d) => (d.id === deckId ? { ...d, settings: nextSettings } : d))
+        prev.map((d) => (d.id === deckId ? { ...d, settings: nextSettings } : d)),
       )
       if (selectedDeck?.id === deckId) {
         setSelectedDeck((prev) => (prev ? { ...prev, settings: nextSettings } : null))
@@ -485,7 +477,7 @@ export default function StudyPage() {
 
   const handleSaveBrowserCard = async (
     cardId: string,
-    cardData: { front: string; back: string }
+    cardData: { front: string; back: string },
   ) => {
     if (!selectedDeck) return
     try {
@@ -502,7 +494,7 @@ export default function StudyPage() {
     const targetDeckId = selectedDeck.id
     const cardToRestore = selectedDeck.cards.find((c) => c.id === cardId)
     setSelectedDeck((prev) =>
-      prev ? { ...prev, cards: prev.cards.filter((c) => c.id !== cardId) } : null
+      prev ? { ...prev, cards: prev.cards.filter((c) => c.id !== cardId) } : null,
     )
 
     const actionId = `delete-card-${cardId}`
@@ -519,7 +511,7 @@ export default function StudyPage() {
           await reloadSelectedDeck(targetDeckId)
         }
       },
-      5000
+      5000,
     )
 
     addToast({
@@ -534,10 +526,10 @@ export default function StudyPage() {
                 ? {
                     ...prev,
                     cards: [...prev.cards, cardToRestore].sort(
-                      (a, b) => (a.position || 0) - (b.position || 0)
+                      (a, b) => (a.position || 0) - (b.position || 0),
                     ),
                   }
-                : null
+                : null,
             )
           }
         },
@@ -573,7 +565,7 @@ export default function StudyPage() {
           <ChatPanel
             page="study"
             title="Study Assistant"
-            placeholder="Ask about this topic or generate more cards..."
+            placeholder="Ask Kit about this topic or generate cards..."
           />
         )}
       </div>
@@ -626,8 +618,8 @@ export default function StudyPage() {
         {!isMobile && (
           <ChatPanel
             page="study"
-            title="AI Card Generator"
-            placeholder="Describe a topic to auto-generate flashcards..."
+            title="Card Generator"
+            placeholder="Describe a topic for Kit to generate flashcards..."
           />
         )}
       </div>
@@ -641,36 +633,29 @@ export default function StudyPage() {
     <div className="study-layout" id="study-page">
       <div className="study-main">
         {/* Page Header */}
-        <div style={{ marginBottom: 'var(--space-8)' }}>
-          <h1 className="page-title">Study Hub</h1>
-          <p className="page-subtitle">
-            {isCustomKit
-              ? `Master your ${kitTitleName} knowledge with spaced repetition.`
-              : 'Master your architecture knowledge with spaced repetition.'}
-          </p>
-        </div>
-
-        <StudyHeatmap sessions={studySessions} />
-
-        {/* Main Content Area */}
         <div className="page-header">
           <div className="page-header-top">
-            <div>
-              <h1 className="page-title">Flashcards</h1>
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-xs text-on-surface-variant">
+                <DomainGlyph
+                  kind={resolveKitGlyph(`${kitSlug ?? ''} ${kitTitleName}`)}
+                  size={15}
+                />
+                <span>{kitTitleName}</span>
+              </div>
+              <h1 className="page-title font-serif font-normal">Flashcards</h1>
               <p className="page-description">
-                {isCustomKit
-                  ? `Create and study flashcard decks to reinforce ${kitTitleName} concepts.`
-                  : 'Create and study flashcard decks to reinforce system design concepts.'}
+                Spaced repetition decks scheduled with FSRS-6 across {kitTitleName}.
               </p>
             </div>
-            <div style={{ display: 'flex', gap: 'var(--space-3)' }}>
+            <div className="flex items-center gap-2.5">
               <button
                 className="btn btn-secondary btn-ai-generate"
                 onClick={() => toggleChat('study')}
                 id="study-chat-btn"
               >
                 <MessageSquare size={14} />
-                AI Generate
+                Ask Kit to Generate
               </button>
               <button
                 className="btn btn-primary"
@@ -686,11 +671,13 @@ export default function StudyPage() {
 
         {/* Content */}
         <PullToRefresh onRefresh={() => fetchDecks(true)}>
-          <div className="study-content">
+          <div className="study-content space-y-6">
+            <StudyHeatmap sessions={studySessions} />
+
             {isLoading ? (
               <div className="deck-grid">
                 {[1, 2, 3].map((i) => (
-                  <div key={i} className="card" style={{ padding: 'var(--space-5)' }}>
+                  <div key={i} className="card p-5">
                     <Skeleton variant="circular" style={{ width: 36, height: 36, marginBottom: 'var(--space-3)' }} />
                     <Skeleton style={{ width: '70%', height: 16, marginBottom: 'var(--space-2)' }} />
                     <Skeleton style={{ width: '40%', height: 12 }} />
@@ -701,10 +688,11 @@ export default function StudyPage() {
               <>
                 {/* Search */}
                 {decks.length > 0 && (
-                  <div style={{ marginBottom: 'var(--space-5)' }}>
+                  <div className="space-y-2.5">
                     <div className="search-bar">
                       <Search size={16} />
                       <input
+                        aria-label="Search decks"
                         placeholder="Search decks..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
@@ -713,24 +701,35 @@ export default function StudyPage() {
                     </div>
                     {/* Tag filter chips */}
                     {allTags.length > 0 && (
-                      <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap', marginTop: 'var(--space-2)' }}>
+                      <div className="flex gap-1.5 flex-wrap">
                         <button
-                          className="btn btn-ghost"
-                          style={tagChipStyle(!activeTag)}
+                          type="button"
+                          className={`px-2.5 py-0.5 rounded-full text-xs font-medium border transition cursor-pointer ${
+                            !activeTag
+                              ? 'bg-primary text-on-primary border-primary'
+                              : 'bg-surface-container-low text-on-surface-variant border-outline-variant hover:text-on-surface'
+                          }`}
                           onClick={() => setActiveTag('')}
                         >
                           All
                         </button>
-                        {allTags.map((tag) => (
-                          <button
-                            key={tag}
-                            className="btn btn-ghost"
-                            style={tagChipStyle(activeTag === tag)}
-                            onClick={() => setActiveTag(activeTag === tag ? '' : tag)}
-                          >
-                            {tag}
-                          </button>
-                        ))}
+                        {allTags.map((tag) => {
+                          const selected = activeTag === tag
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              className={`px-2.5 py-0.5 rounded-full text-xs font-medium border transition cursor-pointer ${
+                                selected
+                                  ? 'bg-primary text-on-primary border-primary'
+                                  : 'bg-surface-container-low text-on-surface-variant border-outline-variant hover:text-on-surface'
+                              }`}
+                              onClick={() => setActiveTag(selected ? '' : tag)}
+                            >
+                              {tag}
+                            </button>
+                          )
+                        })}
                       </div>
                     )}
                   </div>
@@ -740,54 +739,26 @@ export default function StudyPage() {
                 {filteredDecks.length > 0 ? (
                   <div className="deck-grid">
                     {filteredDecks.map((deck) => (
-                      <div key={deck.id} style={{ position: 'relative' }}>
+                      <div key={deck.id} className="relative">
                         <DeckCard deck={deck} onClick={(d) => void handleDeckClick(d)} />
                         {/* Due count badge */}
                         {deck.dueCount > 0 && (
-                          <div
-                            style={{
-                              position: 'absolute',
-                              top: '-10px',
-                              right: '-10px',
-                              background: 'var(--color-accent)',
-                              color: '#fff',
-                              fontSize: '11px',
-                              fontWeight: 700,
-                              padding: '2px 8px',
-                              borderRadius: 'var(--radius-full)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 3,
-                              zIndex: 3,
-                              boxShadow: 'var(--shadow-sm)',
-                            }}
-                          >
+                          <div className="absolute -top-2.5 -right-2.5 z-10 px-2 py-0.5 rounded-full bg-primary text-on-primary text-xs font-mono font-semibold tabular-nums inline-flex items-center gap-1 shadow-sm">
                             <Clock size={10} />
                             {deck.dueCount} due
                           </div>
                         )}
                         {/* Quick actions overlay */}
-                        <div
-                          style={{
-                            position: 'absolute',
-                            top: 'var(--space-3)',
-                            right: 'var(--space-3)',
-                            display: 'flex',
-                            gap: 'var(--space-1)',
-                            opacity: 0,
-                            transition: 'opacity var(--duration-fast)',
-                          }}
-                          className="deck-actions"
-                        >
+                        <div className="deck-actions absolute top-3 right-3 flex gap-1 opacity-0 transition-opacity">
                           {deck.dueCount > 0 && (
                             <button
-                              className="btn btn-ghost btn-icon btn-sm"
+                              className="btn btn-ghost btn-icon btn-sm text-on-primary-wash"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 void handleReviewDeck(deck)
                               }}
                               title="Review Due Cards"
-                              style={{ ...QUICK_BTN_STYLE, color: 'var(--color-accent)' }}
+                              style={QUICK_BTN_STYLE}
                             >
                               <Clock size={12} />
                             </button>
@@ -813,13 +784,13 @@ export default function StudyPage() {
                             </button>
                           ))}
                           <button
-                            className="btn btn-ghost btn-icon btn-sm"
+                            className="btn btn-ghost btn-icon btn-sm text-error"
                             onClick={(e) => {
                               e.stopPropagation()
                               setDeleteModal(deck)
                             }}
                             title="Delete"
-                            style={{ ...QUICK_BTN_STYLE, color: 'var(--color-error)' }}
+                            style={QUICK_BTN_STYLE}
                           >
                             <Trash2 size={12} />
                           </button>
@@ -834,12 +805,12 @@ export default function StudyPage() {
                     description={
                       isCustomKit
                         ? canSeedStarter
-                          ? `Create your first deck to start studying ${kitTitleName} concepts, or load this kit's curated starter deck.`
-                          : `Create your first deck or use AI Generate to start studying ${kitTitleName} concepts.`
-                        : 'Create your first deck to start studying system design concepts, or load our curated starter deck with 15 high-yield architecture cards.'
+                          ? `Load the curated ${kitTitleName} starter deck or create a blank deck.`
+                          : `Create a blank deck or ask Kit to generate ${kitTitleName} cards.`
+                        : 'Load the 15-card System Design starter deck or create a blank deck.'
                     }
                     action={
-                      <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', justifyContent: 'center' }}>
+                      <div className="flex gap-2 flex-wrap justify-center">
                         {canSeedStarter && (
                           <button
                             className="btn btn-primary"
@@ -862,7 +833,7 @@ export default function StudyPage() {
                   <EmptyState
                     icon={<Search size={24} />}
                     title="No results"
-                    description={`No decks match "${searchQuery}"`}
+                    description={`No decks match "${searchQuery}".`}
                     action={null}
                   />
                 )}
@@ -876,8 +847,8 @@ export default function StudyPage() {
       {!isMobile && (
         <ChatPanel
           page="study"
-          title="AI Card Generator"
-          placeholder="Describe a topic to auto-generate flashcards..."
+          title="Card Generator"
+          placeholder="Describe a topic for Kit to generate flashcards..."
         />
       )}
 
@@ -893,7 +864,6 @@ export default function StudyPage() {
             </button>
             <button
               className="btn btn-primary"
-              style={{ background: 'var(--color-error)' }}
               onClick={() => deleteModal && handleDeleteDeck(deleteModal)}
             >
               Delete
@@ -901,9 +871,8 @@ export default function StudyPage() {
           </>
         }
       >
-        <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)' }}>
-          Are you sure you want to delete <strong>&ldquo;{deleteModal?.name}&rdquo;</strong>? This action cannot
-          be undone and all cards in this deck will be permanently removed.
+        <p className="text-sm text-on-surface-variant">
+          Delete <strong className="text-on-surface">&ldquo;{deleteModal?.name}&rdquo;</strong>? All cards in this deck will be permanently removed.
         </p>
       </Modal>
 

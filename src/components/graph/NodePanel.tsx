@@ -110,7 +110,7 @@ export default function NodePanel({
       {!isLoading && detail && (
         <>
           <div className="graph-panel-header">
-            <span className="graph-panel-pillar" style={{ color: detail.node.pillarColor || 'var(--color-accent)' }}>
+            <span className="graph-panel-pillar">
               {detail.node.pillarName || detail.node.pillarId}
             </span>
             <h2 className="graph-panel-title">{detail.node.name}</h2>

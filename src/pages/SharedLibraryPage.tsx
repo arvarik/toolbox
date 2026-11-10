@@ -5,7 +5,6 @@ import {
   ArrowRight,
   CheckCircle2,
   Download,
-  Globe,
   History,
   Plus,
   RefreshCw,
@@ -13,6 +12,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { SharedKitChangelogModal } from "../components/kits/KitModals";
+import { DomainGlyph, resolveKitGlyph } from "../components/ui/DomainGlyph";
 import useAppStore from "../stores/appStore";
 import useKitStore from "../stores/useKitStore";
 import { sharedKitsApi, type SharedKitListEntry } from "../utils/api";
@@ -136,13 +136,11 @@ export default function SharedLibraryPage() {
               <ArrowLeft size={14} /> Back to My Library
             </Link>
           </div>
-          <h1 className="text-2xl font-bold text-on-surface tracking-tight flex items-center gap-2.5">
-            <Globe size={24} className="text-primary" />
+          <h1 className="text-2xl sm:text-3xl font-serif font-semibold text-on-surface tracking-tight">
             Shared Community Library
           </h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            Discover official and peer-published Study Kits on this server. Fork any
-            curriculum into your private workspace in one click.
+            Fork official and community Study Kits into your private workspace.
           </p>
         </div>
       </div>
@@ -222,29 +220,29 @@ export default function SharedLibraryPage() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-3 min-w-0">
                       <span
-                        className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 border border-outline-variant bg-surface-container-high"
-                        style={
-                          item.color
-                            ? { borderLeftWidth: 4, borderLeftColor: item.color }
-                            : undefined
-                        }
+                        className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-outline-variant bg-surface-container-high text-on-surface"
                         aria-hidden="true"
                       >
-                        {item.icon || "📚"}
+                        <DomainGlyph
+                          kind={resolveKitGlyph(
+                            `${item.slug} ${item.name} ${item.icon || ""}`,
+                          )}
+                          size={18}
+                        />
                       </span>
                       <div className="min-w-0">
-                        <div className="font-semibold text-base text-on-surface truncate flex items-center gap-1.5">
+                        <div className="font-serif font-semibold text-base text-on-surface truncate flex items-center gap-1.5">
                           <span className="truncate">{item.name}</span>
                           {item.isOfficial && (
                             <span
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-primary/12 text-on-primary-wash shrink-0"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-sans font-medium border border-outline-variant bg-surface-container-high text-on-surface shrink-0"
                               title="Official Built-In Kit"
                             >
                               <ShieldCheck size={12} /> Official
                             </span>
                           )}
                         </div>
-                        <div className="text-xs text-on-surface-variant truncate">
+                        <div className="text-xs text-on-surface-variant truncate tabular-nums">
                           by {item.authorName || (item.isOfficial ? "Toolbox" : "Community")} •{" "}
                           <Download size={11} className="inline -mt-0.5" />{" "}
                           {item.downloadsCount}
@@ -255,7 +253,7 @@ export default function SharedLibraryPage() {
                     <button
                       type="button"
                       onClick={() => setChangelogSlug(item.slug)}
-                      className="px-2 py-1 rounded-lg text-xs font-medium bg-surface-container-high text-on-surface-variant hover:text-on-surface inline-flex items-center gap-1 shrink-0"
+                      className="px-2 py-1 rounded-lg text-xs font-medium tabular-nums bg-surface-container-high text-on-surface-variant hover:text-on-surface inline-flex items-center gap-1 shrink-0"
                       title="View release changelog"
                     >
                       <History size={12} /> v{item.latestVersion}
@@ -269,7 +267,7 @@ export default function SharedLibraryPage() {
                   )}
 
                   {typeof item.pillarCount === "number" && (
-                    <div className="text-xs text-on-surface-variant flex flex-wrap gap-x-3 gap-y-1">
+                    <div className="text-xs text-on-surface-variant flex flex-wrap gap-x-3 gap-y-1 tabular-nums">
                       <span>{item.pillarCount} pillars</span>
                       <span>•</span>
                       <span>{item.topicCount ?? 0} topics</span>
@@ -304,7 +302,7 @@ export default function SharedLibraryPage() {
                     owned.hasUpstreamUpdate ? (
                       <button
                         type="button"
-                        className="btn btn-primary btn-sm w-full justify-center"
+                        className="btn btn-primary btn-sm w-full justify-center tabular-nums"
                         disabled={isBusy}
                         onClick={() => void handlePullUpdate(owned.id, item)}
                       >
@@ -319,7 +317,7 @@ export default function SharedLibraryPage() {
                     ) : (
                       <div className="flex items-center justify-between w-full gap-2">
                         <span className="inline-flex items-center gap-1 text-xs text-on-surface-variant">
-                          <CheckCircle2 size={14} className="text-primary" /> In Library
+                          <CheckCircle2 size={14} className="text-success" /> In Library
                         </span>
                         <Link
                           to={`/k/${encodeURIComponent(owned.slug)}/guide`}

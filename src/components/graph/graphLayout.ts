@@ -53,10 +53,10 @@ export function computeLayout(
 
 /** Node fill/stroke colors per health bucket (matches the CSS legend). */
 export const HEALTH_COLORS: Record<HealthBucket, string> = {
-  mastered: '#34d399',
-  due: '#fbbf24',
-  decayed: '#f87171',
-  unseen: '#71717a',
+  mastered: '#6fbf94',
+  due: '#f0a429',
+  decayed: '#e57368',
+  unseen: '#78736a',
 }
 
 export const HEALTH_LABELS: Record<HealthBucket, string> = {

@@ -11,6 +11,7 @@ import {
   Upload,
 } from "lucide-react";
 import Modal from "../shared/Modal";
+import { DomainGlyph, resolveKitGlyph } from "../ui/DomainGlyph";
 import useAppStore from "../../stores/appStore";
 import { kitsApi, sharedKitsApi, type SharedKitDetailEntry } from "../../utils/api";
 import type { KitDetailItem, KitSummaryItem } from "../../stores/useKitStore";
@@ -569,7 +570,7 @@ export function SharedKitChangelogModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={detail ? `${detail.icon} ${detail.name} — Releases` : "Version History"}
+      title={detail ? `${detail.name} — Releases` : "Version History"}
       footer={
         <div className="flex justify-end">
           <button className="btn btn-ghost" onClick={onClose}>
@@ -586,14 +587,29 @@ export function SharedKitChangelogModal({
         <p className="text-xs text-on-surface-variant">Release notes unavailable.</p>
       ) : (
         <div className="space-y-3">
-          <p className="text-xs text-on-surface-variant">{detail.description}</p>
+          <div className="flex items-start gap-3">
+            <span
+              className="w-9 h-9 rounded-xl border border-outline-variant bg-surface-container-high text-on-surface flex items-center justify-center shrink-0"
+              aria-hidden="true"
+            >
+              <DomainGlyph
+                kind={resolveKitGlyph(
+                  `${detail.slug} ${detail.name} ${detail.icon || ""}`,
+                )}
+                size={16}
+              />
+            </span>
+            <p className="text-xs text-on-surface-variant pt-0.5">
+              {detail.description}
+            </p>
+          </div>
           <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
             {detail.versions.map((ver) => (
               <div
                 key={ver.version}
                 className="rounded-lg border border-outline-variant bg-surface-container-low p-3"
               >
-                <div className="flex items-center justify-between text-xs font-semibold text-on-surface">
+                <div className="flex items-center justify-between text-xs font-semibold text-on-surface tabular-nums">
                   <span className="inline-flex items-center gap-1.5">
                     <History size={13} /> v{ver.version}
                   </span>

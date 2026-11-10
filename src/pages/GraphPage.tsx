@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { Search, Waypoints, Play, X, Loader2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Compass, Search, Play, X, Loader2 } from 'lucide-react'
 import useAppStore from '../stores/appStore'
 import { graphApi } from '../utils/api'
 import GraphCanvas, { type GraphEdgeItem, type GraphNodeItem } from '../components/graph/GraphCanvas'
@@ -177,8 +177,7 @@ export default function GraphPage() {
       {/* Header + toolbar */}
       <div className="graph-header">
         <div className="graph-header-top">
-          <h1 className="page-title" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <Waypoints size={22} style={{ color: 'var(--color-accent)' }} />
+          <h1 className="page-title font-serif">
             Knowledge Graph
           </h1>
           <div className="graph-legend" aria-label="Legend">
@@ -228,10 +227,10 @@ export default function GraphPage() {
             aria-label="Learning track"
             id="graph-track-select"
           >
-            <option value="">🎯 Learning tracks…</option>
+            <option value="">Learning tracks…</option>
             {tracks.map((t) => (
               <option key={t.id} value={t.id}>
-                {t.emoji} {t.name} ({t.masteredCount}/{t.nodeCount})
+                {t.name} ({t.masteredCount}/{t.nodeCount})
               </option>
             ))}
           </select>
@@ -242,7 +241,6 @@ export default function GraphPage() {
             <button
               key={p.id}
               className={`graph-pillar-chip${pillarFilter === p.id ? ' active' : ''}`}
-              style={{ '--chip-color': p.color } as CSSProperties}
               onClick={() => setPillarFilter(pillarFilter === p.id ? null : p.id)}
             >
               {p.shortName}
@@ -277,7 +275,10 @@ export default function GraphPage() {
         {activeTrack && (
           <div className="graph-track-ribbon" id="graph-track-ribbon">
             <div className="graph-track-ribbon-info">
-              <span className="graph-track-ribbon-name">{activeTrack.emoji} {activeTrack.name}</span>
+              <span className="graph-track-ribbon-name">
+                <Compass size={14} aria-hidden="true" />
+                {activeTrack.name}
+              </span>
               <span className="graph-track-ribbon-desc">{activeTrack.description}</span>
               <span className="graph-track-ribbon-progress">
                 {activeTrack.masteredCount}/{activeTrack.nodeCount} concepts mastered · numbered in study order
