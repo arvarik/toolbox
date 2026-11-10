@@ -250,7 +250,7 @@ export function ActiveKitSwitcher({ onAfterSelect }: { onAfterSelect?: () => voi
     <div ref={wrapRef} onKeyDown={handleKeyDown} className="relative">
       <button
         type="button"
-        aria-label="Active Study Kit"
+        aria-label={`Active Study Kit: ${activeLabel}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listboxId}

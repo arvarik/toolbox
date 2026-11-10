@@ -270,14 +270,15 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
 
     // Select a topic in Left Curriculum Spine -> loads Guide notes into Right Inspector
     fireEvent.click(screen.getByText('Start Here').closest('button')!)
-    await waitFor(() =>
-      expect(within(inspector).getByText('Open Guide')).toBeInTheDocument(),
-    )
+    expect(await within(inspector).findByText('Open Guide')).toBeInTheDocument()
+    expect(await within(inspector).findByText(/Layer 7 reverse proxies/i)).toBeInTheDocument()
 
     // Click "Ask Kit" in Right Inspector -> docks quote pill into center composer
     const askKitButtons = within(inspector).getAllByRole('button', { name: /Ask Kit/i })
     fireEvent.click(askKitButtons[0])
-    expect(await screen.findByText(/Layer 7 reverse proxies route HTTP traffic/i)).toBeInTheDocument()
+    await waitFor(() =>
+      expect(screen.getAllByText(/Layer 7 reverse proxies/i).length).toBeGreaterThanOrEqual(2),
+    )
 
     // Switch Right Inspector to Updates tab
     const inspectorTabs = within(inspector).getByRole('tablist', {
@@ -377,7 +378,7 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
     })
 
     // Open custom ActiveKitSwitcher popover and select Distributed Rust
-    const kitTrigger = screen.getByRole('button', { name: 'Active Study Kit' })
+    const kitTrigger = screen.getByRole('button', { name: /Active Study Kit/i })
     fireEvent.click(kitTrigger)
     const listbox = await screen.findByRole('listbox')
     fireEvent.click(within(listbox).getByText('Distributed Rust'))
