@@ -493,6 +493,49 @@ describe("Personal Kits, Shared Library Fork/Sync, Mode 1 & Mode 2 Archive Round
       .expect(200);
     db.prepare("INSERT INTO episodic_memory (ownerId, kit_id, memory_text, importance_score) VALUES (?, ?, 'Prefers formal type derivations', 8)").run(aliceId, aliceKitId);
 
+    // Textbook notebook annotations: dogear + 3-ink highlight + resume position
+    const dogearRes = await aliceAgent
+      .post("/api/guide-content/dogears/toggle")
+      .set("X-Toolbox-Kit", "distributed-rust")
+      .send({ pillarId: "memory-model", topicId: "ownership", sectionId: "core" })
+      .expect(200);
+    expect(dogearRes.body.dogeared).toBe(true);
+
+    const hlCreateRes = await aliceAgent
+      .post("/api/guide-content/highlights")
+      .set("X-Toolbox-Kit", "distributed-rust")
+      .send({
+        pillarId: "memory-model",
+        topicId: "ownership",
+        sectionId: "core",
+        quote: "Each value in Rust has a single owner",
+        prefix: "Invariant: ",
+        suffix: " at any point.",
+        note: "Key affine rule",
+        cardId: alicePrereqCardId,
+      })
+      .expect(201);
+    expect(hlCreateRes.body.color).toBe("amber");
+    const aliceHighlightId = hlCreateRes.body.id as string;
+
+    await aliceAgent
+      .patch(`/api/guide-content/highlights/${aliceHighlightId}`)
+      .set("X-Toolbox-Kit", "distributed-rust")
+      .send({ color: "sage", note: "Updated affine note" })
+      .expect(200);
+
+    await aliceAgent
+      .put("/api/guide-content/resume")
+      .set("X-Toolbox-Kit", "distributed-rust")
+      .send({ pillarId: "memory-model", topicId: "ownership", sectionId: "core" })
+      .expect(200);
+
+    // Tenant isolation: Bob cannot patch or delete Alice's highlight, and Mode 1 skeleton omits personal annotations
+    await bobAgent.patch(`/api/guide-content/highlights/${aliceHighlightId}`).send({ color: "coral" }).expect(404);
+    await bobAgent.delete(`/api/guide-content/highlights/${aliceHighlightId}`).expect(404);
+    const mode1PrivacyRes = await aliceAgent.get(`/api/kits/${aliceKitId}/export?mode=skeleton`).expect(200);
+    expect(JSON.stringify(mode1PrivacyRes.body)).not.toContain("Updated affine note");
+
     const aliceSourceId = crypto.randomUUID();
     const binaryPdfContent = Buffer.concat([Buffer.from("%PDF-1.7\n", "utf8"), crypto.randomBytes(1024)]);
     const aliceUploadRoot = kitUploadsDir(aliceId, aliceKitId);
@@ -597,6 +640,38 @@ describe("Personal Kits, Shared Library Fork/Sync, Mode 1 & Mode 2 Archive Round
     const bobDlRes = await bobAgent.get(`/api/kits/${bobRestoredKitId}/sources/${bobRestoredSource.id}/file`).responseType("blob").expect(200);
     expect(bobDlRes.headers["x-content-type-options"]).toBe("nosniff");
     expect((bobDlRes.body as Buffer).equals(binaryPdfContent)).toBe(true);
+
+    // Verify personal dogears, highlights (with remapped cardId), and resume spot restored in Mode 2 backup
+    const bobDogearsRes = await bobAgent
+      .get("/api/guide-content/dogears")
+      .set("X-Toolbox-Kit", "distributed-rust-3")
+      .expect(200);
+    expect(bobDogearsRes.body).toEqual([
+      expect.objectContaining({ pillarId: "memory-model", topicId: "ownership", sectionId: "core" }),
+    ]);
+
+    const bobHighlightsRes = await bobAgent
+      .get("/api/guide-content/highlights?pillarId=memory-model&topicId=ownership")
+      .set("X-Toolbox-Kit", "distributed-rust-3")
+      .expect(200);
+    expect(bobHighlightsRes.body).toHaveLength(1);
+    expect(bobHighlightsRes.body[0].id).not.toBe(aliceHighlightId);
+    expect(bobHighlightsRes.body[0]).toMatchObject({
+      quote: "Each value in Rust has a single owner",
+      color: "sage",
+      note: "Updated affine note",
+      cardId: bobRestoredCard1.id,
+    });
+
+    const bobResumeRes = await bobAgent
+      .get("/api/guide-content/resume")
+      .set("X-Toolbox-Kit", "distributed-rust-3")
+      .expect(200);
+    expect(bobResumeRes.body.resume).toMatchObject({
+      pillarId: "memory-model",
+      topicId: "ownership",
+      sectionId: "core",
+    });
 
     const bobRestoredUploadDir = kitUploadsDir(bobId, bobRestoredKitId);
     expect(fs.existsSync(bobRestoredUploadDir)).toBe(true);

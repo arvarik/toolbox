@@ -1,6 +1,7 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import db from "../db.ts";
-import { asyncHandler } from "../platform/net/errors.ts";
+import { asyncHandler, NotFoundError, ValidationError } from "../platform/net/errors.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
 import { resolveActiveKit } from "../kits/kitContext.ts";
 import {
@@ -10,6 +11,8 @@ import {
 import logger from "../utils/logger.ts";
 
 const router = Router();
+
+const VALID_HIGHLIGHT_COLORS = new Set(["amber", "sage", "coral"]);
 
 router.get("/export", (req, res) => {
   const scope = scopeOf(req);
@@ -89,6 +92,307 @@ router.get("/progress", (req, res) => {
     }
   }
   res.json(filled);
+});
+
+router.get("/dogears", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+
+  const rows = db
+    .prepare(
+      `SELECT pillar_id, topic_id, section_id, created_at
+       FROM guide_dogears
+       WHERE ownerId = ? AND kit_id = ?
+       ORDER BY created_at DESC`,
+    )
+    .all(scope.ownerId, kit.id) as Array<{
+    pillar_id: string;
+    topic_id: string;
+    section_id: string;
+    created_at: string | null;
+  }>;
+
+  res.json(
+    rows.map((r) => ({
+      pillarId: r.pillar_id,
+      topicId: r.topic_id,
+      sectionId: r.section_id,
+      createdAt: r.created_at,
+    })),
+  );
+});
+
+router.post("/dogears/toggle", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const { pillarId, topicId, sectionId = "" } = req.body as {
+    pillarId?: unknown;
+    topicId?: unknown;
+    sectionId?: unknown;
+  };
+
+  if (typeof pillarId !== "string" || !pillarId.trim() || typeof topicId !== "string" || !topicId.trim()) {
+    throw new ValidationError("pillarId and topicId are required");
+  }
+  const sec = typeof sectionId === "string" ? sectionId.trim() : "";
+
+  const existing = db
+    .prepare(
+      `SELECT created_at FROM guide_dogears
+       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+    )
+    .get(scope.ownerId, kit.id, pillarId.trim(), topicId.trim(), sec) as
+    | { created_at: string | null }
+    | undefined;
+
+  if (existing) {
+    db.prepare(
+      `DELETE FROM guide_dogears
+       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+    ).run(scope.ownerId, kit.id, pillarId.trim(), topicId.trim(), sec);
+    res.json({ dogeared: false, createdAt: null });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO guide_dogears (ownerId, kit_id, pillar_id, topic_id, section_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(scope.ownerId, kit.id, pillarId.trim(), topicId.trim(), sec, now);
+  res.json({ dogeared: true, createdAt: now });
+});
+
+router.get("/highlights", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const pillarId = typeof req.query.pillarId === "string" ? req.query.pillarId : null;
+  const topicId = typeof req.query.topicId === "string" ? req.query.topicId : null;
+
+  const rows =
+    pillarId && topicId
+      ? (db
+          .prepare(
+            `SELECT id, pillar_id, topic_id, section_id, quote, prefix, suffix, color, note, card_id, created_at, updated_at
+             FROM guide_highlights
+             WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ?
+             ORDER BY created_at ASC`,
+          )
+          .all(scope.ownerId, kit.id, pillarId, topicId) as Array<Record<string, unknown>>)
+      : (db
+          .prepare(
+            `SELECT id, pillar_id, topic_id, section_id, quote, prefix, suffix, color, note, card_id, created_at, updated_at
+             FROM guide_highlights
+             WHERE ownerId = ? AND kit_id = ?
+             ORDER BY created_at DESC`,
+          )
+          .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>);
+
+  res.json(
+    rows.map((r) => ({
+      id: String(r.id),
+      pillarId: String(r.pillar_id),
+      topicId: String(r.topic_id),
+      sectionId: String(r.section_id),
+      quote: String(r.quote),
+      prefix: String(r.prefix ?? ""),
+      suffix: String(r.suffix ?? ""),
+      color: String(r.color ?? "amber"),
+      note: String(r.note ?? ""),
+      cardId: (r.card_id as string | null) ?? null,
+      createdAt: (r.created_at as string | null) ?? null,
+      updatedAt: (r.updated_at as string | null) ?? null,
+    })),
+  );
+});
+
+router.post("/highlights", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const {
+    pillarId,
+    topicId,
+    sectionId,
+    quote,
+    prefix = "",
+    suffix = "",
+    color = "amber",
+    note = "",
+    cardId = null,
+  } = req.body as Record<string, unknown>;
+
+  if (
+    typeof pillarId !== "string" ||
+    !pillarId.trim() ||
+    typeof topicId !== "string" ||
+    !topicId.trim() ||
+    typeof sectionId !== "string" ||
+    !sectionId.trim() ||
+    typeof quote !== "string" ||
+    !quote.trim()
+  ) {
+    throw new ValidationError("pillarId, topicId, sectionId, and quote are required");
+  }
+  const safeColor = typeof color === "string" && VALID_HIGHLIGHT_COLORS.has(color) ? color : "amber";
+  if (typeof color === "string" && !VALID_HIGHLIGHT_COLORS.has(color)) {
+    throw new ValidationError("color must be amber, sage, or coral");
+  }
+
+  let verifiedCardId: string | null = null;
+  if (typeof cardId === "string" && cardId.trim()) {
+    const ownedCard = db
+      .prepare("SELECT id FROM flashcards WHERE ownerId = ? AND id = ?")
+      .get(scope.ownerId, cardId.trim()) as { id: string } | undefined;
+    if (!ownedCard) throw new ValidationError("Referenced flashcard not found");
+    verifiedCardId = ownedCard.id;
+  }
+
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const safePrefix = typeof prefix === "string" ? prefix.slice(0, 160) : "";
+  const safeSuffix = typeof suffix === "string" ? suffix.slice(0, 160) : "";
+  const safeNote = typeof note === "string" ? note.slice(0, 500) : "";
+  const safeQuote = quote.slice(0, 2000);
+
+  db.prepare(
+    `INSERT INTO guide_highlights (
+       id, ownerId, kit_id, pillar_id, topic_id, section_id,
+       quote, prefix, suffix, color, note, card_id, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    scope.ownerId,
+    kit.id,
+    pillarId.trim(),
+    topicId.trim(),
+    sectionId.trim(),
+    safeQuote,
+    safePrefix,
+    safeSuffix,
+    safeColor,
+    safeNote,
+    verifiedCardId,
+    now,
+    now,
+  );
+
+  res.status(201).json({
+    id,
+    pillarId: pillarId.trim(),
+    topicId: topicId.trim(),
+    sectionId: sectionId.trim(),
+    quote: safeQuote,
+    prefix: safePrefix,
+    suffix: safeSuffix,
+    color: safeColor,
+    note: safeNote,
+    cardId: verifiedCardId,
+    createdAt: now,
+    updatedAt: now,
+  });
+});
+
+router.patch("/highlights/:id", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const { id } = req.params;
+  const { color, note, cardId } = req.body as Record<string, unknown>;
+
+  const existing = db
+    .prepare(
+      `SELECT id, color, note, card_id FROM guide_highlights
+       WHERE ownerId = ? AND kit_id = ? AND id = ?`,
+    )
+    .get(scope.ownerId, kit.id, id) as
+    | { id: string; color: string; note: string; card_id: string | null }
+    | undefined;
+
+  if (!existing) throw new NotFoundError("Highlight");
+
+  let nextColor = existing.color;
+  if (color !== undefined) {
+    if (typeof color !== "string" || !VALID_HIGHLIGHT_COLORS.has(color)) {
+      throw new ValidationError("color must be amber, sage, or coral");
+    }
+    nextColor = color;
+  }
+
+  const nextNote = typeof note === "string" ? note.slice(0, 500) : existing.note;
+  let nextCardId = existing.card_id;
+  if (cardId !== undefined) {
+    if (cardId === null || cardId === "") {
+      nextCardId = null;
+    } else if (typeof cardId === "string") {
+      const ownedCard = db
+        .prepare("SELECT id FROM flashcards WHERE ownerId = ? AND id = ?")
+        .get(scope.ownerId, cardId.trim()) as { id: string } | undefined;
+      if (!ownedCard) throw new ValidationError("Referenced flashcard not found");
+      nextCardId = ownedCard.id;
+    }
+  }
+
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE guide_highlights
+     SET color = ?, note = ?, card_id = ?, updated_at = ?
+     WHERE ownerId = ? AND kit_id = ? AND id = ?`,
+  ).run(nextColor, nextNote, nextCardId, now, scope.ownerId, kit.id, id);
+
+  res.json({ id, color: nextColor, note: nextNote, cardId: nextCardId, updatedAt: now });
+});
+
+router.delete("/highlights/:id", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const { id } = req.params;
+
+  const info = db
+    .prepare("DELETE FROM guide_highlights WHERE ownerId = ? AND kit_id = ? AND id = ?")
+    .run(scope.ownerId, kit.id, id);
+
+  if (info.changes === 0) throw new NotFoundError("Highlight");
+  res.json({ ok: true });
+});
+
+router.get("/resume", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+
+  const row = db
+    .prepare("SELECT last_guide_ref FROM kits WHERE ownerId = ? AND id = ?")
+    .get(scope.ownerId, kit.id) as { last_guide_ref: string | null } | undefined;
+
+  if (!row?.last_guide_ref) {
+    res.json({ resume: null });
+    return;
+  }
+  try {
+    res.json({ resume: JSON.parse(row.last_guide_ref) });
+  } catch {
+    res.json({ resume: null });
+  }
+});
+
+router.put("/resume", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const { pillarId, topicId, sectionId = "" } = req.body as Record<string, unknown>;
+
+  if (typeof pillarId !== "string" || !pillarId.trim() || typeof topicId !== "string" || !topicId.trim()) {
+    throw new ValidationError("pillarId and topicId are required");
+  }
+  const resume = {
+    pillarId: pillarId.trim(),
+    topicId: topicId.trim(),
+    sectionId: typeof sectionId === "string" ? sectionId.trim() : "",
+    updatedAt: new Date().toISOString(),
+  };
+
+  db.prepare("UPDATE kits SET last_guide_ref = ?, updated_at = datetime('now') WHERE ownerId = ? AND id = ?").run(
+    JSON.stringify(resume),
+    scope.ownerId,
+    kit.id,
+  );
+  res.json({ resume });
 });
 
 router.get("/:pillarId/:topicId", (req, res) => {

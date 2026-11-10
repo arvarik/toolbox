@@ -40,6 +40,15 @@ export interface KitSummaryItem {
   guideTotalCount: number;
   archivedNotesCount: number;
   drillCount: number;
+  dogearCount?: number;
+  lastGuideRef?: {
+    pillarId: string;
+    topicId: string;
+    sectionId: string;
+    pillarName?: string;
+    topicName?: string;
+    updatedAt?: string;
+  } | null;
 }
 
 export interface KitDetailItem extends KitSummaryItem {

@@ -473,6 +473,37 @@ export const chatApi = {
 }
 
 /* ---- Guide Content ---- */
+export type HighlightColor = 'amber' | 'sage' | 'coral'
+
+export interface GuideDogearItem {
+  pillarId: string
+  topicId: string
+  sectionId: string
+  createdAt: string | null
+}
+
+export interface GuideHighlightItem {
+  id: string
+  pillarId: string
+  topicId: string
+  sectionId: string
+  quote: string
+  prefix: string
+  suffix: string
+  color: HighlightColor
+  note: string
+  cardId: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export interface GuideResumeRef {
+  pillarId: string
+  topicId: string
+  sectionId: string
+  updatedAt?: string
+}
+
 export const guideContentApi = {
   getForTopic: (pillarId: string, topicId: string) =>
     request<Record<string, { content: string; committedAt?: string | null }>>(
@@ -493,6 +524,62 @@ export const guideContentApi = {
     }),
   progress: () => request<Record<string, boolean>>('/guide-content/progress'),
   exportUrl: () => `${API_BASE}/guide-content/export`,
+  listDogears: () => request<GuideDogearItem[]>('/guide-content/dogears'),
+  toggleDogear: (pillarId: string, topicId: string, sectionId = '') =>
+    request<{ dogeared: boolean; createdAt: string | null }>(
+      '/guide-content/dogears/toggle',
+      {
+        method: 'POST',
+        body: { pillarId, topicId, sectionId },
+      },
+    ),
+  listHighlights: (pillarId?: string, topicId?: string) => {
+    const qs =
+      pillarId && topicId
+        ? `?pillarId=${encodeURIComponent(pillarId)}&topicId=${encodeURIComponent(topicId)}`
+        : ''
+    return request<GuideHighlightItem[]>(`/guide-content/highlights${qs}`)
+  },
+  createHighlight: (data: {
+    pillarId: string
+    topicId: string
+    sectionId: string
+    quote: string
+    prefix?: string
+    suffix?: string
+    color?: HighlightColor
+    note?: string
+    cardId?: string | null
+  }) =>
+    request<GuideHighlightItem>('/guide-content/highlights', {
+      method: 'POST',
+      body: data,
+    }),
+  updateHighlight: (
+    id: string,
+    patch: { color?: HighlightColor; note?: string; cardId?: string | null },
+  ) =>
+    request<{
+      id: string
+      color: HighlightColor
+      note: string
+      cardId: string | null
+      updatedAt: string
+    }>(`/guide-content/highlights/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: patch,
+    }),
+  deleteHighlight: (id: string) =>
+    request<{ ok: boolean }>(`/guide-content/highlights/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  getResume: () =>
+    request<{ resume: GuideResumeRef | null }>('/guide-content/resume'),
+  putResume: (pillarId: string, topicId: string, sectionId = '') =>
+    request<{ resume: GuideResumeRef }>('/guide-content/resume', {
+      method: 'PUT',
+      body: { pillarId, topicId, sectionId },
+    }),
 }
 
 /* ---- Profile ---- */
