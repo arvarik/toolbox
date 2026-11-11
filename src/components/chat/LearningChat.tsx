@@ -471,7 +471,19 @@ export default function LearningChat({
   }, [])
 
   // Handle text selection for flashcard generation
+  const popupInteractingRef = useRef(false)
+  const popupReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const markPopupInteracting = useCallback(() => {
+    if (popupReleaseTimerRef.current) {
+      clearTimeout(popupReleaseTimerRef.current)
+      popupReleaseTimerRef.current = null
+    }
+    popupInteractingRef.current = true
+  }, [])
+
   const checkSelection = useCallback((e: MouseEvent | null) => {
+    if (popupInteractingRef.current) return
     const targetEl = e?.target instanceof Element ? e.target : null
     if (
       targetEl?.closest('#flashcard-popup') ||
@@ -515,20 +527,47 @@ export default function LearningChat({
 
     let selectionTimer: ReturnType<typeof setTimeout> | undefined
     const handleSelectionChange = () => {
+      if (popupInteractingRef.current) return
       if (selectionTimer) clearTimeout(selectionTimer)
-      selectionTimer = setTimeout(() => checkSelection(null), 300)
+      selectionTimer = setTimeout(() => {
+        if (popupInteractingRef.current) return
+        checkSelection(null)
+      }, 300)
+    }
+    const schedulePopupRelease = () => {
+      if (!popupInteractingRef.current) return
+      if (popupReleaseTimerRef.current) clearTimeout(popupReleaseTimerRef.current)
+      popupReleaseTimerRef.current = setTimeout(() => {
+        popupInteractingRef.current = false
+        popupReleaseTimerRef.current = null
+      }, 80)
     }
     document.addEventListener('selectionchange', handleSelectionChange)
+    window.addEventListener('pointerup', schedulePopupRelease)
+    window.addEventListener('pointercancel', schedulePopupRelease)
+    window.addEventListener('touchend', schedulePopupRelease)
+    window.addEventListener('touchcancel', schedulePopupRelease)
+    window.addEventListener('mouseup', schedulePopupRelease)
 
     return () => {
       document.removeEventListener('mouseup', checkSelection)
       document.removeEventListener('selectionchange', handleSelectionChange)
+      window.removeEventListener('pointerup', schedulePopupRelease)
+      window.removeEventListener('pointercancel', schedulePopupRelease)
+      window.removeEventListener('touchend', schedulePopupRelease)
+      window.removeEventListener('touchcancel', schedulePopupRelease)
+      window.removeEventListener('mouseup', schedulePopupRelease)
       if (selectionTimer) clearTimeout(selectionTimer)
+      if (popupReleaseTimerRef.current) {
+        clearTimeout(popupReleaseTimerRef.current)
+        popupReleaseTimerRef.current = null
+      }
     }
   }, [checkSelection])
 
   const handleGenerateAdHocFlashcard = async () => {
     if (!popupState?.text) return
+    popupInteractingRef.current = false
     setIsGeneratingCards(true)
     const textToGen = popupState.text
     setPopupState(null)
@@ -1138,12 +1177,19 @@ export default function LearningChat({
       {popupState && (
         <div
           id="flashcard-popup"
+          onPointerDown={markPopupInteracting}
+          onTouchStart={markPopupInteracting}
+          onMouseDown={(e) => {
+            markPopupInteracting()
+            e.preventDefault()
+          }}
+          onMouseUp={(e) => e.stopPropagation()}
           className="flashcard-modal-ignore fixed z-50 flex -translate-x-1/2 items-center gap-1 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] p-1.5 shadow-[var(--shadow-float)]"
           style={{ top: popupState.top, left: popupState.left }}
         >
           <button
             type="button"
-            className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-3 text-[12px] font-semibold whitespace-nowrap text-[var(--color-accent-ink)] hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-50"
+            className="inline-flex min-h-[40px] cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-3 text-[12px] font-semibold whitespace-nowrap text-[var(--color-accent-ink)] hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-50 sm:min-h-0 sm:h-8"
             onClick={() => {
               void handleGenerateAdHocFlashcard()
             }}

@@ -276,6 +276,16 @@ export function HighlightableProse({
   } | null>(null)
   const hasSelectionRef = useRef(false)
   hasSelectionRef.current = selection !== null
+  const toolbarInteractingRef = useRef(false)
+  const releaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const markToolbarInteracting = () => {
+    if (releaseTimerRef.current) {
+      clearTimeout(releaseTimerRef.current)
+      releaseTimerRef.current = null
+    }
+    toolbarInteractingRef.current = true
+  }
 
   useEffect(() => {
     if (!richContentRef.current) return
@@ -283,26 +293,60 @@ export function HighlightableProse({
   }, [children, contentKey, highlights])
 
   useEffect(() => {
-    if (!selection) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSelection(null)
+    if (!selection) {
+      toolbarInteractingRef.current = false
+      if (releaseTimerRef.current) {
+        clearTimeout(releaseTimerRef.current)
+        releaseTimerRef.current = null
+      }
+      return
     }
-    const onPointerDown = (e: PointerEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        toolbarInteractingRef.current = false
         setSelection(null)
       }
     }
+    const onPointerDown = (e: PointerEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) {
+        toolbarInteractingRef.current = false
+        setSelection(null)
+      }
+    }
+    const scheduleRelease = () => {
+      if (!toolbarInteractingRef.current) return
+      if (releaseTimerRef.current) clearTimeout(releaseTimerRef.current)
+      releaseTimerRef.current = setTimeout(() => {
+        toolbarInteractingRef.current = false
+        releaseTimerRef.current = null
+      }, 80)
+    }
     document.addEventListener('keydown', onKey)
     document.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointerup', scheduleRelease)
+    window.addEventListener('pointercancel', scheduleRelease)
+    window.addEventListener('touchend', scheduleRelease)
+    window.addEventListener('touchcancel', scheduleRelease)
+    window.addEventListener('mouseup', scheduleRelease)
     return () => {
       document.removeEventListener('keydown', onKey)
       document.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointerup', scheduleRelease)
+      window.removeEventListener('pointercancel', scheduleRelease)
+      window.removeEventListener('touchend', scheduleRelease)
+      window.removeEventListener('touchcancel', scheduleRelease)
+      window.removeEventListener('mouseup', scheduleRelease)
+      if (releaseTimerRef.current) {
+        clearTimeout(releaseTimerRef.current)
+        releaseTimerRef.current = null
+      }
     }
   }, [selection])
 
   const checkSelectionRef = useRef<() => void>(() => {})
 
   const checkSelection = () => {
+    if (toolbarInteractingRef.current) return
     const sel = window.getSelection()
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
       if (hasSelectionRef.current) setSelection(null)
@@ -401,8 +445,10 @@ export function HighlightableProse({
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const onSelectionChange = () => {
+      if (toolbarInteractingRef.current) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
+        if (toolbarInteractingRef.current) return
         const sel = window.getSelection()
         const insideThisProse = Boolean(
           sel &&
@@ -424,6 +470,7 @@ export function HighlightableProse({
 
   const commitHighlight = (color: HighlightColor) => {
     if (!selection?.canHighlight) return
+    toolbarInteractingRef.current = false
     onAddHighlight(selection.text, color, selection.prefix, selection.suffix)
     window.getSelection()?.removeAllRanges()
     setSelection(null)
@@ -439,7 +486,12 @@ export function HighlightableProse({
       {selection && (
         <div
           data-testid="highlight-selection-toolbar"
-          onMouseDown={(e) => e.preventDefault()}
+          onPointerDown={markToolbarInteracting}
+          onTouchStart={markToolbarInteracting}
+          onMouseDown={(e) => {
+            markToolbarInteracting()
+            e.preventDefault()
+          }}
           onMouseUp={(e) => e.stopPropagation()}
           style={{ left: `${selection.x}px`, top: `${selection.y}px` }}
           className="animate-popover-enter absolute z-30 flex max-w-[calc(100%-8px)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2 py-1 text-[12px] shadow-[var(--shadow-float)]"
@@ -476,6 +528,7 @@ export function HighlightableProse({
               <button
                 type="button"
                 onClick={() => {
+                  toolbarInteractingRef.current = false
                   onMakeCard(selection.text, {
                     prefix: selection.prefix,
                     suffix: selection.suffix,
@@ -497,6 +550,7 @@ export function HighlightableProse({
               <button
                 type="button"
                 onClick={() => {
+                  toolbarInteractingRef.current = false
                   onAskKit(selection.text)
                   window.getSelection()?.removeAllRanges()
                   setSelection(null)

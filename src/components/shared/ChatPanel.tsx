@@ -105,12 +105,27 @@ const saveHistoryForKey = (storageKey: string, messages: ChatPanelMessage[]): vo
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    }
+  }, [])
+
+  const scheduleCopiedReset = () => {
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    copyTimerRef.current = setTimeout(() => {
+      setCopied(false)
+      copyTimerRef.current = null
+    }, 2000)
+  }
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      scheduleCopiedReset()
     } catch {
       const textarea = document.createElement('textarea')
       textarea.value = text
@@ -119,7 +134,7 @@ function CopyButton({ text }: { text: string }) {
       try {
         document.execCommand('copy')
         setCopied(true)
-        setTimeout(() => setCopied(false), 2000)
+        scheduleCopiedReset()
       } catch {
         // Ignore
       }
@@ -187,13 +202,15 @@ function ChatPanelContent({
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
 
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hasTriggeredRef = useRef(false)
   const abortControllerRef = useRef<AbortController | null>(null)
 
-  // Abort any in-flight SSE stream if the panel unmounts or switches Kits/pages
+  // Abort any in-flight SSE stream or pending retry timer if the panel unmounts or switches Kits/pages
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort()
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
     }
   }, [])
 
@@ -384,7 +401,11 @@ function ChatPanelContent({
     if (userMsg && userMsg.role === 'user') {
       const newHistory = messages.slice(0, index)
       setMessages(newHistory)
-      setTimeout(() => void handleSend(userMsg.content, newHistory, true), 50)
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = setTimeout(() => {
+        retryTimerRef.current = null
+        void handleSend(userMsg.content, newHistory, true)
+      }, 50)
     }
   }
 

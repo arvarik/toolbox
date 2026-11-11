@@ -2,8 +2,10 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CommitModal from '../components/chat/CommitModal'
+import LearningChat from '../components/chat/LearningChat'
 import GraphCanvas, { type GraphNodeItem } from '../components/graph/GraphCanvas'
 import NodePanel from '../components/graph/NodePanel'
+import ChatPanel from '../components/shared/ChatPanel'
 import { DogearCorner, HighlightableProse } from '../components/ui/NotebookPrimitives'
 import ChatPage from '../pages/ChatPage'
 import ReviewPage from '../pages/ReviewPage'
@@ -134,7 +136,25 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
     // Right-edge selection is horizontally clamped inside the 288px narrow container (288 - 112 = 176px)
     expect(parseFloat(toolbar.style.left)).toBeLessThanOrEqual(176)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Highlight' }))
+    // Simulate a 500ms touch press (>=180ms debounce) where pointerdown collapses window.getSelection()
+    const hlBtn = screen.getByRole('button', { name: 'Highlight' })
+    fireEvent.pointerDown(hlBtn)
+    fireEvent.touchStart(hlBtn)
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: true,
+      rangeCount: 0,
+      toString: () => '',
+      removeAllRanges,
+    } as unknown as Selection)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(500)
+    })
+    // Toolbar MUST remain mounted while finger is still down so subsequent click fires cleanly
+    expect(screen.getByTestId('highlight-selection-toolbar')).toBeInTheDocument()
+    fireEvent.pointerUp(hlBtn)
+    fireEvent.touchEnd(hlBtn)
+    fireEvent.click(hlBtn)
     expect(onAddHighlight).toHaveBeenCalledWith(
       'bounded load',
       'amber',
@@ -486,5 +506,141 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
     const panel = await screen.findByRole('complementary', { name: 'Concept details' })
     expect(panel).toHaveAttribute('id', 'graph-node-panel')
     expect(await screen.findByRole('heading', { name: 'CAP Theorem' })).toBeInTheDocument()
+  })
+
+  it('keeps LearningChat #flashcard-popup mounted across >=300ms touch/mouse press when selection collapses and cleans up ChatPanel CopyButton timers on unmount', async () => {
+    const kit = makeTestKit({ slug: 'sys-kit', name: 'Systems' })
+    resetKitStore(kit)
+
+    let generatedText: string | null = null
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/chat/sessions')) {
+        return new Response(
+          JSON.stringify({
+            'sess-1': {
+              id: 'sess-1',
+              name: 'Consensus Session',
+              createdAt: 1000,
+              updatedAt: 2000,
+              messages: [
+                {
+                  role: 'assistant',
+                  content: 'Linearizability requires strict quorum intersection across replicas.',
+                  timestamp: 1500,
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      if (url.includes('/chat/generate-flashcards')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { text?: string }
+        generatedText = body.text ?? null
+        return new Response(
+          JSON.stringify({ cards: [{ front: 'What does linearizability require?', back: 'Quorum intersection.' }] }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+
+    const { unmount: unmountChat } = render(
+      <MemoryRouter>
+        <LearningChat activeTopic={null} routeKitSlug="sys-kit" />
+      </MemoryRouter>,
+    )
+
+    const msgContainer = await screen.findByText(/Linearizability requires strict quorum intersection/i)
+    vi.useFakeTimers()
+
+    const fakeRange = {
+      getBoundingClientRect: () => ({
+        left: 60,
+        top: 200,
+        right: 260,
+        bottom: 224,
+        width: 200,
+        height: 24,
+        x: 60,
+        y: 200,
+        toJSON: () => ({}),
+      }),
+    } as unknown as Range
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      anchorNode: msgContainer.firstChild ?? msgContainer,
+      toString: () => 'Linearizability requires strict quorum intersection',
+      getRangeAt: () => fakeRange,
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection)
+
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(350)
+    })
+
+    const popup = document.getElementById('flashcard-popup')
+    expect(popup).not.toBeNull()
+    const makeBtn = within(popup as HTMLElement).getByRole('button', { name: /Make Flashcard/i })
+
+    // Verify desktop mousedown calls preventDefault() so selection is preserved
+    const downEvt = new MouseEvent('mousedown', { bubbles: true, cancelable: true })
+    makeBtn.dispatchEvent(downEvt)
+    expect(downEvt.defaultPrevented).toBe(true)
+
+    // Verify a 500ms touch press (>=300ms debounce) with collapsed selection does NOT unmount #flashcard-popup
+    fireEvent.pointerDown(makeBtn)
+    fireEvent.touchStart(makeBtn)
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: true,
+      rangeCount: 0,
+      anchorNode: null,
+      toString: () => '',
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(500)
+    })
+    expect(document.getElementById('flashcard-popup')).not.toBeNull()
+
+    vi.useRealTimers()
+    fireEvent.pointerUp(makeBtn)
+    fireEvent.touchEnd(makeBtn)
+    fireEvent.click(makeBtn)
+
+    await waitFor(() => {
+      expect(generatedText).toBe('Linearizability requires strict quorum intersection')
+    })
+    unmountChat()
+
+    // Verify ChatPanel CopyButton cleans up its 2000ms reset timer on unmount without throwing
+    Object.assign(navigator, {
+      clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
+    })
+
+    useAppStore.setState({ chatOpen: { guide: true }, apiKeyConfigured: true })
+    const { unmount: unmountPanel } = render(
+      <MemoryRouter initialEntries={['/k/sys-kit/guide']}>
+        <ChatPanel
+          page="guide"
+          context="Context"
+          initialMessages={[{ role: 'ai', content: 'Saved assistant note' }]}
+        />
+      </MemoryRouter>,
+    )
+    const copyBtn = await screen.findByRole('button', { name: 'Copy to clipboard' })
+    await act(async () => {
+      fireEvent.click(copyBtn)
+    })
+    expect(screen.getByRole('button', { name: 'Copied!' })).toBeInTheDocument()
+    unmountPanel()
   })
 })

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, type ReactNode } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { ArrowUpRight, GitCommit, MessageSquare, X } from 'lucide-react'
 import type { Pillar } from '../../shared/kits/kitSkeleton'
@@ -33,6 +33,9 @@ function BottomSheetDrawer({
   testId,
   children,
 }: BottomSheetDrawerProps) {
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
   useEffect(() => {
     if (!open) return
     document.body.style.overflow = 'hidden'
@@ -40,7 +43,7 @@ function BottomSheetDrawer({
       if (e.key === 'Escape') {
         e.preventDefault()
         e.stopImmediatePropagation()
-        onClose()
+        onCloseRef.current()
       }
     }
     window.addEventListener('keydown', onKey)
@@ -48,7 +51,7 @@ function BottomSheetDrawer({
       document.body.style.overflow = ''
       window.removeEventListener('keydown', onKey)
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 
