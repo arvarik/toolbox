@@ -434,6 +434,7 @@ export default function ReviewPage() {
 
       {/* Shared Pure Anki Card Stack */}
       <AnkiCardStack
+        key={`${currentCard.id}-${currentIndex}`}
         cardKey={`${currentCard.id}-${currentIndex}`}
         front={currentCard.front}
         back={currentCard.back}

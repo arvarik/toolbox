@@ -6,6 +6,7 @@ import ReviewPage from '../pages/ReviewPage'
 import LibraryHomePage from '../pages/LibraryHomePage'
 import SharedLibraryPage from '../pages/SharedLibraryPage'
 import InterleavedPage from '../pages/InterleavedPage'
+import FeynmanPage from '../pages/FeynmanPage'
 import { makeTestKit, resetKitStore } from './testHelpers'
 
 const apiMocks = vi.hoisted(() => ({
@@ -183,33 +184,131 @@ describe('Pure Anki Review, Calm Library Shelf & Views v2', () => {
     expect(document.body.textContent).not.toContain('📦')
   })
 
-  it('prevents accidental Good-grading on double-Space in FlashcardView reviewMode', () => {
+  it('prevents accidental Good-grading on double-Space and ignores Space/Enter on focused links/buttons in FlashcardView', () => {
     render(
       <MemoryRouter>
-        <FlashcardView
-          reviewMode
-          deckId="d1"
-          deckName="Consensus"
-          cards={[
-            {
-              id: 'card-1',
-              deck_id: 'd1',
-              front: 'What is Raft leader completeness?',
-              back: 'Any committed log entry is present in all future leaders.',
-              srs_previews: { again: '1m', hard: '5m', good: '2d', easy: '7d' },
-            },
-          ]}
-        />
+        <div>
+          <a href="/library" data-testid="fc-nav-link">
+            Library
+          </a>
+          <button type="button" data-testid="fc-aux-btn">
+            Aux
+          </button>
+          <FlashcardView
+            reviewMode
+            deckId="d1"
+            deckName="Consensus"
+            cards={[
+              {
+                id: 'card-1',
+                deck_id: 'd1',
+                front: 'What is Raft leader completeness?',
+                back: 'Any committed log entry is present in all future leaders.',
+                srs_previews: { again: '1m', hard: '5m', good: '2d', easy: '7d' },
+              },
+            ]}
+          />
+        </div>
       </MemoryRouter>,
     )
 
-    // First Space reveals the answer; second Space MUST NOT call review API
+    // #4: Enter on focused link and Space on focused button do NOT flip the card
+    const link = screen.getByTestId('fc-nav-link')
+    link.focus()
+    const enterOnLink = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    })
+    link.dispatchEvent(enterOnLink)
+    expect(enterOnLink.defaultPrevented).toBe(false)
+    expect(screen.queryByTestId('grade-btn-good')).toBeNull()
+
+    const btn = screen.getByTestId('fc-aux-btn')
+    btn.focus()
+    const spaceOnBtn = new KeyboardEvent('keydown', {
+      key: ' ',
+      code: 'Space',
+      bubbles: true,
+      cancelable: true,
+    })
+    btn.dispatchEvent(spaceOnBtn)
+    expect(spaceOnBtn.defaultPrevented).toBe(false)
+    expect(screen.queryByTestId('grade-btn-good')).toBeNull()
+
+    // First Space on window reveals the answer; second Space MUST NOT call review API
     fireEvent.keyDown(window, { key: ' ', code: 'Space' })
     expect(screen.getByTestId('grade-btn-good')).toBeInTheDocument()
 
     fireEvent.keyDown(window, { key: ' ', code: 'Space' })
     fireEvent.keyDown(window, { key: 'Enter' })
     expect(apiMocks.reviewCard).not.toHaveBeenCalled()
+  })
+
+  it('keeps FeynmanPage interim dictation separate from textarea edits so typing never duplicates spoken phrases', () => {
+    let instance: {
+      onresult: ((ev: { resultIndex: number; results: Array<{ isFinal: boolean; 0: { transcript: string } }> }) => void) | null
+      start: () => void
+      stop: () => void
+    } | null = null
+
+    const FakeSpeechRecognition = vi.fn(function () {
+      const rec = {
+        continuous: false,
+        interimResults: false,
+        onresult: null as typeof instance extends null ? never : NonNullable<typeof instance>['onresult'],
+        onerror: null as (() => void) | null,
+        onend: null as (() => void) | null,
+        start: vi.fn(),
+        stop: vi.fn(),
+      }
+      instance = rec
+      return rec
+    })
+
+    const win = window as unknown as { SpeechRecognition?: unknown }
+    const prevSR = win.SpeechRecognition
+    win.SpeechRecognition = FakeSpeechRecognition
+    try {
+      render(
+        <MemoryRouter initialEntries={['/feynman']}>
+          <FeynmanPage />
+        </MemoryRouter>,
+      )
+
+      fireEvent.click(screen.getByRole('button', { name: /Voice Record/i }))
+      expect(instance).not.toBeNull()
+
+      // Emit interim phrase while dictating
+      act(() => {
+        instance!.onresult?.({
+          resultIndex: 0,
+          results: [{ isFinal: false, 0: { transcript: 'quorum overlap' } }],
+        })
+      })
+
+      const textarea = screen.getByTestId('feynman-explanation-input') as HTMLTextAreaElement
+      expect(textarea.value).toBe('')
+      expect(screen.getByTestId('feynman-interim-transcript')).toHaveTextContent(
+        'Listening: quorum overlap',
+      )
+
+      // User types into textarea during active interim dictation
+      fireEvent.change(textarea, { target: { value: 'Note: ' } })
+      expect(textarea.value).toBe('Note: ')
+
+      // SpeechRecognition finalizes the interim phrase -> appended ONCE, zero duplication
+      act(() => {
+        instance!.onresult?.({
+          resultIndex: 0,
+          results: [{ isFinal: true, 0: { transcript: 'quorum overlap' } }],
+        })
+      })
+      expect(textarea.value).toBe('Note: quorum overlap ')
+      expect(screen.queryByTestId('feynman-interim-transcript')).toBeNull()
+    } finally {
+      win.SpeechRecognition = prevSR
+    }
   })
 
   it('renders SharedLibraryPage tag/search filtering and InterleavedPage empty/review states cleanly', async () => {

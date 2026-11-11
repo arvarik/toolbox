@@ -246,6 +246,16 @@ export default function FeynmanPage() {
       return
     }
 
+    if (isRecording) {
+      try {
+        recognitionRef.current?.stop()
+      } catch {
+        // ignore if already stopped
+      }
+      setInterimTranscript('')
+      setIsRecording(false)
+    }
+
     setIsAnalyzing(true)
     setResult(null)
 
@@ -387,13 +397,19 @@ export default function FeynmanPage() {
             data-testid="feynman-explanation-input"
             className="input feynman-textarea w-full min-h-[160px]"
             placeholder="Explain the core mechanism, why it is needed, unpack any specialized terms, and state what breaks when assumptions fail..."
-            value={explanation + interimTranscript}
-            onChange={(e) => {
-              setInterimTranscript('')
-              setExplanation(e.target.value)
-            }}
+            value={explanation}
+            onChange={(e) => setExplanation(e.target.value)}
             disabled={isAnalyzing}
           />
+          {interimTranscript && (
+            <div
+              data-testid="feynman-interim-transcript"
+              aria-live="polite"
+              className="rounded-lg border border-outline-variant bg-surface-container px-3 py-1.5 text-xs italic text-on-surface-variant"
+            >
+              Listening: {interimTranscript}
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end gap-2">

@@ -334,9 +334,18 @@ export default function FlashcardView({
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return
-      const target = e.target as HTMLElement | null
-      const tag = target?.tagName ? target.tagName.toLowerCase() : ''
-      if (tag === 'input' || tag === 'textarea' || Boolean(target?.isContentEditable)) return
+      const target = e.target
+      if (target instanceof Element) {
+        const tag = target.tagName.toLowerCase()
+        if (
+          tag === 'input' ||
+          tag === 'textarea' ||
+          tag === 'select' ||
+          (target instanceof HTMLElement && target.isContentEditable)
+        ) {
+          return
+        }
+      }
 
       if (e.key === '?' && reviewMode) {
         e.preventDefault()
@@ -345,7 +354,9 @@ export default function FlashcardView({
       }
 
       if (e.key === ' ' || e.code === 'Space' || (reviewMode && e.key === 'Enter')) {
-        if (tag === 'button' && e.key === 'Enter') return
+        if (target instanceof Element && target.closest('a, button, [role="button"], summary')) {
+          return
+        }
         if (!flipped) {
           e.preventDefault()
           setFlipped(true)
