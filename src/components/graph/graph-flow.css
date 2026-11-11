@@ -616,27 +616,97 @@
   }
 }
 
+@keyframes graphSheetUp {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
 @media (max-width: 768px) {
   .calc-page {
-    padding-bottom: var(--space-12);
+    padding-bottom: calc(var(--space-12) + env(safe-area-inset-bottom, 0px));
   }
 
   .calc-group-grid {
-    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   }
 
   .graph-header {
-    padding: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    gap: var(--space-2);
+  }
+
+  .graph-toolbar {
+    gap: var(--space-2);
+  }
+
+  .graph-search {
+    min-width: 0;
+    flex: 1 1 100%;
+    min-height: 44px;
+  }
+
+  .graph-readiness {
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .graph-readiness::-webkit-scrollbar,
+  .graph-pillar-chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .graph-readiness-btn {
+    min-height: 38px;
+    padding: 6px 10px;
+  }
+
+  .graph-track-select {
+    max-width: 100%;
+    flex: 1 1 100%;
+    min-height: 44px;
+  }
+
+  .graph-pillar-chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    padding-bottom: 2px;
+  }
+
+  .graph-pillar-chip {
+    flex-shrink: 0;
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
   }
 
   .graph-node-panel {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
     width: 100%;
+    max-height: min(68dvh, 520px);
     border-left: none;
+    border-top: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+    padding: var(--space-3) var(--space-4) calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
+    overscroll-behavior: contain;
+    animation: graphSheetUp var(--duration-normal) var(--ease-default);
+  }
+
+  .graph-panel-close {
+    min-width: 44px;
+    min-height: 44px;
+    top: var(--space-2);
+    right: var(--space-2);
   }
 
   .graph-track-ribbon {
     left: var(--space-2);
     right: var(--space-2);
+    bottom: calc(var(--space-2) + env(safe-area-inset-bottom, 0px));
     max-width: none;
     flex-wrap: wrap;
     gap: var(--space-2);

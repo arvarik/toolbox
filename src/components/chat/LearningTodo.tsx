@@ -224,7 +224,7 @@ export default function LearningTodo({ onStudyTopic, activeTopicId }: LearningTo
               >
                 <button
                   type="button"
-                  className="todo-pillar-header flex w-full cursor-pointer items-center gap-2 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+                  className="todo-pillar-header flex min-h-[44px] w-full cursor-pointer items-center gap-2 px-3.5 py-2.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] sm:min-h-0"
                   onClick={() => togglePillar(pillar.id)}
                 >
                   <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] font-mono text-[10.5px] font-medium text-[var(--color-ink-muted)] tabular-nums">

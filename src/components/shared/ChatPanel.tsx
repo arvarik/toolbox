@@ -334,8 +334,14 @@ function ChatPanelContent({
   handleSendRef.current = handleSend
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    messagesEndRef.current?.scrollIntoView({
+      behavior: isLoading || prefersReduced ? 'auto' : 'smooth',
+    })
+  }, [messages, isLoading])
 
   useEffect(() => {
     saveHistoryForKey(storageKey, messages)
@@ -492,13 +498,13 @@ function ChatPanelContent({
             type="button"
             aria-label="Clear conversation"
             onClick={handleClear}
-            className="btn-clear-chat cursor-pointer rounded px-2 py-1 text-[12px] text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+            className="btn-clear-chat inline-flex min-h-[44px] cursor-pointer items-center rounded px-2.5 py-1 text-[12px] text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)] sm:min-h-0 sm:px-2"
           >
             Clear
           </button>
           <button
             type="button"
-            className="btn btn-ghost btn-icon"
+            className="btn btn-ghost btn-icon h-11 w-11 sm:h-8 sm:w-8"
             onClick={() => toggleChat(page)}
             aria-label="Close chat"
           >

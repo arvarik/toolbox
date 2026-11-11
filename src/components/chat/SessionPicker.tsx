@@ -74,15 +74,18 @@ export default function SessionPicker({
   return (
     <div ref={dropRef} style={{ position: 'relative' }}>
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         className="session-picker-btn"
         id="session-picker-btn"
+        aria-label={`Select chat session: ${current?.name || 'No session'}`}
         style={{
           display: 'flex', alignItems: 'center', gap: 'var(--space-1)',
           background: 'var(--color-bg-tertiary)',
           border: '1px solid var(--color-border)',
           borderRadius: 'var(--radius-md)',
-          padding: '4px 10px',
+          padding: '6px 10px',
+          minHeight: 34,
           cursor: 'pointer', color: 'var(--color-text-primary)',
           fontSize: 'var(--text-xs)', fontWeight: 600,
           maxWidth: 200,
@@ -101,7 +104,8 @@ export default function SessionPicker({
           border: '1px solid var(--color-border)',
           borderRadius: 'var(--radius-lg)',
           boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
-          minWidth: 240, maxWidth: 300,
+          minWidth: 'min(240px, calc(100vw - 24px))',
+          maxWidth: 'min(300px, calc(100vw - 24px))',
           zIndex: 200,
           overflow: 'hidden',
         }}>

@@ -261,6 +261,30 @@ export default function GuidePage() {
       {pillarId && <PillarNav dogears={dogears} />}
 
       <div className="guide-content">
+        {isMobile && pillarId && !chatOpen && (
+          <div className="flex items-center justify-end gap-2 px-3 pt-2.5">
+            {capabilities.calculator !== false && (
+              <button
+                type="button"
+                className="btn btn-secondary min-h-[38px] px-2.5 text-xs"
+                onClick={() => setCalcModalOpen(true)}
+                aria-label="Open BotE Calculator"
+              >
+                <Calculator size={14} />
+                <span>Calculator</span>
+              </button>
+            )}
+            <button
+              type="button"
+              data-testid="mobile-guide-ask-ai"
+              className="btn btn-primary inline-flex min-h-[38px] items-center gap-1.5 px-3 text-xs"
+              onClick={() => toggleChat('guide')}
+            >
+              <KitAvatar size={15} state="idle" />
+              <span>Ask AI</span>
+            </button>
+          </div>
+        )}
         {!isMobile && pillarId && (
           <div className="guide-float-actions">
             {capabilities.calculator !== false && (

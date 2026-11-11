@@ -1,6 +1,9 @@
 /* MarkdownRenderer.css */
 .markdown-renderer {
   line-height: 1.6;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 .markdown-renderer p {
@@ -11,8 +14,9 @@
   margin-bottom: 0;
 }
 
-/* Ensure math blocks scroll horizontally if they are too wide */
+/* Ensure math, code, and wide tables scroll horizontally without breaking page width */
 .markdown-renderer .katex-display {
+  max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
   padding: 0.5em 0;
@@ -20,7 +24,20 @@
 }
 
 .markdown-renderer pre {
+  max-width: 100%;
+  overflow-x: auto;
   margin: 1em 0;
+}
+
+.markdown-renderer [data-testid="markdown-code"] {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.markdown-renderer table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .markdown-renderer a {

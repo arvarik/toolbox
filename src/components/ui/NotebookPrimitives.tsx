@@ -52,7 +52,7 @@ export function DogearCorner({
       title={folded ? 'Remove dogear' : 'Dogear this page to revisit later'}
       aria-label={folded ? 'Remove page dogear' : 'Dogear this page'}
       aria-pressed={folded}
-      className="group absolute top-0 right-0 z-20 h-9 w-9 cursor-pointer overflow-hidden rounded-tr-xl focus-visible:outline-offset-[-2px]"
+      className="group absolute top-0 right-0 z-20 h-11 w-11 cursor-pointer overflow-hidden rounded-tr-xl focus-visible:outline-offset-[-2px] sm:h-9 sm:w-9"
     >
       <span
         style={{
@@ -274,6 +274,8 @@ export function HighlightableProse({
     x: number
     y: number
   } | null>(null)
+  const hasSelectionRef = useRef(false)
+  hasSelectionRef.current = selection !== null
 
   useEffect(() => {
     if (!richContentRef.current) return
@@ -298,20 +300,22 @@ export function HighlightableProse({
     }
   }, [selection])
 
+  const checkSelectionRef = useRef<() => void>(() => {})
+
   const checkSelection = () => {
     const sel = window.getSelection()
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-      setSelection(null)
+      if (hasSelectionRef.current) setSelection(null)
       return
     }
     const text = sel.toString().trim()
     if (text.length < 3 || !wrapRef.current || !richContentRef.current) {
-      setSelection(null)
+      if (hasSelectionRef.current) setSelection(null)
       return
     }
     const range = sel.getRangeAt(0)
     if (!richContentRef.current.contains(range.commonAncestorContainer)) {
-      setSelection(null)
+      if (hasSelectionRef.current) setSelection(null)
       return
     }
 
@@ -364,21 +368,59 @@ export function HighlightableProse({
     const rect =
       typeof range.getBoundingClientRect === 'function'
         ? range.getBoundingClientRect()
-        : { left: 0, top: 0, width: 0, height: 0 }
+        : { left: 0, top: 0, bottom: 0, width: 0, height: 0 }
     const host = wrapRef.current.getBoundingClientRect()
+    const isCoarse =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(pointer: coarse)').matches
+    const rawTop = rect.top - host.top
+    const rawBottom = rect.bottom - host.top
+    const placeBelow = isCoarse || (host.height > 0 && rawTop < 46)
+    const halfClamp = host.width > 0 ? Math.min(112, Math.floor(host.width / 2)) : 96
+    const x =
+      host.width > 0 && host.width < 260
+        ? host.width / 2
+        : Math.min(
+            Math.max(halfClamp, rect.left - host.left + rect.width / 2),
+            Math.max(halfClamp, host.width - halfClamp),
+          )
+    const y = placeBelow ? Math.max(8, rawBottom + 8) : Math.max(0, rawTop - 42)
 
     setSelection({
       text,
       prefix,
       suffix,
       canHighlight,
-      x: Math.min(
-        Math.max(96, rect.left - host.left + rect.width / 2),
-        Math.max(96, host.width - 96),
-      ),
-      y: Math.max(0, rect.top - host.top - 42),
+      x,
+      y,
     })
   }
+  checkSelectionRef.current = checkSelection
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const onSelectionChange = () => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        const sel = window.getSelection()
+        const insideThisProse = Boolean(
+          sel &&
+            !sel.isCollapsed &&
+            sel.rangeCount > 0 &&
+            richContentRef.current?.contains(sel.getRangeAt(0).commonAncestorContainer),
+        )
+        if (insideThisProse || hasSelectionRef.current) {
+          checkSelectionRef.current()
+        }
+      }, 180)
+    }
+    document.addEventListener('selectionchange', onSelectionChange)
+    return () => {
+      document.removeEventListener('selectionchange', onSelectionChange)
+      if (timer) clearTimeout(timer)
+    }
+  }, [])
 
   const commitHighlight = (color: HighlightColor) => {
     if (!selection?.canHighlight) return
@@ -400,14 +442,14 @@ export function HighlightableProse({
           onMouseDown={(e) => e.preventDefault()}
           onMouseUp={(e) => e.stopPropagation()}
           style={{ left: `${selection.x}px`, top: `${selection.y}px` }}
-          className="animate-popover-enter absolute z-30 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2 py-1 text-[12px] shadow-[var(--shadow-float)]"
+          className="animate-popover-enter absolute z-30 flex max-w-[calc(100%-8px)] -translate-x-1/2 flex-wrap items-center justify-center gap-1 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2 py-1 text-[12px] shadow-[var(--shadow-float)]"
         >
           {selection.canHighlight && (
             <>
               <button
                 type="button"
                 onClick={() => commitHighlight('amber')}
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface-hover)]"
+                className="inline-flex min-h-[34px] cursor-pointer items-center gap-1.5 rounded px-2 py-1 font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface-hover)] sm:min-h-0"
               >
                 <span className="h-2.5 w-2.5 rounded-full bg-[#f0a429]" />
                 Highlight
@@ -419,9 +461,9 @@ export function HighlightableProse({
                   title={sw.label}
                   aria-label={sw.label}
                   onClick={() => commitHighlight(sw.color)}
-                  className="flex h-6 w-5 cursor-pointer items-center justify-center rounded hover:bg-[var(--color-surface-hover)]"
+                  className="flex h-8 w-7 cursor-pointer items-center justify-center rounded hover:bg-[var(--color-surface-hover)] sm:h-6 sm:w-5"
                 >
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: sw.dotBg }} />
+                  <span className="h-3 w-3 rounded-full sm:h-2.5 sm:w-2.5" style={{ backgroundColor: sw.dotBg }} />
                 </button>
               ))}
             </>
@@ -441,7 +483,7 @@ export function HighlightableProse({
                   window.getSelection()?.removeAllRanges()
                   setSelection(null)
                 }}
-                className="cursor-pointer rounded px-2 py-1 font-medium whitespace-nowrap text-[var(--color-ink)] hover:bg-[var(--color-surface-hover)]"
+                className="min-h-[34px] cursor-pointer rounded px-2 py-1 font-medium whitespace-nowrap text-[var(--color-ink)] hover:bg-[var(--color-surface-hover)] sm:min-h-0"
               >
                 Make Card
               </button>
@@ -459,7 +501,7 @@ export function HighlightableProse({
                   window.getSelection()?.removeAllRanges()
                   setSelection(null)
                 }}
-                className="inline-flex cursor-pointer items-center gap-1 rounded px-2 py-1 font-medium whitespace-nowrap text-[var(--color-brand)] hover:bg-[var(--color-surface-hover)]"
+                className="inline-flex min-h-[34px] cursor-pointer items-center gap-1 rounded px-2 py-1 font-medium whitespace-nowrap text-[var(--color-brand)] hover:bg-[var(--color-surface-hover)] sm:min-h-0"
               >
                 <MessageSquare size={11} />
                 Ask Kit
@@ -476,9 +518,9 @@ export function HighlightableProse({
           {highlights.map((h) => (
             <span
               key={h.id}
-              className={`hl-${h.color} inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-0.5 text-[12px] text-[var(--color-ink)]`}
+              className={`hl-${h.color} inline-flex max-w-full items-center gap-1 rounded-md px-2 py-1 text-[12px] text-[var(--color-ink)] sm:gap-1.5 sm:py-0.5`}
             >
-              <span className="max-w-[240px] truncate">“{h.quote}”</span>
+              <span className="min-w-0 max-w-[180px] truncate sm:max-w-[240px]">“{h.quote}”</span>
               {onMakeCard && !h.cardId && (
                 <button
                   type="button"
@@ -491,9 +533,9 @@ export function HighlightableProse({
                       highlightId: h.id,
                     })
                   }
-                  className="cursor-pointer text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                  className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)] sm:h-auto sm:w-auto"
                 >
-                  <Layers size={11} />
+                  <Layers size={12} />
                 </button>
               )}
               {onAskKit && (
@@ -502,9 +544,9 @@ export function HighlightableProse({
                   title="Ask Kit about this highlight"
                   aria-label="Ask Kit about highlight"
                   onClick={() => onAskKit(h.quote)}
-                  className="cursor-pointer text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                  className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)] sm:h-auto sm:w-auto"
                 >
-                  <MessageSquare size={11} />
+                  <MessageSquare size={12} />
                 </button>
               )}
               {onRemoveHighlight && (
@@ -513,9 +555,9 @@ export function HighlightableProse({
                   title="Remove highlight"
                   aria-label="Remove highlight"
                   onClick={() => onRemoveHighlight(h.id)}
-                  className="cursor-pointer text-[var(--color-ink-muted)] hover:text-[var(--color-ink)]"
+                  className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)] sm:h-auto sm:w-auto"
                 >
-                  <X size={11} />
+                  <X size={12} />
                 </button>
               )}
             </span>
@@ -733,7 +775,11 @@ export function InvitingComposer({
         className={sendButtonClassName}
         disabled={disabled || (!value.trim() && !quotedHighlight)}
         onClick={() => onSubmit()}
-        aria-label={sendAriaLabel}
+        aria-label={
+          submitLabel && !sendAriaLabel.toLowerCase().includes(submitLabel.toLowerCase())
+            ? `${sendAriaLabel}: ${submitLabel}`
+            : sendAriaLabel
+        }
       >
         {submitLabel ? (
           <>

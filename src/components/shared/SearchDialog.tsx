@@ -342,7 +342,7 @@ export default function SearchDialog({ open, onClose }: SearchDialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[400] flex items-start justify-center bg-black/50 px-4 pt-[13vh] backdrop-blur-[2px]"
+      className="fixed inset-0 z-[400] flex items-start justify-center bg-black/50 px-3 pt-[max(0.75rem,env(safe-area-inset-top,0px))] backdrop-blur-[2px] sm:px-4 sm:pt-[13vh]"
       onClick={onClose}
       id="search-dialog"
     >
@@ -350,11 +350,11 @@ export default function SearchDialog({ open, onClose }: SearchDialogProps) {
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="animate-popover-enter w-full max-w-[560px] overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] text-[var(--color-ink)] shadow-[var(--shadow-float)]"
+        className="animate-popover-enter flex max-h-[calc(100dvh-1.5rem-env(safe-area-inset-top,0px)-env(safe-area-inset-bottom,0px))] w-full max-w-[560px] flex-col overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] text-[var(--color-ink)] shadow-[var(--shadow-float)]"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
-        <div className="flex items-center gap-3 border-b border-[var(--color-line)] px-4 py-3">
+        <div className="flex shrink-0 items-center gap-2.5 border-b border-[var(--color-line)] px-3.5 py-2.5 sm:gap-3 sm:px-4 sm:py-3">
           <Search size={16} className="shrink-0 text-[var(--color-ink-faint)]" />
           <input
             ref={inputRef}
@@ -365,20 +365,20 @@ export default function SearchDialog({ open, onClose }: SearchDialogProps) {
               setQuery(e.target.value)
               setSelectedIndex(0)
             }}
-            className="min-w-0 flex-1 border-0 bg-transparent text-[14.5px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:outline-none"
+            className="min-w-0 flex-1 border-0 bg-transparent text-[16px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:outline-none sm:text-[14.5px]"
           />
-          <Kbd>⌘/</Kbd>
+          <Kbd className="hidden sm:inline-flex">⌘/</Kbd>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close search"
-            className="inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+            className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-md text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)] sm:h-7 sm:w-7"
           >
-            <X size={15} />
+            <X size={16} />
           </button>
         </div>
 
-        <div className="max-h-[360px] overflow-y-auto p-1.5">
+        <div className="max-h-[58dvh] flex-1 overflow-y-auto overscroll-contain p-1.5 sm:max-h-[360px]">
           {results.length === 0 ? (
             <div className="px-4 py-8 text-center text-[13px] text-[var(--color-ink-muted)]">
               No matching results found.
@@ -394,7 +394,7 @@ export default function SearchDialog({ open, onClose }: SearchDialogProps) {
                   ref={(el) => {
                     itemRefs.current[i] = el
                   }}
-                  className={`search-result-item${isSelected ? ' selected' : ''}`}
+                  className={`search-result-item min-h-[44px] sm:min-h-0${isSelected ? ' selected' : ''}`}
                   style={
                     isSelected
                       ? {
@@ -420,7 +420,7 @@ export default function SearchDialog({ open, onClose }: SearchDialogProps) {
                       {topic.pillarName}
                     </div>
                   </div>
-                  {topic.shortcut && <Kbd className="mr-1">{topic.shortcut}</Kbd>}
+                  {topic.shortcut && <Kbd className="mr-1 hidden sm:inline-flex">{topic.shortcut}</Kbd>}
                   <ArrowRight
                     size={13}
                     className={`shrink-0 transition-opacity ${
@@ -435,7 +435,7 @@ export default function SearchDialog({ open, onClose }: SearchDialogProps) {
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-4 border-t border-[var(--color-line)] bg-[var(--color-surface-low)] px-4 py-2 text-[11.5px] text-[var(--color-ink-muted)]">
+        <div className="hidden items-center justify-between gap-4 border-t border-[var(--color-line)] bg-[var(--color-surface-low)] px-4 py-2 text-[11.5px] text-[var(--color-ink-muted)] sm:flex">
           <div className="flex items-center gap-4">
             <span className="inline-flex items-center gap-1.5">
               <Kbd>↑</Kbd>

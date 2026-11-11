@@ -145,7 +145,7 @@ export default function MarkdownRenderer({
 
         return (
           <div className="code-block-wrapper" style={{ position: 'relative', margin: '1em 0' }}>
-            <pre style={{ margin: 0, padding: 0 }} {...rest}>
+            <pre tabIndex={0} style={{ margin: 0, padding: 0 }} {...rest}>
               {children}
             </pre>
           </div>
@@ -173,11 +173,16 @@ export default function MarkdownRenderer({
                   style={vscDarkPlus}
                   language={lang}
                   PreTag="div"
+                  tabIndex={0}
+                  role="region"
+                  aria-label={`${lang} code snippet`}
                   customStyle={{
                     margin: 0,
                     borderRadius: 'var(--radius-md, 8px)',
                     padding: '1em',
                     fontSize: '0.9em',
+                    maxWidth: '100%',
+                    overflowX: 'auto',
                   }}
                 >
                   {codeString}

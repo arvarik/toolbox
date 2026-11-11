@@ -434,7 +434,7 @@ export function AnkiGradeBar({
   ]
 
   return (
-    <div className={`srs-rating-buttons grid grid-cols-2 gap-2.5 sm:grid-cols-4 ${className}`}>
+    <div className={`srs-rating-buttons grid grid-cols-4 gap-1.5 sm:gap-2.5 ${className}`}>
       {gradeButtons.map((g) => (
         <button
           key={g.id}
@@ -445,14 +445,14 @@ export function AnkiGradeBar({
             e.stopPropagation()
             onRate(g.id)
           }}
-          className={`srs-rating-btn flex cursor-pointer flex-col items-center rounded-xl border px-3 py-2.5 transition-[transform,background-color,border-color,opacity] duration-120 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-45 ${g.cls}`}
+          className={`srs-rating-btn flex min-h-[54px] min-w-0 cursor-pointer flex-col items-center justify-center rounded-xl border px-1.5 py-2.5 transition-[transform,background-color,border-color,opacity] duration-120 active:scale-[0.97] disabled:pointer-events-none disabled:opacity-45 sm:px-3 ${g.cls}`}
         >
           <span className="font-mono text-[11px] text-[var(--color-ink-muted)] tabular-nums">
             {g.time}
           </span>
-          <span className="mt-0.5 flex items-center gap-1.5 text-[13.5px] font-semibold text-[var(--color-ink)]">
+          <span className="mt-0.5 flex items-center gap-1.5 text-[13px] font-semibold text-[var(--color-ink)] sm:text-[13.5px]">
             {g.label}
-            <Kbd>{g.key}</Kbd>
+            <Kbd className="hidden sm:inline-flex">{g.key}</Kbd>
           </span>
         </button>
       ))}
@@ -622,13 +622,13 @@ export function AnkiCardStack({
 
       <article className="notebook-sheet relative z-10 rounded-2xl p-6 sm:p-8">
         {headerSlot ?? (
-          <div className="mb-5 flex items-center justify-between text-[12.5px] text-[var(--color-ink-muted)]">
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-2 text-[12.5px] text-[var(--color-ink-muted)]">
             <span>{topicLabel}</span>
             <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={toggleTypeMode}
-                className={`cursor-pointer transition-colors ${
+                className={`-my-1 inline-flex min-h-[36px] cursor-pointer items-center px-2 transition-colors ${
                   typeMode
                     ? 'font-medium text-[var(--color-brand)]'
                     : 'text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]'
@@ -657,7 +657,7 @@ export function AnkiCardStack({
               ref={typeInputRef}
               data-testid={typeInputTestId}
               aria-label="Jot your recall before flipping"
-              rows={2}
+              rows={3}
               value={typedDraft}
               onChange={(e) => setDraftState({ card: cardIdentity, text: e.target.value })}
               onKeyDown={(e) => {
@@ -667,7 +667,7 @@ export function AnkiCardStack({
                 }
               }}
               placeholder="Jot your recall before flipping (Enter to reveal, Shift+Enter for new line)..."
-              className="w-full resize-none rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-low)] px-4 py-3 text-[14.5px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-brand)] focus:outline-none"
+              className="max-h-48 min-h-[76px] w-full resize-y overflow-y-auto rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-low)] px-4 py-3 text-[16px] text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:border-[var(--color-brand)] focus:outline-none sm:text-[14.5px]"
             />
           </div>
         )}
@@ -679,16 +679,16 @@ export function AnkiCardStack({
               size="md"
               data-testid={revealTestId}
               onClick={() => setFlippedCard(cardIdentity)}
-              className="w-full justify-center py-2.5 sm:w-auto sm:min-w-52"
+              className="min-h-[48px] w-full justify-center py-2.5 sm:w-auto sm:min-w-52"
             >
               <span>Reveal Answer</span>
-              <Kbd>Space</Kbd>
+              <Kbd className="hidden sm:inline-flex">Space</Kbd>
             </Button>
           </div>
         ) : (
           <div className="animate-card-flip mt-6 border-t border-[var(--color-line-strong)] pt-5">
             {typedDraft.trim() && (
-              <div className="mb-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-low)] px-3.5 py-2.5 text-[13px] text-[var(--color-ink-muted)]">
+              <div className="mb-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-low)] px-3.5 py-2.5 text-[13px] whitespace-pre-wrap break-words text-[var(--color-ink-muted)]">
                 <span className="font-medium text-[var(--color-ink)]">Your recall:</span>{' '}
                 {typedDraft.trim()}
               </div>
@@ -708,12 +708,14 @@ export function AnkiCardStack({
               </div>
             )}
 
-            <AnkiGradeBar
-              intervals={intervals}
-              onRate={onRate}
-              disabled={submitting}
-              className="mt-6"
-            />
+            <div className="max-sm:sticky max-sm:bottom-0 max-sm:z-20 max-sm:-mx-6 max-sm:mt-5 max-sm:border-t max-sm:border-[var(--color-line)] max-sm:bg-[var(--color-surface-card)]/95 max-sm:px-3 max-sm:pt-2.5 max-sm:pb-[calc(0.625rem+env(safe-area-inset-bottom,0px))] max-sm:backdrop-blur-md">
+              <AnkiGradeBar
+                intervals={intervals}
+                onRate={onRate}
+                disabled={submitting}
+                className="sm:mt-6"
+              />
+            </div>
 
             {footerSlot}
           </div>

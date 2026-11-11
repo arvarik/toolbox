@@ -116,6 +116,19 @@ export default function FlashcardView({
   const ratingsRef = useRef<Record<number, number>>({})
   const correctCountRef = useRef<number>(0)
   const typeInputRef = useRef<HTMLTextAreaElement>(null)
+  const guideLinkTimerRef = useRef<number | null>(null)
+  const nextCardTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (guideLinkTimerRef.current !== null) {
+        window.clearTimeout(guideLinkTimerRef.current)
+      }
+      if (nextCardTimerRef.current !== null) {
+        window.clearTimeout(nextCardTimerRef.current)
+      }
+    }
+  }, [])
 
   // Load cards into the dynamic session queue
   useEffect(() => {
@@ -273,7 +286,13 @@ export default function FlashcardView({
           const sectionName = sectionDef?.name || 'this section'
           const url = `${prefix}/guide/${currentCard.source_pillar_id}/${currentCard.source_topic_id}${sectionId ? `#blueprint-${sectionId}` : ''}`
           setGuideLink({ url, sectionName })
-          setTimeout(() => setGuideLink(null), 4000)
+          if (guideLinkTimerRef.current !== null) {
+            window.clearTimeout(guideLinkTimerRef.current)
+          }
+          guideLinkTimerRef.current = window.setTimeout(() => {
+            guideLinkTimerRef.current = null
+            setGuideLink(null)
+          }, 4000)
         } else {
           setGuideLink(null)
         }
@@ -305,7 +324,11 @@ export default function FlashcardView({
           setSessionStats(finalStats)
           setIsReviewing(false)
         } else {
-          setTimeout(() => {
+          if (nextCardTimerRef.current !== null) {
+            window.clearTimeout(nextCardTimerRef.current)
+          }
+          nextCardTimerRef.current = window.setTimeout(() => {
+            nextCardTimerRef.current = null
             setCurrentIndex(nextIdx)
             setIsReviewing(false)
           }, 150)
@@ -434,7 +457,7 @@ export default function FlashcardView({
           <p className="text-sm text-on-surface-variant">
             {reviewMode ? 'No cards due for review.' : 'No cards in this deck yet.'}
           </p>
-          <button className="btn btn-secondary" onClick={onBack}>
+          <button className="btn btn-secondary min-h-[44px]" onClick={onBack}>
             <ArrowLeft size={14} />
             Back to Decks
           </button>
@@ -478,12 +501,12 @@ export default function FlashcardView({
   return (
     <div className="flashcard-viewer" id="flashcard-viewer">
       {/* Header */}
-      <div className="flex items-center justify-between w-full max-w-xl mb-6">
-        <button className="btn btn-ghost btn-sm" onClick={onBack}>
+      <div className="flex flex-wrap items-center justify-between gap-2 w-full max-w-xl mb-6">
+        <button className="btn btn-ghost btn-sm max-sm:min-h-[44px]" onClick={onBack}>
           <ArrowLeft size={14} />
           {deckName}
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {reviewMode ? (
             <>
               <button
@@ -495,7 +518,7 @@ export default function FlashcardView({
                     return !v
                   })
                 }}
-                className={`btn btn-sm ${
+                className={`btn btn-sm max-sm:min-h-[44px] ${
                   typeAnswerOpen
                     ? 'bg-primary/15 text-on-primary-wash border-primary/35'
                     : 'btn-ghost'
@@ -513,16 +536,29 @@ export default function FlashcardView({
                 onClick={() => setShowHotkeysGuide(!showHotkeysGuide)}
                 title="Keyboard Shortcuts"
                 aria-label="Keyboard Shortcuts"
+                style={{ minWidth: 44, minHeight: 44 }}
               >
-                <Keyboard size={14} />
+                <Keyboard size={15} />
               </button>
             </>
           ) : (
             <>
-              <button className="btn btn-ghost btn-icon" onClick={handleShuffle} title="Shuffle" aria-label="Shuffle">
+              <button
+                className="btn btn-ghost btn-icon"
+                style={{ minWidth: 44, minHeight: 44 }}
+                onClick={handleShuffle}
+                title="Shuffle"
+                aria-label="Shuffle"
+              >
                 <Shuffle size={16} />
               </button>
-              <button className="btn btn-ghost btn-icon" onClick={handleReset} title="Reset" aria-label="Reset">
+              <button
+                className="btn btn-ghost btn-icon"
+                style={{ minWidth: 44, minHeight: 44 }}
+                onClick={handleReset}
+                title="Reset"
+                aria-label="Reset"
+              >
                 <RotateCcw size={16} />
               </button>
             </>
@@ -583,7 +619,7 @@ export default function FlashcardView({
               )}
             </div>
             {reviewMode && typedAnswer.trim() && (
-              <div className="w-full rounded-xl border border-outline-variant bg-surface-container-low px-3 py-2 text-xs text-on-surface-variant text-left mb-3">
+              <div className="w-full rounded-xl border border-outline-variant bg-surface-container-low px-3 py-2 text-xs text-on-surface-variant text-left mb-3 whitespace-pre-wrap break-words">
                 <span className="font-semibold text-on-surface">Your recall:</span>{' '}
                 {typedAnswer.trim()}
               </div>
@@ -617,7 +653,7 @@ export default function FlashcardView({
                 }
               }}
               placeholder="Jot your recall before flipping (Enter to reveal)..."
-              className="input w-full text-sm resize-none"
+              className="input w-full text-[16px] sm:text-sm resize-y"
             />
           </div>
         )}
@@ -626,14 +662,14 @@ export default function FlashcardView({
           <div className="mt-4 flex justify-center w-full">
             <button
               type="button"
-              className={reviewMode ? 'btn btn-primary px-6 py-2.5' : 'btn btn-outline px-6 py-2.5'}
+              className={reviewMode ? 'btn btn-primary min-h-[44px] px-6 py-2.5' : 'btn btn-outline min-h-[44px] px-6 py-2.5'}
               onClick={(e) => {
                 e.stopPropagation()
                 setFlipped(true)
               }}
             >
               <span>{reviewMode ? 'Reveal Answer' : 'Show Answer'}</span>
-              <Kbd>Space</Kbd>
+              <Kbd className="hidden sm:inline-flex">Space</Kbd>
             </button>
           </div>
         )}
@@ -686,12 +722,14 @@ export default function FlashcardView({
 
       {/* Shared Pure Anki Grade Bar */}
       {!interceptorActive && reviewMode && flipped && (
-        <AnkiGradeBar
-          intervals={previews}
-          disabled={isReviewing}
-          onRate={(grade) => void handleRate(GRADE_TO_QUALITY[grade])}
-          className="mt-4 w-full max-w-xl"
-        />
+        <div className="w-full max-w-xl mt-4 max-sm:sticky max-sm:bottom-0 max-sm:z-20 max-sm:border-t max-sm:border-outline-variant max-sm:bg-surface-container-low/95 max-sm:pt-2.5 max-sm:pb-[calc(0.625rem+env(safe-area-inset-bottom,0px))] max-sm:pl-[max(0.75rem,env(safe-area-inset-left,0px))] max-sm:pr-[max(0.75rem,env(safe-area-inset-right,0px))] max-sm:backdrop-blur-md">
+          <AnkiGradeBar
+            intervals={previews}
+            disabled={isReviewing}
+            onRate={(grade) => void handleRate(GRADE_TO_QUALITY[grade])}
+            className="w-full"
+          />
+        </div>
       )}
 
       {/* Review in Guide link — appears after rating "Again" on cards with source metadata */}
@@ -712,6 +750,7 @@ export default function FlashcardView({
         <div className="flashcard-controls">
           <button
             className="btn btn-secondary btn-icon"
+            style={{ minWidth: 44, minHeight: 44 }}
             onClick={handlePrev}
             disabled={currentIndex === 0}
             aria-label="Previous card"
@@ -723,6 +762,7 @@ export default function FlashcardView({
           </span>
           <button
             className="btn btn-secondary btn-icon"
+            style={{ minWidth: 44, minHeight: 44 }}
             onClick={handleNext}
             disabled={currentIndex === sessionQueue.length - 1}
             aria-label="Next card"
@@ -804,7 +844,7 @@ export default function FlashcardView({
                 </div>
                 <button
                   type="button"
-                  className="btn btn-primary w-full"
+                  className="btn btn-primary w-full min-h-[44px]"
                   onClick={handleFailAcknowledge}
                 >
                   Accept &amp; Rate Again
@@ -814,7 +854,7 @@ export default function FlashcardView({
               <>
                 <textarea
                   aria-label="Explain the underlying concept"
-                  className="input min-h-28 text-sm resize-none"
+                  className="input min-h-28 text-[16px] sm:text-sm resize-none"
                   placeholder="Type your explanation here…"
                   value={interceptorInput}
                   onChange={(e) => setInterceptorInput(e.target.value)}
@@ -823,7 +863,7 @@ export default function FlashcardView({
                 />
                 <button
                   type="button"
-                  className="btn btn-primary w-full py-2.5"
+                  className="btn btn-primary w-full min-h-[44px] py-2.5"
                   onClick={() => void submitInterceptor()}
                   disabled={!interceptorInput.trim() || interceptorLoading}
                 >

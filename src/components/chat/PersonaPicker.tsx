@@ -30,12 +30,16 @@ export default function PersonaPicker({ personas, activeId, onSelect }: PersonaP
     [personas],
   )
 
+  const resolvedId = activeId in personas ? activeId : 'socratic'
+  const activeName = personas[resolvedId]?.name ?? 'Socratic'
+
   return (
     <SelectPopover
       size="xs"
       align="right"
-      ariaLabel="Change AI Persona"
-      value={activeId in personas ? activeId : 'socratic'}
+      title="Change AI Persona"
+      ariaLabel={`Change AI Persona: ${activeName}`}
+      value={resolvedId}
       onChange={onSelect}
       options={options}
       menuWidthClass="w-52"

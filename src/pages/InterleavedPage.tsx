@@ -78,7 +78,7 @@ export default function InterleavedPage() {
             <div className="pt-2">
               <button
                 type="button"
-                className="btn btn-primary"
+                className="btn btn-primary min-h-[44px]"
                 onClick={() => navigate(studyHubRoute)}
               >
                 <ArrowLeft size={16} />

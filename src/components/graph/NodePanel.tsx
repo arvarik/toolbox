@@ -26,6 +26,7 @@ interface NodeDetailResponse {
 function HealthDot({ health }: { health: HealthBucket }) {
   return (
     <span
+      role="img"
       className="graph-health-dot"
       style={{ background: HEALTH_COLORS[health] || HEALTH_COLORS.unseen }}
       aria-label={HEALTH_LABELS[health]}
@@ -93,6 +94,7 @@ export default function NodePanel({
 
   return (
     <aside className="graph-node-panel" id="graph-node-panel" aria-label="Concept details">
+      <div className="mx-auto mb-2 h-1 w-10 rounded-full bg-[var(--color-border)] md:hidden" aria-hidden="true" />
       <button className="btn btn-ghost btn-icon graph-panel-close" onClick={onClose} aria-label="Close panel">
         <X size={16} />
       </button>

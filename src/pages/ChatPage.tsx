@@ -15,14 +15,24 @@ import { guideContentApi } from '../utils/api'
 interface BottomSheetDrawerProps {
   open: boolean
   onClose: () => void
+  ariaLabel?: string
+  closeLabel?: string
+  testId?: string
   children: ReactNode
 }
 
 /**
  * Bottom-sheet drawer for mobile — slides up from the bottom edge.
- * Exposes the curriculum spine on small screens.
+ * Exposes the curriculum spine or context notes inspector on small screens.
  */
-function BottomSheetDrawer({ open, onClose, children }: BottomSheetDrawerProps) {
+function BottomSheetDrawer({
+  open,
+  onClose,
+  ariaLabel = 'Curriculum spine',
+  closeLabel = 'Close curriculum drawer',
+  testId,
+  children,
+}: BottomSheetDrawerProps) {
   useEffect(() => {
     if (!open) return
     document.body.style.overflow = 'hidden'
@@ -51,16 +61,17 @@ function BottomSheetDrawer({ open, onClose, children }: BottomSheetDrawerProps) 
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Curriculum spine"
-        className="fixed right-0 bottom-0 left-0 z-[401] flex h-[75vh] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-[var(--color-line-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-float)]"
+        aria-label={ariaLabel}
+        data-testid={testId}
+        className="fixed right-0 bottom-0 left-0 z-[401] flex h-[82dvh] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-[var(--color-line-strong)] bg-[var(--color-surface)] pb-[env(safe-area-inset-bottom,0px)] shadow-[var(--shadow-float)]"
       >
         <div className="relative flex shrink-0 items-center justify-between px-4 pt-3 pb-2">
           <div className="mx-auto h-1 w-10 rounded-full bg-[var(--color-line-strong)]" />
           <button
             type="button"
-            className="btn btn-ghost btn-icon btn-sm absolute top-2.5 right-3"
+            className="btn btn-ghost btn-icon absolute top-1.5 right-2 h-11 w-11"
             onClick={onClose}
-            aria-label="Close curriculum drawer"
+            aria-label={closeLabel}
           >
             <X size={16} />
           </button>
@@ -87,6 +98,7 @@ export default function ChatPage() {
   const queryTopicId = searchParams.get('topic')
 
   const [todoDrawerOpen, setTodoDrawerOpen] = useState(false)
+  const [mobileNotesOpen, setMobileNotesOpen] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(() =>
     typeof window !== 'undefined' ? window.innerWidth >= 1200 : false,
   )
@@ -107,6 +119,7 @@ export default function ChatPage() {
   useEffect(() => {
     setActiveStudyTopic(null)
     setTodoDrawerOpen(false)
+    setMobileNotesOpen(false)
     setTopicNotes({})
   }, [prefix, kitSlug])
 
@@ -161,12 +174,14 @@ export default function ChatPage() {
       .catch(() => setTopicNotes({}))
   }, [resolvedTopic])
 
+  const notesVisible = isMobile ? mobileNotesOpen : inspectorOpen
+
   useEffect(() => {
-    if (isMobile || !inspectorOpen) return
+    if (!notesVisible) return
     loadTopicNotes()
     window.addEventListener('guide-progress-updated', loadTopicNotes)
     return () => window.removeEventListener('guide-progress-updated', loadTopicNotes)
-  }, [isMobile, inspectorOpen, loadTopicNotes])
+  }, [notesVisible, loadTopicNotes])
 
   const handleAskKitAboutSection = (sectionName: string, content?: string, hint?: string) => {
     const cleanExcerpt = content?.replace(/\s+/g, ' ').trim().slice(0, 200)
@@ -179,6 +194,7 @@ export default function ChatPage() {
     } catch {
       /* ignore */
     }
+    if (isMobile) setMobileNotesOpen(false)
     window.dispatchEvent(new CustomEvent('toolbox:ask-kit', { detail: { quote } }))
   }
 
@@ -191,6 +207,245 @@ export default function ChatPage() {
   const aiMessageCount = sessionState.messages.filter(
     (m) => m.role === 'ai' && m.content.trim().length > 0,
   ).length
+
+  const inspectorContent = (
+    <>
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--color-line)] px-3.5 py-2.5">
+        <SegmentedControl
+          size="xs"
+          ariaLabel="Notebook inspector tabs"
+          value={inspectorTab}
+          onChange={setInspectorTab}
+          items={[
+            { value: 'guide', label: 'Guide' },
+            {
+              value: 'updates',
+              label: 'Updates',
+              badge: committedSections.length > 0 ? committedSections.length : undefined,
+            },
+          ]}
+        />
+        {!isMobile && (
+          <button
+            type="button"
+            onClick={() => setInspectorOpen(false)}
+            aria-label="Close notebook inspector"
+            className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3.5">
+        {inspectorTab === 'guide' ? (
+          resolvedTopic ? (
+            <NotebookSheet className="p-4">
+              <div className="mb-3 flex items-start justify-between gap-2 border-b border-[var(--color-line)] pb-3">
+                <div className="min-w-0">
+                  <div className="text-[11px] font-medium text-[var(--color-ink-faint)]">
+                    {resolvedTopic.pillar.shortName}
+                  </div>
+                  <h3 className="truncate font-serif text-[16px] font-normal text-[var(--color-ink)]">
+                    {resolvedTopic.topic.name}
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isMobile) setMobileNotesOpen(false)
+                    navigate(
+                      `${prefix}/guide/${resolvedTopic.pillar.id}/${resolvedTopic.topic.id}`,
+                    )
+                  }}
+                  className="inline-flex min-h-[36px] shrink-0 cursor-pointer items-center gap-1 rounded-md border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] sm:min-h-0 sm:px-2"
+                >
+                  Open Guide
+                  <ArrowUpRight size={12} />
+                </button>
+              </div>
+
+              <div className="divide-y divide-[var(--color-line)]">
+                {activeSections.map((sec) => {
+                  const entry = topicNotes[sec.id]
+                  const hasNotes = Boolean(entry?.content?.trim())
+                  return (
+                    <div key={sec.id} className="py-3 first:pt-0 last:pb-0">
+                      <div className="mb-1.5 flex items-center justify-between gap-2">
+                        <h4 className="truncate font-serif text-[13.5px] font-medium text-[var(--color-ink)]">
+                          {sec.name}
+                        </h4>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            handleAskKitAboutSection(
+                              sec.name,
+                              entry?.content,
+                              sec.promptHint,
+                            )
+                          }
+                          className="inline-flex min-h-[34px] shrink-0 cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-[11.5px] font-medium text-[var(--color-brand)] transition-colors hover:bg-[var(--color-surface-hover)] sm:min-h-0 sm:px-1.5"
+                        >
+                          <MessageSquare size={11} />
+                          Ask Kit
+                        </button>
+                      </div>
+
+                      {hasNotes && entry ? (
+                        <div className="max-h-44 overflow-y-auto text-[12.5px] leading-relaxed text-[var(--color-ink-muted)]">
+                          <MarkdownRenderer content={entry.content} />
+                        </div>
+                      ) : (
+                        <p className="text-[12px] text-[var(--color-ink-faint)]">
+                          No notes yet.
+                        </p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </NotebookSheet>
+          ) : (
+            <NotebookSheet className="p-4">
+              <h3 className="font-serif text-[16px] text-[var(--color-ink)]">
+                Guide Companion
+              </h3>
+              <p className="mt-1 text-[13px] text-[var(--color-ink-muted)]">
+                {isMobile
+                  ? 'Tap Topics to pick a study topic and preview its Guide notes here.'
+                  : 'Pick a topic on the left to preview its Guide notes here.'}
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {isMobile && (
+                  <Button
+                    variant="primary"
+                    size="xs"
+                    onClick={() => {
+                      setMobileNotesOpen(false)
+                      setTodoDrawerOpen(true)
+                    }}
+                  >
+                    Choose Topic
+                  </Button>
+                )}
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  onClick={() => {
+                    if (isMobile) setMobileNotesOpen(false)
+                    navigate(`${prefix}/guide`)
+                  }}
+                >
+                  Browse full Guide <ArrowUpRight size={12} />
+                </Button>
+              </div>
+            </NotebookSheet>
+          )
+        ) : (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] p-4">
+              <h3 className="font-serif text-[15.5px] text-[var(--color-ink)]">
+                Synthesize Guide Notes
+              </h3>
+              <p className="mt-1 text-[12.5px] leading-snug text-[var(--color-ink-muted)]">
+                Turn insights from this session into structured Guide sections.
+              </p>
+
+              <div className="mt-3">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  data-testid="inspector-commit-btn"
+                  className="w-full"
+                  disabled={
+                    !resolvedTopic ||
+                    aiMessageCount === 0 ||
+                    !sessionState.session ||
+                    Boolean(
+                      sessionState.session.topicId &&
+                        (sessionState.session.pillarId !== resolvedTopic.pillar.id ||
+                          sessionState.session.topicId !== resolvedTopic.topic.id),
+                    )
+                  }
+                  onClick={() => {
+                    if (!resolvedTopic || !sessionState.session) return
+                    if (
+                      sessionState.session.topicId &&
+                      (sessionState.session.pillarId !== resolvedTopic.pillar.id ||
+                        sessionState.session.topicId !== resolvedTopic.topic.id)
+                    ) {
+                      return
+                    }
+                    if (isMobile) setMobileNotesOpen(false)
+                    startAnalysis(sessionState.messages, {
+                      pillarId: resolvedTopic.pillar.id,
+                      topicId: resolvedTopic.topic.id,
+                      topicName: resolvedTopic.topic.name,
+                    })
+                  }}
+                >
+                  <GitCommit size={13} />
+                  Commit Session to Guide
+                </Button>
+                {(!resolvedTopic || aiMessageCount === 0) && (
+                  <p className="mt-2 text-[11.5px] text-[var(--color-ink-faint)]">
+                    {!resolvedTopic
+                      ? isMobile
+                        ? 'Tap Topics to select a topic and enable commits.'
+                        : 'Select a topic on the left to enable commits.'
+                      : 'Exchange at least one reply with Kit first.'}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {resolvedTopic && (
+              <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-card)] p-3.5">
+                <div className="mb-2 text-[11px] font-semibold tracking-wider text-[var(--color-ink-faint)] uppercase">
+                  Committed in {resolvedTopic.topic.name}
+                </div>
+                {committedSections.length === 0 ? (
+                  <p className="text-[12.5px] text-[var(--color-ink-muted)]">
+                    No sections committed for this topic yet.
+                  </p>
+                ) : (
+                  <ul className="divide-y divide-[var(--color-line)]">
+                    {committedSections.map((sec) => {
+                      const ts = topicNotes[sec.id]?.committedAt
+                      return (
+                        <li
+                          key={sec.id}
+                          className="flex items-center justify-between gap-2 py-2 first:pt-0 last:pb-0"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isMobile) setMobileNotesOpen(false)
+                              navigate(
+                                `${prefix}/guide/${resolvedTopic.pillar.id}/${resolvedTopic.topic.id}`,
+                              )
+                            }}
+                            className="min-w-0 cursor-pointer truncate text-left font-serif text-[13px] text-[var(--color-ink)] hover:text-[var(--color-brand)]"
+                          >
+                            {sec.name}
+                          </button>
+                          {ts && (
+                            <span className="shrink-0 font-mono text-[10.5px] text-[var(--color-ink-faint)] tabular-nums">
+                              {new Date(ts).toLocaleDateString()}
+                            </span>
+                          )}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
+  )
 
   return (
     <div className="learning-hub-layout" id="chat-page">
@@ -207,8 +462,24 @@ export default function ChatPage() {
           onClearTopicOverride={() => setActiveStudyTopic(null)}
           onCommitClick={startAnalysis}
           routeKitSlug={routeKitSlug}
-          notebookOpen={!isMobile ? inspectorOpen : undefined}
-          onToggleNotebook={!isMobile ? () => setInspectorOpen((o) => !o) : undefined}
+          onOpenTopics={
+            isMobile
+              ? () => {
+                  setMobileNotesOpen(false)
+                  setTodoDrawerOpen(true)
+                }
+              : undefined
+          }
+          activeTopicLabel={resolvedTopic?.topic.name ?? null}
+          notebookOpen={notesVisible}
+          onToggleNotebook={() => {
+            if (isMobile) {
+              setTodoDrawerOpen(false)
+              setMobileNotesOpen((o) => !o)
+            } else {
+              setInspectorOpen((o) => !o)
+            }
+          }}
           onSessionStateChange={setSessionState}
         />
       </div>
@@ -218,225 +489,37 @@ export default function ChatPage() {
           data-testid="chat-notebook-inspector"
           className="flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-[var(--color-line)] bg-[var(--color-surface-low)] xl:w-[380px]"
         >
-          <div className="flex shrink-0 items-center justify-between gap-2 border-b border-[var(--color-line)] px-3.5 py-2.5">
-            <SegmentedControl
-              size="xs"
-              ariaLabel="Notebook inspector tabs"
-              value={inspectorTab}
-              onChange={setInspectorTab}
-              items={[
-                { value: 'guide', label: 'Guide' },
-                {
-                  value: 'updates',
-                  label: 'Updates',
-                  badge: committedSections.length > 0 ? committedSections.length : undefined,
-                },
-              ]}
-            />
-            <button
-              type="button"
-              onClick={() => setInspectorOpen(false)}
-              aria-label="Close notebook inspector"
-              className="inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
-            >
-              <X size={14} />
-            </button>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-3.5">
-            {inspectorTab === 'guide' ? (
-              resolvedTopic ? (
-                <NotebookSheet className="p-4">
-                  <div className="mb-3 flex items-start justify-between gap-2 border-b border-[var(--color-line)] pb-3">
-                    <div className="min-w-0">
-                      <div className="text-[11px] font-medium text-[var(--color-ink-faint)]">
-                        {resolvedTopic.pillar.shortName}
-                      </div>
-                      <h3 className="truncate font-serif text-[16px] font-normal text-[var(--color-ink)]">
-                        {resolvedTopic.topic.name}
-                      </h3>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        navigate(
-                          `${prefix}/guide/${resolvedTopic.pillar.id}/${resolvedTopic.topic.id}`,
-                        )
-                      }
-                      className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2 py-1 text-[11.5px] font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)]"
-                    >
-                      Open Guide
-                      <ArrowUpRight size={12} />
-                    </button>
-                  </div>
-
-                  <div className="divide-y divide-[var(--color-line)]">
-                    {activeSections.map((sec) => {
-                      const entry = topicNotes[sec.id]
-                      const hasNotes = Boolean(entry?.content?.trim())
-                      return (
-                        <div key={sec.id} className="py-3 first:pt-0 last:pb-0">
-                          <div className="mb-1.5 flex items-center justify-between gap-2">
-                            <h4 className="truncate font-serif text-[13.5px] font-medium text-[var(--color-ink)]">
-                              {sec.name}
-                            </h4>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                handleAskKitAboutSection(
-                                  sec.name,
-                                  entry?.content,
-                                  sec.promptHint,
-                                )
-                              }
-                              className="inline-flex shrink-0 cursor-pointer items-center gap-1 rounded px-1.5 py-0.5 text-[11.5px] font-medium text-[var(--color-brand)] transition-colors hover:bg-[var(--color-surface-hover)]"
-                            >
-                              <MessageSquare size={11} />
-                              Ask Kit
-                            </button>
-                          </div>
-
-                          {hasNotes && entry ? (
-                            <div className="max-h-44 overflow-y-auto text-[12.5px] leading-relaxed text-[var(--color-ink-muted)]">
-                              <MarkdownRenderer content={entry.content} />
-                            </div>
-                          ) : (
-                            <p className="text-[12px] text-[var(--color-ink-faint)]">
-                              No notes yet.
-                            </p>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </NotebookSheet>
-              ) : (
-                <NotebookSheet className="p-4">
-                  <h3 className="font-serif text-[16px] text-[var(--color-ink)]">
-                    Guide Companion
-                  </h3>
-                  <p className="mt-1 text-[13px] text-[var(--color-ink-muted)]">
-                    Pick a topic on the left to preview its Guide notes here.
-                  </p>
-                  <div className="mt-3">
-                    <Button
-                      variant="secondary"
-                      size="xs"
-                      onClick={() => navigate(`${prefix}/guide`)}
-                    >
-                      Browse full Guide <ArrowUpRight size={12} />
-                    </Button>
-                  </div>
-                </NotebookSheet>
-              )
-            ) : (
-              <div className="space-y-4">
-                <div className="rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] p-4">
-                  <h3 className="font-serif text-[15.5px] text-[var(--color-ink)]">
-                    Synthesize Guide Notes
-                  </h3>
-                  <p className="mt-1 text-[12.5px] leading-snug text-[var(--color-ink-muted)]">
-                    Turn insights from this session into structured Guide sections.
-                  </p>
-
-                  <div className="mt-3">
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="w-full"
-                      disabled={
-                        !resolvedTopic ||
-                        aiMessageCount === 0 ||
-                        !sessionState.session ||
-                        Boolean(
-                          sessionState.session.topicId &&
-                            (sessionState.session.pillarId !== resolvedTopic.pillar.id ||
-                              sessionState.session.topicId !== resolvedTopic.topic.id),
-                        )
-                      }
-                      onClick={() => {
-                        if (!resolvedTopic || !sessionState.session) return
-                        if (
-                          sessionState.session.topicId &&
-                          (sessionState.session.pillarId !== resolvedTopic.pillar.id ||
-                            sessionState.session.topicId !== resolvedTopic.topic.id)
-                        ) {
-                          return
-                        }
-                        startAnalysis(sessionState.messages, {
-                          pillarId: resolvedTopic.pillar.id,
-                          topicId: resolvedTopic.topic.id,
-                          topicName: resolvedTopic.topic.name,
-                        })
-                      }}
-                    >
-                      <GitCommit size={13} />
-                      Commit Session to Guide
-                    </Button>
-                    {(!resolvedTopic || aiMessageCount === 0) && (
-                      <p className="mt-2 text-[11.5px] text-[var(--color-ink-faint)]">
-                        {!resolvedTopic
-                          ? 'Select a topic on the left to enable commits.'
-                          : 'Exchange at least one reply with Kit first.'}
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {resolvedTopic && (
-                  <div className="rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-card)] p-3.5">
-                    <div className="mb-2 text-[11px] font-semibold tracking-wider text-[var(--color-ink-faint)] uppercase">
-                      Committed in {resolvedTopic.topic.name}
-                    </div>
-                    {committedSections.length === 0 ? (
-                      <p className="text-[12.5px] text-[var(--color-ink-muted)]">
-                        No sections committed for this topic yet.
-                      </p>
-                    ) : (
-                      <ul className="divide-y divide-[var(--color-line)]">
-                        {committedSections.map((sec) => {
-                          const ts = topicNotes[sec.id]?.committedAt
-                          return (
-                            <li
-                              key={sec.id}
-                              className="flex items-center justify-between gap-2 py-2 first:pt-0 last:pb-0"
-                            >
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  navigate(
-                                    `${prefix}/guide/${resolvedTopic.pillar.id}/${resolvedTopic.topic.id}`,
-                                  )
-                                }
-                                className="min-w-0 cursor-pointer truncate text-left font-serif text-[13px] text-[var(--color-ink)] hover:text-[var(--color-brand)]"
-                              >
-                                {sec.name}
-                              </button>
-                              {ts && (
-                                <span className="shrink-0 font-mono text-[10.5px] text-[var(--color-ink-faint)] tabular-nums">
-                                  {new Date(ts).toLocaleDateString()}
-                                </span>
-                              )}
-                            </li>
-                          )
-                        })}
-                      </ul>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          {inspectorContent}
         </aside>
       )}
 
       {isMobile && (
-        <BottomSheetDrawer open={todoDrawerOpen} onClose={() => setTodoDrawerOpen(false)}>
-          <LearningTodo
-            onStudyTopic={handleStudyTopic}
-            activeTopicId={resolvedTopic?.topic.id ?? null}
-          />
-        </BottomSheetDrawer>
+        <>
+          <BottomSheetDrawer
+            open={todoDrawerOpen}
+            onClose={() => setTodoDrawerOpen(false)}
+            ariaLabel="Curriculum spine"
+            closeLabel="Close curriculum drawer"
+            testId="mobile-chat-topics-sheet"
+          >
+            <LearningTodo
+              onStudyTopic={handleStudyTopic}
+              activeTopicId={resolvedTopic?.topic.id ?? null}
+            />
+          </BottomSheetDrawer>
+
+          <BottomSheetDrawer
+            open={mobileNotesOpen}
+            onClose={() => setMobileNotesOpen(false)}
+            ariaLabel="Context notes"
+            closeLabel="Close context notes"
+            testId="chat-notebook-inspector"
+          >
+            <div className="flex h-full flex-col overflow-hidden bg-[var(--color-surface-low)]">
+              {inspectorContent}
+            </div>
+          </BottomSheetDrawer>
+        </>
       )}
     </div>
   )

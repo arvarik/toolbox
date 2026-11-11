@@ -555,7 +555,12 @@ function CustomEndpointsSection() {
 }
 
 export default function SettingsPage() {
-  const { addToast, theme, toggleTheme, model, fetchAvailableModels, availableModels } = useAppStore()
+  const addToast = useAppStore((s) => s.addToast)
+  const theme = useAppStore((s) => s.theme)
+  const toggleTheme = useAppStore((s) => s.toggleTheme)
+  const model = useAppStore((s) => s.model)
+  const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
+  const availableModels = useAppStore((s) => s.availableModels)
   const { isResolved, authRequired, isAdmin } = useAuth()
   const canManageInstanceAi = !isResolved || !authRequired || isAdmin
   const isMac = typeof window !== 'undefined' && navigator.userAgent.includes('Mac')

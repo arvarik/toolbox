@@ -223,7 +223,7 @@ describe('UI Primitives Library & DesignSystemPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Good/i }))
     expect(onRate).toHaveBeenCalledWith('good')
 
-    fireEvent.click(screen.getByLabelText('Send message'))
+    fireEvent.click(screen.getByRole('button', { name: /Send message: Ask Kit/i }))
     expect(onSubmit).toHaveBeenCalled()
   })
 

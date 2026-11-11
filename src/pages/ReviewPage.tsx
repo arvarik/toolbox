@@ -251,7 +251,7 @@ export default function ReviewPage() {
           Zero due cards remain in your unified FSRS-6 review queue.
         </p>
         <div className="pt-2">
-          <Link to="/" className="btn btn-primary">
+          <Link to="/" className="btn btn-primary min-h-[44px]">
             <ArrowLeft size={15} />
             Back to Library
           </Link>
@@ -324,7 +324,7 @@ export default function ReviewPage() {
             <button
               type="button"
               data-testid="return-library-btn"
-              className="btn btn-primary"
+              className="btn btn-primary min-h-[44px]"
               onClick={() => navigate('/')}
             >
               <Layers size={15} />
@@ -356,17 +356,21 @@ export default function ReviewPage() {
     >
       {/* Top Bar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Link to="/" className="btn btn-ghost btn-sm">
+        <Link
+          to="/"
+          className="btn btn-ghost btn-sm max-sm:min-h-[44px] max-sm:px-3"
+        >
           <ArrowLeft size={14} />
           Library
         </Link>
 
-        <div className="flex items-center gap-2 text-xs text-on-surface-variant">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-on-surface-variant">
           <button
             type="button"
+            data-testid="review-scratchpad-toggle"
             aria-pressed={typeAnswerOpen}
             onClick={() => setTypeAnswerOpen((v) => !v)}
-            className={`btn btn-sm ${
+            className={`btn btn-sm max-sm:min-h-[44px] max-sm:px-3 ${
               typeAnswerOpen
                 ? 'bg-primary/15 text-on-primary-wash border-primary/35'
                 : 'btn-ghost'
@@ -381,7 +385,7 @@ export default function ReviewPage() {
           </span>
           <button
             type="button"
-            className="btn btn-ghost btn-icon btn-sm"
+            className="btn btn-ghost btn-icon btn-sm max-sm:min-h-[44px] max-sm:min-w-[44px]"
             aria-label="Toggle keyboard shortcuts"
             onClick={() => setShowShortcuts((v) => !v)}
           >

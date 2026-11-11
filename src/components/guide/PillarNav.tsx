@@ -186,11 +186,19 @@ export default function PillarNav({ dogears: controlledDogears }: PillarNavProps
                   {dogeared && (
                     <Bookmark
                       size={11}
-                      className="ml-1 shrink-0 fill-[var(--color-brand)] text-[var(--color-brand)]"
+                      className={`ml-1 shrink-0 ${
+                        isActive
+                          ? 'fill-current text-current'
+                          : 'fill-[var(--color-brand)] text-[var(--color-brand)]'
+                      }`}
                     />
                   )}
                   {filled > 0 && (
-                    <span className="ml-1 font-mono text-[10px] font-medium text-[var(--color-ink-muted)] tabular-nums">
+                    <span
+                      className={`ml-1 font-mono text-[10px] font-medium tabular-nums ${
+                        isActive ? 'text-current opacity-85' : 'text-[var(--color-ink-muted)]'
+                      }`}
+                    >
                       {filled}/{total}
                     </span>
                   )}

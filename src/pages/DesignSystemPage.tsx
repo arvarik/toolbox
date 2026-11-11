@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import type { HighlightColor } from '../utils/api'
 import {
@@ -106,11 +106,26 @@ export default function DesignSystemPage() {
   )
   const [voiceRec, setVoiceRec] = useState<boolean>(false)
   const [toasts, setToasts] = useState<ToastMessage[]>([])
+  const toastTimersRef = useRef<Set<number>>(new Set())
+
+  useEffect(() => {
+    const timers = toastTimersRef.current
+    return () => {
+      for (const timer of timers) {
+        window.clearTimeout(timer)
+      }
+      timers.clear()
+    }
+  }, [])
 
   const pushToast = (title: string, detail?: string) => {
     const id = `${Date.now()}-${Math.random()}`
     setToasts((prev) => [...prev.slice(-2), { id, title, detail }])
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 2600)
+    const timer = window.setTimeout(() => {
+      toastTimersRef.current.delete(timer)
+      setToasts((prev) => prev.filter((t) => t.id !== id))
+    }, 2600)
+    toastTimersRef.current.add(timer)
   }
 
   const show = (sec: Exclude<SectionFilter, 'all'>) => filter === 'all' || filter === sec
@@ -123,27 +138,31 @@ export default function DesignSystemPage() {
       data-testid="design-system-page"
       className="flex h-full w-full flex-col overflow-hidden bg-[var(--color-surface)] text-[var(--color-ink)]"
     >
-      <header className="flex h-13 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--color-line)] bg-[var(--color-surface-low)] px-6">
-        <div className="flex items-center gap-2.5">
+      <header className="flex min-h-13 shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--color-line)] bg-[var(--color-surface-low)] px-3 py-2 sm:px-6">
+        <div className="flex min-w-0 items-center gap-2.5">
           <KitLogo size={22} />
-          <span className="font-serif text-[17px]">Toolbox Component Library &amp; Laws of UX</span>
+          <span className="truncate font-serif text-[16px] sm:text-[17px]">
+            Toolbox Component Library &amp; Laws of UX
+          </span>
         </div>
 
-        <SegmentedControl
-          size="xs"
-          ariaLabel="Filter component specimens"
-          value={filter}
-          onChange={setFilter}
-          items={[
-            { value: 'all', label: 'All' },
-            { value: 'palette', label: 'Palette & Kit' },
-            { value: 'notebook', label: 'Notebook & Anki' },
-            { value: 'physics', label: 'Physics & Inputs' },
-          ]}
-        />
+        <div className="max-w-full overflow-x-auto">
+          <SegmentedControl
+            size="xs"
+            ariaLabel="Filter component specimens"
+            value={filter}
+            onChange={setFilter}
+            items={[
+              { value: 'all', label: 'All' },
+              { value: 'palette', label: 'Palette & Kit' },
+              { value: 'notebook', label: 'Notebook & Anki' },
+              { value: 'physics', label: 'Physics & Inputs' },
+            ]}
+          />
+        </div>
       </header>
 
-      <div className="scroll-fade-y flex-1 overflow-y-auto px-6 py-8">
+      <div className="scroll-fade-y flex-1 overflow-y-auto px-3 py-6 sm:px-6 sm:py-8">
         <StageTransition stageKey={filter} className="mx-auto max-w-5xl space-y-12 pb-16">
           <div className="flex flex-col justify-between gap-4 border-b border-[var(--color-line-strong)] pb-7 md:flex-row md:items-end">
             <div className="max-w-2xl">

@@ -13,6 +13,7 @@ import {
   Copy,
   GitCommit,
   Layers,
+  ListChecks,
   Map as MapIcon,
   MoreHorizontal,
   RotateCcw,
@@ -110,11 +111,18 @@ function makeSession(name?: string, topicContext?: Partial<CommitTopicContext>):
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+    }
+  }, [])
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(text)
       setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = setTimeout(() => setCopied(false), 2000)
     } catch {
       /* ignore */
     }
@@ -164,6 +172,8 @@ interface LearningChatProps {
   onClearTopicOverride?: () => void
   onCommitClick?: (messages: ChatMessage[], topicContext: CommitTopicContext | null) => void
   routeKitSlug?: string | null
+  onOpenTopics?: () => void
+  activeTopicLabel?: string | null
   notebookOpen?: boolean
   onToggleNotebook?: () => void
   onSessionStateChange?: (state: { session: ChatSession | null; messages: ChatMessage[] }) => void
@@ -177,6 +187,8 @@ export default function LearningChat({
   onClearTopicOverride,
   onCommitClick,
   routeKitSlug,
+  onOpenTopics,
+  activeTopicLabel,
   notebookOpen,
   onToggleNotebook,
   onSessionStateChange,
@@ -248,9 +260,16 @@ export default function LearningChat({
 
   const activeTopicIdRef = useRef<string | undefined>(undefined)
 
+  const lastEmittedSessionKeyRef = useRef<string>('')
+
   useEffect(() => {
+    const sessionKey = `${currentSession?.id ?? ''}:${currentSession?.pillarId ?? ''}:${currentSession?.topicId ?? ''}`
+    if (isLoading && lastEmittedSessionKeyRef.current === sessionKey) {
+      return
+    }
+    lastEmittedSessionKeyRef.current = sessionKey
     onSessionStateChange?.({ session: currentSession, messages })
-  }, [currentSession, messages, onSessionStateChange])
+  }, [isLoading, currentSession, messages, onSessionStateChange])
 
   // Load from API & migrate legacy default-Kit local data if needed whenever active Kit changes
   useEffect(() => {
@@ -354,10 +373,16 @@ export default function LearningChat({
     if (isLoaded && currentId) saveCurrentId(storageScope, currentId)
   }, [currentId, isLoaded, storageScope])
 
-  // Scroll to bottom when messages change
+  // Scroll to bottom when messages change (instant during streaming or reduced-motion to prevent jank)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
+    const prefersReduced =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    messagesEndRef.current?.scrollIntoView({
+      behavior: isLoading || prefersReduced ? 'auto' : 'smooth',
+    })
+  }, [messages, isLoading])
 
   // Keep scroll pinned to bottom on container resize
   useEffect(() => {
@@ -466,10 +491,18 @@ export default function LearningChat({
       if (msgContainer) {
         const range = selection.getRangeAt(0)
         const rect = range.getBoundingClientRect()
+        const isCoarse =
+          typeof window !== 'undefined' &&
+          typeof window.matchMedia === 'function' &&
+          window.matchMedia('(pointer: coarse)').matches
+        const placeBelow = isCoarse || rect.top < 72
+        const popupTop = placeBelow
+          ? Math.min(window.innerHeight - 64, rect.bottom + 10)
+          : Math.max(10, rect.top - 48)
         setPopupState({
           text,
-          top: Math.max(10, rect.top - 48),
-          left: Math.min(Math.max(80, rect.left + rect.width / 2), window.innerWidth - 80),
+          top: popupTop,
+          left: Math.min(Math.max(88, rect.left + rect.width / 2), window.innerWidth - 88),
         })
         return
       }
@@ -959,11 +992,23 @@ export default function LearningChat({
   return (
     <div className="learning-chat bg-[var(--color-surface)]" id="learning-chat">
       {/* ── Header ── */}
-      <div className="learning-chat-header border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-2.5">
-        <div className="flex min-w-0 flex-1 items-center gap-2">
+      <div className="learning-chat-header border-b border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 sm:px-4 sm:py-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
           <span className="hide-on-mobile shrink-0">
             <KitAvatar size={20} state={isLoading ? 'thinking' : 'idle'} />
           </span>
+          {onOpenTopics && (
+            <button
+              type="button"
+              onClick={onOpenTopics}
+              data-testid="mobile-chat-topics-btn"
+              aria-label={activeTopicLabel ? `Topics: ${activeTopicLabel}` : 'Open study topics'}
+              className="inline-flex min-h-[36px] max-w-[116px] shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2.5 text-[12px] font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] active:scale-[0.98]"
+            >
+              <ListChecks size={13} className="shrink-0 text-[var(--color-brand)]" />
+              <span className="truncate">{activeTopicLabel || 'Topics'}</span>
+            </button>
+          )}
           <SessionPicker
             sessions={sessions}
             currentId={currentId}
@@ -988,7 +1033,7 @@ export default function LearningChat({
           {capabilities.calculator !== false && (
             <button
               type="button"
-              className="btn btn-ghost btn-icon"
+              className="btn btn-ghost btn-icon h-9 w-9 sm:h-8 sm:w-8"
               onClick={() => useAppStore.getState().setCalcModalOpen(true)}
               title="BotE Calculator (⌘E)"
               aria-label="Open BotE Calculator"
@@ -1002,7 +1047,7 @@ export default function LearningChat({
             <div className="relative" ref={actionsMenuRef}>
               <button
                 type="button"
-                className="btn btn-ghost btn-icon"
+                className="btn btn-ghost btn-icon h-9 w-9 sm:h-8 sm:w-8"
                 onClick={() => setShowActionsMenu((p) => !p)}
                 title="More Actions"
                 aria-label="More Actions"
@@ -1013,7 +1058,7 @@ export default function LearningChat({
                 <div className="animate-popover-enter absolute top-[calc(100%+4px)] right-0 z-50 flex min-w-[184px] flex-col overflow-hidden rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] p-1 shadow-[var(--shadow-float)]">
                   <button
                     type="button"
-                    className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
+                    className="flex min-h-[40px] cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
                     onClick={() => {
                       setShowActionsMenu(false)
                       void handleGenerateConceptMap()
@@ -1025,7 +1070,7 @@ export default function LearningChat({
                   </button>
                   <button
                     type="button"
-                    className="flex cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
+                    className="flex min-h-[40px] cursor-pointer items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-50"
                     onClick={() => {
                       setShowActionsMenu(false)
                       void handleGenerateSessionFlashcards()
@@ -1043,7 +1088,7 @@ export default function LearningChat({
           {aiMessages.length > 0 && (
             <button
               type="button"
-              className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-3 text-[12.5px] font-semibold text-[var(--color-accent-ink)] transition-opacity hover:bg-[var(--color-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-45"
+              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-3 text-[12.5px] font-semibold text-[var(--color-accent-ink)] transition-opacity hover:bg-[var(--color-accent-fill-hover)] disabled:cursor-not-allowed disabled:opacity-45 sm:h-8"
               onClick={() =>
                 onCommitClick?.(
                   messages,
@@ -1062,6 +1107,7 @@ export default function LearningChat({
                   ? `Commit session to ${currentSession.topicName} guide`
                   : 'Start a session from the Study Plan to enable commit'
               }
+              aria-label="Commit to Guide"
               id="commit-to-guide-btn"
             >
               <GitCommit size={13} />
@@ -1073,8 +1119,9 @@ export default function LearningChat({
             <button
               type="button"
               aria-pressed={Boolean(notebookOpen)}
+              data-testid="chat-notebook-toggle"
               onClick={onToggleNotebook}
-              className={`inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] font-medium transition-colors active:scale-[0.98] ${
+              className={`inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] font-medium transition-colors active:scale-[0.98] sm:h-8 ${
                 notebookOpen
                   ? 'border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink)]'
                   : 'border-transparent text-[var(--color-ink-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]'
