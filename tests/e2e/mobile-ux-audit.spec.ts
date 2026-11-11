@@ -250,7 +250,7 @@ test.describe("Mobile View Excellence & Frontend Harmony", () => {
       await page.goto("/review");
       await expect(page.getByTestId("review-card-front")).toBeVisible();
       await page.getByTestId("review-scratchpad-toggle").click();
-      const scratchpad = page.getByTestId("review-scratchpad-input");
+      const scratchpad = page.getByTestId("review-type-answer-input");
       await expectFontSizeAtLeast16(scratchpad, "Mobile review scratchpad");
       await scratchpad.fill("Recall check on mobile 320px");
 

@@ -242,6 +242,158 @@ function applyHighlightsToDom(root: HTMLElement, highlights: TextbookHighlight[]
   }
 }
 
+interface HighlightProseSubscriber {
+  getRoot: () => HTMLElement | null
+  isInteracting: () => boolean
+  hasSelection: () => boolean
+  evaluate: () => void
+  clear: () => void
+}
+
+const highlightProseSubscribers = new Set<HighlightProseSubscriber>()
+let activeHighlightSubscriber: HighlightProseSubscriber | null = null
+let sharedSelectionTimer: ReturnType<typeof setTimeout> | undefined
+let isMouseDragging = false
+let sharedListenersAttached = false
+
+function isHighlightToolbarTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof Element &&
+    Boolean(target.closest('[data-testid="highlight-selection-toolbar"]'))
+  )
+}
+
+function clearSharedSelectionTimer(): void {
+  if (sharedSelectionTimer !== undefined) {
+    clearTimeout(sharedSelectionTimer)
+    sharedSelectionTimer = undefined
+  }
+}
+
+function routeSharedSelection(): void {
+  const sel = typeof window !== 'undefined' ? window.getSelection() : null
+  const hasRange = Boolean(sel && !sel.isCollapsed && sel.rangeCount > 0)
+  const targetNode =
+    hasRange && sel ? (sel.anchorNode ?? sel.getRangeAt(0).commonAncestorContainer) : null
+
+  let matched: HighlightProseSubscriber | null = null
+  if (targetNode) {
+    for (const sub of highlightProseSubscribers) {
+      const root = sub.getRoot()
+      if (root && root.contains(targetNode)) {
+        matched = sub
+        break
+      }
+    }
+  }
+
+  if (activeHighlightSubscriber && activeHighlightSubscriber !== matched) {
+    if (!activeHighlightSubscriber.isInteracting()) {
+      activeHighlightSubscriber.clear()
+    }
+  }
+
+  for (const sub of highlightProseSubscribers) {
+    if (sub !== matched && sub.hasSelection() && !sub.isInteracting()) {
+      sub.clear()
+    }
+  }
+
+  activeHighlightSubscriber = matched
+  if (matched && !matched.isInteracting()) {
+    matched.evaluate()
+  }
+}
+
+function onSharedMouseDown(e: MouseEvent): void {
+  if (isHighlightToolbarTarget(e.target)) return
+  const button = typeof e.button === 'number' ? e.button : 0
+  const buttons = typeof e.buttons === 'number' ? e.buttons : 0
+  if (button === 0 || (buttons & 1) === 1) {
+    isMouseDragging = true
+    clearSharedSelectionTimer()
+  }
+}
+
+function onSharedPointerDown(e: PointerEvent): void {
+  if (isHighlightToolbarTarget(e.target) || e.pointerType !== 'mouse') return
+  const button = typeof e.button === 'number' ? e.button : 0
+  const buttons = typeof e.buttons === 'number' ? e.buttons : 0
+  if (button === 0 || (buttons & 1) === 1) {
+    isMouseDragging = true
+    clearSharedSelectionTimer()
+  }
+}
+
+function finishSharedMouseDrag(e?: Event): void {
+  if (e && 'pointerType' in e) {
+    const pt = (e as PointerEvent).pointerType
+    if (pt && pt !== 'mouse') return
+  }
+  if (e && 'buttons' in e && e.type !== 'pointercancel' && e.type !== 'dragend') {
+    const buttons = (e as MouseEvent).buttons
+    if (typeof buttons === 'number' && (buttons & 1) === 1) return
+  }
+  const wasDragging = isMouseDragging
+  isMouseDragging = false
+  if (wasDragging) {
+    clearSharedSelectionTimer()
+    routeSharedSelection()
+  }
+}
+
+function onSharedWindowBlur(): void {
+  isMouseDragging = false
+  clearSharedSelectionTimer()
+}
+
+function onSharedSelectionChange(): void {
+  if (isMouseDragging) {
+    clearSharedSelectionTimer()
+    return
+  }
+  clearSharedSelectionTimer()
+  sharedSelectionTimer = setTimeout(() => {
+    sharedSelectionTimer = undefined
+    if (isMouseDragging) return
+    routeSharedSelection()
+  }, 180)
+}
+
+function attachSharedHighlightListeners(): void {
+  if (sharedListenersAttached || typeof document === 'undefined' || typeof window === 'undefined') {
+    return
+  }
+  sharedListenersAttached = true
+  isMouseDragging = false
+  document.addEventListener('selectionchange', onSharedSelectionChange)
+  document.addEventListener('mousedown', onSharedMouseDown, true)
+  document.addEventListener('pointerdown', onSharedPointerDown, true)
+  window.addEventListener('mouseup', finishSharedMouseDrag, true)
+  window.addEventListener('pointerup', finishSharedMouseDrag, true)
+  window.addEventListener('pointercancel', finishSharedMouseDrag, true)
+  window.addEventListener('dragend', finishSharedMouseDrag, true)
+  window.addEventListener('blur', onSharedWindowBlur)
+}
+
+function detachSharedHighlightListeners(): void {
+  if (!sharedListenersAttached || typeof document === 'undefined' || typeof window === 'undefined') {
+    return
+  }
+  sharedListenersAttached = false
+  isMouseDragging = false
+  activeHighlightSubscriber = null
+  clearSharedSelectionTimer()
+  document.removeEventListener('selectionchange', onSharedSelectionChange)
+  document.removeEventListener('mousedown', onSharedMouseDown, true)
+  document.removeEventListener('pointerdown', onSharedPointerDown, true)
+  window.removeEventListener('mouseup', finishSharedMouseDrag, true)
+  window.removeEventListener('pointerup', finishSharedMouseDrag, true)
+  window.removeEventListener('pointercancel', finishSharedMouseDrag, true)
+  window.removeEventListener('dragend', finishSharedMouseDrag, true)
+  window.removeEventListener('blur', onSharedWindowBlur)
+}
+
 export function HighlightableProse({
   children,
   contentKey,
@@ -443,28 +595,26 @@ export function HighlightableProse({
   checkSelectionRef.current = checkSelection
 
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const onSelectionChange = () => {
-      if (toolbarInteractingRef.current) return
-      if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
-        if (toolbarInteractingRef.current) return
-        const sel = window.getSelection()
-        const insideThisProse = Boolean(
-          sel &&
-            !sel.isCollapsed &&
-            sel.rangeCount > 0 &&
-            richContentRef.current?.contains(sel.getRangeAt(0).commonAncestorContainer),
-        )
-        if (insideThisProse || hasSelectionRef.current) {
-          checkSelectionRef.current()
-        }
-      }, 180)
+    const subscriber: HighlightProseSubscriber = {
+      getRoot: () => richContentRef.current,
+      isInteracting: () => toolbarInteractingRef.current,
+      hasSelection: () => hasSelectionRef.current,
+      evaluate: () => checkSelectionRef.current(),
+      clear: () => setSelection(null),
     }
-    document.addEventListener('selectionchange', onSelectionChange)
+    const wasEmpty = highlightProseSubscribers.size === 0
+    highlightProseSubscribers.add(subscriber)
+    if (wasEmpty) {
+      attachSharedHighlightListeners()
+    }
     return () => {
-      document.removeEventListener('selectionchange', onSelectionChange)
-      if (timer) clearTimeout(timer)
+      highlightProseSubscribers.delete(subscriber)
+      if (activeHighlightSubscriber === subscriber) {
+        activeHighlightSubscriber = null
+      }
+      if (highlightProseSubscribers.size === 0) {
+        detachSharedHighlightListeners()
+      }
     }
   }, [])
 
@@ -479,8 +629,12 @@ export function HighlightableProse({
   return (
     <div
       ref={wrapRef}
-      onMouseUp={checkSelection}
-      onKeyUp={checkSelection}
+      onMouseUp={(e) => {
+        if ((e.buttons & 1) === 1) return
+        isMouseDragging = false
+        routeSharedSelection()
+      }}
+      onKeyUp={() => routeSharedSelection()}
       className={`relative text-[15.5px] leading-[1.72] text-[var(--color-ink)] ${className}`}
     >
       {selection && (

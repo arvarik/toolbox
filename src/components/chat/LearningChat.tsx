@@ -472,6 +472,7 @@ export default function LearningChat({
 
   // Handle text selection for flashcard generation
   const popupInteractingRef = useRef(false)
+  const isMouseDraggingRef = useRef(false)
   const popupReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const markPopupInteracting = useCallback(() => {
@@ -484,6 +485,7 @@ export default function LearningChat({
 
   const checkSelection = useCallback((e: MouseEvent | null) => {
     if (popupInteractingRef.current) return
+    if (e && typeof e.buttons === 'number' && (e.buttons & 1) === 1) return
     const targetEl = e?.target instanceof Element ? e.target : null
     if (
       targetEl?.closest('#flashcard-popup') ||
@@ -523,14 +525,76 @@ export default function LearningChat({
   }, [])
 
   useEffect(() => {
-    document.addEventListener('mouseup', checkSelection)
-
     let selectionTimer: ReturnType<typeof setTimeout> | undefined
+
+    const clearSelectionTimer = () => {
+      if (selectionTimer !== undefined) {
+        clearTimeout(selectionTimer)
+        selectionTimer = undefined
+      }
+    }
+
+    const isPopupTarget = (target: EventTarget | null) =>
+      target instanceof Element && Boolean(target.closest('#flashcard-popup'))
+
+    const handleMouseDown = (e: MouseEvent) => {
+      if (isPopupTarget(e.target)) return
+      const button = typeof e.button === 'number' ? e.button : 0
+      const buttons = typeof e.buttons === 'number' ? e.buttons : 0
+      if (button === 0 || (buttons & 1) === 1) {
+        isMouseDraggingRef.current = true
+        clearSelectionTimer()
+      }
+    }
+
+    const handlePointerDown = (e: PointerEvent) => {
+      if (isPopupTarget(e.target) || e.pointerType !== 'mouse') return
+      const button = typeof e.button === 'number' ? e.button : 0
+      const buttons = typeof e.buttons === 'number' ? e.buttons : 0
+      if (button === 0 || (buttons & 1) === 1) {
+        isMouseDraggingRef.current = true
+        clearSelectionTimer()
+      }
+    }
+
+    const finishMouseDrag = (e?: Event) => {
+      if (e && 'pointerType' in e) {
+        const pt = (e as PointerEvent).pointerType
+        if (pt && pt !== 'mouse') return
+      }
+      if (e && 'buttons' in e && e.type !== 'pointercancel' && e.type !== 'dragend') {
+        const buttons = (e as MouseEvent).buttons
+        if (typeof buttons === 'number' && (buttons & 1) === 1) return
+      }
+      const wasDragging = isMouseDraggingRef.current
+      isMouseDraggingRef.current = false
+      if (wasDragging) {
+        clearSelectionTimer()
+        checkSelection(e instanceof MouseEvent ? e : null)
+      }
+    }
+
+    const handleDirectMouseUp = (e: MouseEvent) => {
+      if ((e.buttons & 1) === 1) return
+      isMouseDraggingRef.current = false
+      clearSelectionTimer()
+      checkSelection(e)
+    }
+
+    const handleWindowBlur = () => {
+      isMouseDraggingRef.current = false
+      clearSelectionTimer()
+    }
+
     const handleSelectionChange = () => {
-      if (popupInteractingRef.current) return
-      if (selectionTimer) clearTimeout(selectionTimer)
+      if (popupInteractingRef.current || isMouseDraggingRef.current) {
+        clearSelectionTimer()
+        return
+      }
+      clearSelectionTimer()
       selectionTimer = setTimeout(() => {
-        if (popupInteractingRef.current) return
+        selectionTimer = undefined
+        if (popupInteractingRef.current || isMouseDraggingRef.current) return
         checkSelection(null)
       }, 300)
     }
@@ -542,7 +606,15 @@ export default function LearningChat({
         popupReleaseTimerRef.current = null
       }, 80)
     }
+    document.addEventListener('mousedown', handleMouseDown, true)
+    document.addEventListener('pointerdown', handlePointerDown, true)
+    document.addEventListener('mouseup', handleDirectMouseUp)
     document.addEventListener('selectionchange', handleSelectionChange)
+    window.addEventListener('mouseup', finishMouseDrag, true)
+    window.addEventListener('pointerup', finishMouseDrag, true)
+    window.addEventListener('pointercancel', finishMouseDrag, true)
+    window.addEventListener('dragend', finishMouseDrag, true)
+    window.addEventListener('blur', handleWindowBlur)
     window.addEventListener('pointerup', schedulePopupRelease)
     window.addEventListener('pointercancel', schedulePopupRelease)
     window.addEventListener('touchend', schedulePopupRelease)
@@ -550,14 +622,22 @@ export default function LearningChat({
     window.addEventListener('mouseup', schedulePopupRelease)
 
     return () => {
-      document.removeEventListener('mouseup', checkSelection)
+      isMouseDraggingRef.current = false
+      document.removeEventListener('mousedown', handleMouseDown, true)
+      document.removeEventListener('pointerdown', handlePointerDown, true)
+      document.removeEventListener('mouseup', handleDirectMouseUp)
       document.removeEventListener('selectionchange', handleSelectionChange)
+      window.removeEventListener('mouseup', finishMouseDrag, true)
+      window.removeEventListener('pointerup', finishMouseDrag, true)
+      window.removeEventListener('pointercancel', finishMouseDrag, true)
+      window.removeEventListener('dragend', finishMouseDrag, true)
+      window.removeEventListener('blur', handleWindowBlur)
       window.removeEventListener('pointerup', schedulePopupRelease)
       window.removeEventListener('pointercancel', schedulePopupRelease)
       window.removeEventListener('touchend', schedulePopupRelease)
       window.removeEventListener('touchcancel', schedulePopupRelease)
       window.removeEventListener('mouseup', schedulePopupRelease)
-      if (selectionTimer) clearTimeout(selectionTimer)
+      clearSelectionTimer()
       if (popupReleaseTimerRef.current) {
         clearTimeout(popupReleaseTimerRef.current)
         popupReleaseTimerRef.current = null
@@ -1031,7 +1111,7 @@ export default function LearningChat({
   return (
     <div className="learning-chat bg-[var(--color-surface)]" id="learning-chat">
       {/* ── Header ── */}
-      <div className="learning-chat-header border-b border-[var(--color-line)] bg-[var(--color-surface)] px-3 py-2 sm:px-4 sm:py-2.5">
+      <div className="learning-chat-header border-b border-[var(--color-line)] bg-[var(--color-surface)] py-2 pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] sm:py-2.5 sm:pl-[max(1rem,env(safe-area-inset-left,0px))] sm:pr-[max(1rem,env(safe-area-inset-right,0px))]">
         <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-2">
           <span className="hide-on-mobile shrink-0">
             <KitAvatar size={20} state={isLoading ? 'thinking' : 'idle'} />
@@ -1371,7 +1451,7 @@ export default function LearningChat({
       </div>
 
       {/* ── Spacious Inviting Composer ── */}
-      <div className="learning-chat-input-area relative border-t border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3 sm:px-8">
+      <div className="learning-chat-input-area relative border-t border-[var(--color-line)] bg-[var(--color-surface)] py-3 pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))] sm:pl-[max(2rem,env(safe-area-inset-left,0px))] sm:pr-[max(2rem,env(safe-area-inset-right,0px))]">
         <div className="mx-auto w-full max-w-3xl">
           <InvitingComposer
             value={input}

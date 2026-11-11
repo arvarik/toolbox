@@ -66,7 +66,7 @@ function BottomSheetDrawer({
         aria-modal="true"
         aria-label={ariaLabel}
         data-testid={testId}
-        className="fixed right-0 bottom-0 left-0 z-[401] flex h-[82dvh] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-[var(--color-line-strong)] bg-[var(--color-surface)] pb-[env(safe-area-inset-bottom,0px)] shadow-[var(--shadow-float)]"
+        className="fixed right-0 bottom-0 left-0 z-[401] flex h-[82dvh] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-[var(--color-line-strong)] bg-[var(--color-surface)] pl-[env(safe-area-inset-left,0px)] pr-[env(safe-area-inset-right,0px)] pb-[env(safe-area-inset-bottom,0px)] shadow-[var(--shadow-float)]"
       >
         <div className="relative flex shrink-0 items-center justify-between px-4 pt-3 pb-2">
           <div className="mx-auto h-1 w-10 rounded-full bg-[var(--color-line-strong)]" />
@@ -135,12 +135,6 @@ export default function ChatPage() {
       setActiveStudyTopic({ pillar: p, topic: t })
     }
   }, [queryPillarId, queryTopicId, pillars])
-
-  useEffect(() => {
-    const handler = () => setTodoDrawerOpen(true)
-    window.addEventListener('toggle-study-plan', handler)
-    return () => window.removeEventListener('toggle-study-plan', handler)
-  }, [])
 
   const handleStudyTopic = useCallback(
     (pillar: Pillar, topic: Pillar['topics'][number]) => {
@@ -490,7 +484,7 @@ export default function ChatPage() {
       {!isMobile && inspectorOpen && (
         <aside
           data-testid="chat-notebook-inspector"
-          className="flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-[var(--color-line)] bg-[var(--color-surface-low)] xl:w-[380px]"
+          className="flex w-[340px] shrink-0 flex-col overflow-hidden border-l border-[var(--color-line)] bg-[var(--color-surface-low)] pr-[env(safe-area-inset-right,0px)] xl:w-[380px]"
         >
           {inspectorContent}
         </aside>

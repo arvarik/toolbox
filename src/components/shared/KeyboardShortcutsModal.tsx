@@ -69,7 +69,7 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
 
   return (
     <div
-      className="fixed inset-0 z-[400] flex items-center justify-center bg-black/50 px-4 backdrop-blur-[2px]"
+      className="fixed inset-0 z-[400] flex items-center justify-center bg-black/50 pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))] backdrop-blur-[2px]"
       onClick={onClose}
     >
       <div

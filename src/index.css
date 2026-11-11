@@ -260,11 +260,13 @@
   position: relative;
 }
 
-.app-content {
+.app-content,
+.main-content {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 /* Page transition */
@@ -286,8 +288,10 @@
 
 /* ---------- Sidebar ---------- */
 .sidebar {
-  width: var(--sidebar-width);
+  width: calc(var(--sidebar-width) + env(safe-area-inset-left, 0px));
   height: 100dvh;
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   background: var(--color-bg-secondary);
   border-right: 1px solid var(--color-border);
   display: flex;
@@ -299,7 +303,7 @@
 }
 
 .sidebar.collapsed {
-  width: var(--sidebar-collapsed-width);
+  width: calc(var(--sidebar-collapsed-width) + env(safe-area-inset-left, 0px));
 }
 
 .sidebar-header {
@@ -694,8 +698,10 @@ textarea.input {
 
 /* ---------- Chat Panel ---------- */
 .chat-panel {
-  width: var(--chat-panel-width);
+  width: calc(var(--chat-panel-width) + env(safe-area-inset-right, 0px));
   height: 100%;
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   background: var(--color-bg-secondary);
   border-left: 1px solid var(--color-border);
   display: flex;
@@ -869,6 +875,8 @@ textarea.input {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding-left: max(var(--space-2), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--space-2), env(safe-area-inset-right, 0px));
   z-index: var(--z-modal);
   animation: fadeIn var(--duration-normal) var(--ease-default);
 }
@@ -1575,7 +1583,9 @@ textarea.input {
   border-bottom: none;
   border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
   box-shadow: var(--shadow-xl);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   animation: model-picker-sheet-up var(--duration-normal) var(--ease-default);
 }
 
@@ -2064,8 +2074,8 @@ textarea.input {
 /* ---------- Toast / Notification ---------- */
 .toast-container {
   position: fixed;
-  bottom: var(--space-6);
-  right: var(--space-6);
+  bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  right: max(var(--space-6), env(safe-area-inset-right, 0px));
   z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
@@ -2291,8 +2301,8 @@ textarea.input {
     align-items: center;
     justify-content: space-between;
     gap: var(--space-1);
-    padding-left: var(--space-2);
-    padding-right: var(--space-2);
+    padding-left: max(var(--space-2), env(safe-area-inset-left, 0px));
+    padding-right: max(var(--space-2), env(safe-area-inset-right, 0px));
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border);
     backdrop-filter: blur(12px);
@@ -2344,10 +2354,11 @@ textarea.input {
     top: 0;
     left: 0;
     bottom: 0;
-    width: 280px;
+    width: calc(280px + env(safe-area-inset-left, 0px));
     max-width: calc(100vw - 40px);
     padding-top: env(safe-area-inset-top, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
     background: var(--color-bg-secondary);
     z-index: 210;
     transition: transform 0.3s ease;
@@ -2438,8 +2449,11 @@ textarea.input {
     padding-bottom: 0 !important;
   }
 
-  .app-content {
+  .app-content,
+  .main-content {
     height: calc(100dvh - var(--mobile-header-h));
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
 
   /* ---------- Chat Panel (Full-screen overlay) ---------- */
@@ -2456,6 +2470,8 @@ textarea.input {
     right: 0;
     bottom: 0;
     border-left: none;
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
     padding-bottom: env(safe-area-inset-bottom, 0px);
     animation: slideUp var(--duration-slow) var(--ease-default);
   }
@@ -2797,8 +2813,8 @@ textarea.input {
 
   /* ---------- Toast on Mobile ---------- */
   .toast-container {
-    right: var(--space-3) !important;
-    left: var(--space-3) !important;
+    right: max(var(--space-3), env(safe-area-inset-right, 0px)) !important;
+    left: max(var(--space-3), env(safe-area-inset-left, 0px)) !important;
     bottom: calc(var(--space-3) + 64px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
@@ -3087,6 +3103,8 @@ textarea.input {
   align-items: flex-start;
   justify-content: center;
   padding-top: 15vh;
+  padding-left: max(var(--space-3), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--space-3), env(safe-area-inset-right, 0px));
   animation: fadeIn var(--duration-fast) ease;
 }
 
@@ -3318,9 +3336,11 @@ textarea.input {
     gap: var(--space-3);
   }
 
-  /* Input area: tighter padding + safe-area bottom inset */
+  /* Input area: tighter padding + safe-area bottom & horizontal insets */
   .learning-chat-input-area {
-    padding: var(--space-2) var(--space-3) calc(var(--space-3) + env(safe-area-inset-bottom, 0px));
+    padding: var(--space-2) max(var(--space-3), env(safe-area-inset-right, 0px))
+      calc(var(--space-3) + env(safe-area-inset-bottom, 0px))
+      max(var(--space-3), env(safe-area-inset-left, 0px));
   }
 
   /* User message bubbles: wider */
@@ -3443,7 +3463,9 @@ textarea.input {
 
 /* Chat input */
 .learning-chat-input-area {
-  padding: var(--space-4) var(--space-6) calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
+  padding: var(--space-4) max(var(--space-6), env(safe-area-inset-right, 0px))
+    calc(var(--space-5) + env(safe-area-inset-bottom, 0px))
+    max(var(--space-6), env(safe-area-inset-left, 0px));
   border-top: 1px solid var(--color-border);
   flex-shrink: 0;
   background: var(--color-bg-secondary);
@@ -4154,6 +4176,9 @@ textarea.input {
   align-items: center;
   justify-content: center;
   overflow-y: auto;
-  padding: var(--space-4);
+  padding: max(var(--space-4), env(safe-area-inset-top, 0px))
+    max(var(--space-4), env(safe-area-inset-right, 0px))
+    max(var(--space-4), env(safe-area-inset-bottom, 0px))
+    max(var(--space-4), env(safe-area-inset-left, 0px));
 }
 

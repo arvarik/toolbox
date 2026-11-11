@@ -339,12 +339,13 @@
   top: 0;
   right: 0;
   bottom: 0;
-  width: 340px;
+  width: calc(340px + env(safe-area-inset-right, 0px));
   background: var(--color-surface);
   border-left: 1px solid var(--color-border);
   box-shadow: var(--shadow-xl);
   overflow-y: auto;
-  padding: var(--space-5);
+  padding: var(--space-5) max(var(--space-5), env(safe-area-inset-right, 0px))
+    calc(var(--space-5) + env(safe-area-inset-bottom, 0px)) var(--space-5);
   z-index: 20;
   animation: slideInRight var(--duration-normal) var(--ease-default);
 }
@@ -357,7 +358,7 @@
 .graph-panel-close {
   position: absolute;
   top: var(--space-3);
-  right: var(--space-3);
+  right: max(var(--space-3), env(safe-area-inset-right, 0px));
 }
 
 .graph-panel-loading {
@@ -530,8 +531,8 @@
 /* Track ribbon */
 .graph-track-ribbon {
   position: absolute;
-  left: var(--space-4);
-  bottom: var(--space-4);
+  left: max(var(--space-4), env(safe-area-inset-left, 0px));
+  bottom: max(var(--space-4), env(safe-area-inset-bottom, 0px));
   right: auto;
   max-width: 560px;
   display: flex;
@@ -691,7 +692,9 @@
     border-left: none;
     border-top: 1px solid var(--color-border-strong);
     border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
-    padding: var(--space-3) var(--space-4) calc(var(--space-5) + env(safe-area-inset-bottom, 0px));
+    padding: var(--space-3) max(var(--space-4), env(safe-area-inset-right, 0px))
+      calc(var(--space-5) + env(safe-area-inset-bottom, 0px))
+      max(var(--space-4), env(safe-area-inset-left, 0px));
     overscroll-behavior: contain;
     animation: graphSheetUp var(--duration-normal) var(--ease-default);
   }
@@ -700,12 +703,12 @@
     min-width: 44px;
     min-height: 44px;
     top: var(--space-2);
-    right: var(--space-2);
+    right: max(var(--space-2), env(safe-area-inset-right, 0px));
   }
 
   .graph-track-ribbon {
-    left: var(--space-2);
-    right: var(--space-2);
+    left: max(var(--space-2), env(safe-area-inset-left, 0px));
+    right: max(var(--space-2), env(safe-area-inset-right, 0px));
     bottom: calc(var(--space-2) + env(safe-area-inset-bottom, 0px));
     max-width: none;
     flex-wrap: wrap;

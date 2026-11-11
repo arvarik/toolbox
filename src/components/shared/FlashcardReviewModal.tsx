@@ -741,7 +741,9 @@ export default function FlashcardReviewModal({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: isMobile ? 0 : 'var(--space-4)',
+        padding: isMobile
+          ? 0
+          : 'max(var(--space-4), env(safe-area-inset-top, 0px)) max(var(--space-4), env(safe-area-inset-right, 0px)) max(var(--space-4), env(safe-area-inset-bottom, 0px)) max(var(--space-4), env(safe-area-inset-left, 0px))',
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget && !isSaving) onClose()
@@ -757,6 +759,8 @@ export default function FlashcardReviewModal({
           maxWidth: isMobile ? '100%' : 640,
           height: isMobile ? '100dvh' : 'auto',
           maxHeight: isMobile ? '100dvh' : '90dvh',
+          paddingLeft: isMobile ? 'env(safe-area-inset-left, 0px)' : undefined,
+          paddingRight: isMobile ? 'env(safe-area-inset-right, 0px)' : undefined,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',

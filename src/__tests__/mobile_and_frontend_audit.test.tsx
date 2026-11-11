@@ -230,7 +230,7 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
     )
 
     fireEvent.click(screen.getByTestId('review-scratchpad-toggle'))
-    const scratchpad = screen.getByTestId('review-scratchpad-input')
+    const scratchpad = screen.getByTestId('review-type-answer-input')
     expect(scratchpad.className).toContain('resize-y')
     expect(scratchpad.className).toContain('text-[16px]')
     fireEvent.change(scratchpad, { target: { value: 'Majority quorum overlap' } })
@@ -246,10 +246,12 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
     expect(easyBtn.className).toContain('min-h-[54px]')
 
     fireEvent.click(screen.getByTestId('grade-btn-good'))
-    expect(await screen.findByTestId('review-card-front')).toHaveTextContent(
-      'Define idempotency key.',
-    )
-    expect(screen.getByTestId('review-scratchpad-input')).toHaveValue('')
+    await waitFor(() => {
+      expect(screen.getByTestId('review-card-front')).toHaveTextContent(
+        'Define idempotency key.',
+      )
+    })
+    expect(screen.getByTestId('review-type-answer-input')).toHaveValue('')
   })
 
   it('switches mobile ChatPage cleanly between Topics sheet, Chat, and Context Notes sheet without per-token parent spam', async () => {
@@ -642,5 +644,227 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
     })
     expect(screen.getByRole('button', { name: 'Copied!' })).toBeInTheDocument()
     unmountPanel()
+  })
+
+  it('suppresses selection toolbars while primary mouse button is held mid-drag and reveals immediately on mouseup', async () => {
+    applyViewport(1280, false)
+    vi.useFakeTimers()
+
+    const { unmount: unmountProse } = render(
+      <HighlightableProse highlights={[]} onAddHighlight={vi.fn()} onAskKit={vi.fn()}>
+        <p data-testid="drag-prose">
+          Consistent hashing bounds key movement when cluster nodes join or leave.
+        </p>
+      </HighlightableProse>,
+    )
+
+    const proseEl = screen.getByTestId('drag-prose')
+    const textNode = proseEl.firstChild as Text
+    const range = document.createRange()
+    range.setStart(textNode, 0)
+    range.setEnd(textNode, 18)
+
+    // Start primary mouse drag -> selection changes while button is still held down
+    fireEvent.mouseDown(proseEl, { button: 0, buttons: 1 })
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    sel.addRange(range)
+
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(500)
+    })
+    expect(screen.queryByTestId('highlight-selection-toolbar')).toBeNull()
+
+    // Releasing mouse button immediately renders the highlight toolbar
+    fireEvent.mouseUp(proseEl, { button: 0, buttons: 0 })
+    expect(screen.getByTestId('highlight-selection-toolbar')).toBeInTheDocument()
+    sel.removeAllRanges()
+    unmountProse()
+
+    // Verify LearningChat #flashcard-popup also suppresses mid-mouse-drag and opens on mouseup
+    vi.useRealTimers()
+    const kit = makeTestKit({ slug: 'drag-kit', name: 'Drag Systems' })
+    resetKitStore(kit)
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
+      if (url.includes('/chat/sessions')) {
+        return new Response(
+          JSON.stringify({
+            'sess-drag': {
+              id: 'sess-drag',
+              name: 'Drag Session',
+              createdAt: 1000,
+              updatedAt: 2000,
+              messages: [
+                {
+                  role: 'assistant',
+                  content: 'Quorum intersection guarantees single-copy serializability.',
+                  timestamp: 1500,
+                },
+              ],
+            },
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        )
+      }
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    })
+
+    const { unmount: unmountChat } = render(
+      <MemoryRouter>
+        <LearningChat activeTopic={null} routeKitSlug="drag-kit" />
+      </MemoryRouter>,
+    )
+
+    const msgEl = await screen.findByText(/Quorum intersection guarantees/i)
+    vi.useFakeTimers()
+
+    const fakeRange = {
+      getBoundingClientRect: () => ({
+        left: 80,
+        top: 180,
+        right: 280,
+        bottom: 202,
+        width: 200,
+        height: 22,
+        x: 80,
+        y: 180,
+        toJSON: () => ({}),
+      }),
+    } as unknown as Range
+
+    fireEvent.mouseDown(msgEl, { button: 0, buttons: 1 })
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      anchorNode: msgEl.firstChild ?? msgEl,
+      toString: () => 'Quorum intersection guarantees single-copy',
+      getRangeAt: () => fakeRange,
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection)
+
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(500)
+    })
+    expect(document.getElementById('flashcard-popup')).toBeNull()
+
+    fireEvent.mouseUp(msgEl, { button: 0, buttons: 0 })
+    expect(document.getElementById('flashcard-popup')).not.toBeNull()
+    unmountChat()
+  })
+
+  it('registers a single shared document selectionchange listener across 5 HighlightableProse instances and cleans up on unmount', () => {
+    vi.useFakeTimers()
+    const addSpy = vi.spyOn(document, 'addEventListener')
+    const removeSpy = vi.spyOn(document, 'removeEventListener')
+
+    const { unmount } = render(
+      <div>
+        {[0, 1, 2, 3, 4].map((idx) => (
+          <div key={idx} data-testid={`prose-slot-${idx}`}>
+            <HighlightableProse highlights={[]} onAddHighlight={vi.fn()} onAskKit={vi.fn()}>
+              <p data-testid={`prose-p-${idx}`}>
+                Instance {idx} explains Raft log replication invariants clearly.
+              </p>
+            </HighlightableProse>
+          </div>
+        ))}
+      </div>,
+    )
+
+    const selectionAddCalls = addSpy.mock.calls.filter(([type]) => type === 'selectionchange')
+    expect(selectionAddCalls).toHaveLength(1)
+
+    // Route selection to instance #1 -> only instance #1 renders toolbar
+    const sel = window.getSelection()!
+    const p1Text = screen.getByTestId('prose-p-1').firstChild as Text
+    const range1 = document.createRange()
+    range1.setStart(p1Text, 0)
+    range1.setEnd(p1Text, 18)
+    sel.removeAllRanges()
+    sel.addRange(range1)
+
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(200)
+    })
+    expect(screen.getAllByTestId('highlight-selection-toolbar')).toHaveLength(1)
+    expect(
+      within(screen.getByTestId('prose-slot-1')).getByTestId('highlight-selection-toolbar'),
+    ).toBeInTheDocument()
+
+    // Move selection to instance #3 -> instance #1 clears and only instance #3 renders toolbar
+    const p3Text = screen.getByTestId('prose-p-3').firstChild as Text
+    const range3 = document.createRange()
+    range3.setStart(p3Text, 0)
+    range3.setEnd(p3Text, 18)
+    sel.removeAllRanges()
+    sel.addRange(range3)
+
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(200)
+    })
+    expect(screen.getAllByTestId('highlight-selection-toolbar')).toHaveLength(1)
+    expect(
+      within(screen.getByTestId('prose-slot-1')).queryByTestId('highlight-selection-toolbar'),
+    ).toBeNull()
+    expect(
+      within(screen.getByTestId('prose-slot-3')).getByTestId('highlight-selection-toolbar'),
+    ).toBeInTheDocument()
+
+    sel.removeAllRanges()
+    unmount()
+
+    const selectionRemoveCalls = removeSpy.mock.calls.filter(([type]) => type === 'selectionchange')
+    expect(selectionRemoveCalls).toHaveLength(1)
+  })
+
+  it('applies landscape horizontal safe-area insets across chrome, drawers, sticky bars, and sheets', async () => {
+    const fs = await import('node:fs')
+    const indexCss = fs.readFileSync('src/index.css', 'utf8')
+    const graphCss = fs.readFileSync('src/components/graph/graph-flow.css', 'utf8')
+    const chatPageSrc = fs.readFileSync('src/pages/ChatPage.tsx', 'utf8')
+
+    // Dead toggle-study-plan listener removed from ChatPage
+    expect(chatPageSrc).not.toContain('toggle-study-plan')
+
+    // Mobile header, mobile drawer, layout containers, composer, model picker & toasts carry horizontal safe-area rules
+    expect(indexCss).toMatch(/\.mobile-header[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
+    expect(indexCss).toMatch(/\.mobile-header[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
+    expect(indexCss).toMatch(/\.mobile-drawer[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
+    expect(indexCss).toMatch(/\.sidebar[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
+    expect(indexCss).toMatch(/\.app-content,\s*\.main-content[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
+    expect(indexCss).toMatch(/\.learning-chat-input-area[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
+    expect(indexCss).toMatch(/\.learning-chat-input-area[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
+    expect(indexCss).toMatch(/\.model-picker-sheet[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
+    expect(indexCss).toMatch(/\.model-picker-sheet[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
+    expect(graphCss).toMatch(/\.graph-node-panel[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
+    expect(graphCss).toMatch(/\.graph-node-panel[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
+
+    // Component sticky grading bars, bottom sheets, modals, and TaskWorkingBar also apply horizontal safe-area insets
+    const studyPrimitivesSrc = fs.readFileSync('src/components/ui/StudyPrimitives.tsx', 'utf8')
+    const flashcardViewSrc = fs.readFileSync('src/components/study/FlashcardView.tsx', 'utf8')
+    const searchDialogSrc = fs.readFileSync('src/components/shared/SearchDialog.tsx', 'utf8')
+    const commitModalSrc = fs.readFileSync('src/components/chat/CommitModal.tsx', 'utf8')
+    const taskWorkingBarSrc = fs.readFileSync('src/components/shared/TaskWorkingBar.tsx', 'utf8')
+
+    for (const src of [
+      chatPageSrc,
+      studyPrimitivesSrc,
+      flashcardViewSrc,
+      searchDialogSrc,
+      commitModalSrc,
+      taskWorkingBarSrc,
+    ]) {
+      expect(src).toContain('safe-area-inset-left')
+      expect(src).toContain('safe-area-inset-right')
+    }
   })
 })

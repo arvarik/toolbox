@@ -27,7 +27,7 @@ export default function TaskWorkingBar() {
       type="button"
       onClick={() => setMinimized(false)}
       aria-label={`${statusLabel} — ${topicName || 'Study session'}`}
-      className="task-working-bar animate-popover-enter fixed right-6 bottom-6 z-[900] flex min-h-[44px] max-w-[calc(100vw-32px)] cursor-pointer items-center gap-3 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-3.5 py-2 text-left text-[var(--color-ink)] shadow-[var(--shadow-float)] transition-[transform,background-color] duration-150 hover:bg-[var(--color-surface-hover)] active:scale-[0.98] max-md:right-1/2 max-md:bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] max-md:w-max max-md:translate-x-1/2"
+      className="task-working-bar animate-popover-enter fixed right-[max(1.5rem,env(safe-area-inset-right,0px))] bottom-[max(1.5rem,env(safe-area-inset-bottom,0px))] z-[900] flex min-h-[44px] max-w-[calc(100vw-32px-env(safe-area-inset-left,0px)-env(safe-area-inset-right,0px))] cursor-pointer items-center gap-3 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-3.5 py-2 text-left text-[var(--color-ink)] shadow-[var(--shadow-float)] transition-[transform,background-color] duration-150 hover:bg-[var(--color-surface-hover)] active:scale-[0.98] max-md:right-1/2 max-md:bottom-[calc(1rem+env(safe-area-inset-bottom,0px))] max-md:w-max max-md:translate-x-1/2"
     >
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] shadow-[var(--shadow-hairline)]">
         {isWorking ? (

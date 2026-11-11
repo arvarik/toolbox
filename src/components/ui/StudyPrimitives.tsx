@@ -688,7 +688,10 @@ export function AnkiCardStack({
         ) : (
           <div className="animate-card-flip mt-6 border-t border-[var(--color-line-strong)] pt-5">
             {typedDraft.trim() && (
-              <div className="mb-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-low)] px-3.5 py-2.5 text-[13px] whitespace-pre-wrap break-words text-[var(--color-ink-muted)]">
+              <div
+                data-testid="review-scratchpad-note"
+                className="mb-4 rounded-xl border border-[var(--color-line)] bg-[var(--color-surface-low)] px-3.5 py-2.5 text-[13px] whitespace-pre-wrap break-words text-[var(--color-ink-muted)]"
+              >
                 <span className="font-medium text-[var(--color-ink)]">Your recall:</span>{' '}
                 {typedDraft.trim()}
               </div>
@@ -708,7 +711,7 @@ export function AnkiCardStack({
               </div>
             )}
 
-            <div className="max-sm:sticky max-sm:bottom-0 max-sm:z-20 max-sm:-mx-6 max-sm:mt-5 max-sm:border-t max-sm:border-[var(--color-line)] max-sm:bg-[var(--color-surface-card)]/95 max-sm:px-3 max-sm:pt-2.5 max-sm:pb-[calc(0.625rem+env(safe-area-inset-bottom,0px))] max-sm:backdrop-blur-md">
+            <div className="max-sm:sticky max-sm:bottom-0 max-sm:z-20 max-sm:-mx-6 max-sm:mt-5 max-sm:border-t max-sm:border-[var(--color-line)] max-sm:bg-[var(--color-surface-card)]/95 max-sm:pt-2.5 max-sm:pb-[calc(0.625rem+env(safe-area-inset-bottom,0px))] max-sm:pl-[max(0.75rem,env(safe-area-inset-left,0px))] max-sm:pr-[max(0.75rem,env(safe-area-inset-right,0px))] max-sm:backdrop-blur-md">
               <AnkiGradeBar
                 intervals={intervals}
                 onRate={onRate}

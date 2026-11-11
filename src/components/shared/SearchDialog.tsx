@@ -342,7 +342,7 @@ export default function SearchDialog({ open, onClose }: SearchDialogProps) {
 
   return (
     <div
-      className="fixed inset-0 z-[400] flex items-start justify-center bg-black/50 px-3 pt-[max(0.75rem,env(safe-area-inset-top,0px))] backdrop-blur-[2px] sm:px-4 sm:pt-[13vh]"
+      className="fixed inset-0 z-[400] flex items-start justify-center bg-black/50 pl-[max(0.75rem,env(safe-area-inset-left,0px))] pr-[max(0.75rem,env(safe-area-inset-right,0px))] pt-[max(0.75rem,env(safe-area-inset-top,0px))] backdrop-blur-[2px] sm:pl-[max(1rem,env(safe-area-inset-left,0px))] sm:pr-[max(1rem,env(safe-area-inset-right,0px))] sm:pt-[13vh]"
       onClick={onClose}
       id="search-dialog"
     >

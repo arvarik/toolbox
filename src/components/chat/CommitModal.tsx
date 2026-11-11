@@ -303,7 +303,7 @@ export default function CommitModal() {
 
   return (
     <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[3px] max-md:items-end max-md:p-0"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 py-4 pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))] backdrop-blur-[3px] max-md:items-end max-md:p-0"
       onClick={(e) => {
         if (e.target === e.currentTarget && phase !== 'saving') handleCloseOrMinimize()
       }}
@@ -313,7 +313,7 @@ export default function CommitModal() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="commit-modal-title"
-        className="flex max-h-[90dvh] w-full max-w-[740px] flex-col overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] shadow-[var(--shadow-float)] max-md:rounded-b-none max-md:border-b-0"
+        className="flex max-h-[90dvh] w-full max-w-[740px] flex-col overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] shadow-[var(--shadow-float)] max-md:rounded-b-none max-md:border-b-0 max-md:pl-[env(safe-area-inset-left,0px)] max-md:pr-[env(safe-area-inset-right,0px)]"
       >
         {/* ── Header ── */}
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] px-4 py-3.5 sm:px-6 sm:py-4">
