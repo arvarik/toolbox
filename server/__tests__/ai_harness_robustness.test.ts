@@ -1004,6 +1004,72 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
       }),
     );
 
+    // Empty message array returns [] cleanly
+    expect(clampModelMessages([])).toEqual([]);
+
+    // Multi-part content array on current user turn stays intact under limit and throws 400 MESSAGE_TOO_LONG above limit
+    const multiPartUser: ModelMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "First part " + "p".repeat(1_000) },
+        { type: "text", text: "Second part" + trailingInstruction },
+      ],
+    };
+    const clampedMultiPart = clampModelMessages(
+      [{ role: "user", content: "Earlier question" }, multiPartUser],
+      10_000,
+    );
+    expect(clampedMultiPart).toHaveLength(2);
+    expect(clampedMultiPart[1]).toBe(multiPartUser);
+
+    const overLimitMultiPart: ModelMessage = {
+      role: "user",
+      content: [
+        { type: "text", text: "q".repeat(MAX_SINGLE_MESSAGE_CHARS + 50) },
+      ],
+    };
+    expect(() => clampModelMessages([overLimitMultiPart])).toThrowError(
+      expect.objectContaining({
+        statusCode: 400,
+        code: "MESSAGE_TOO_LONG",
+      }),
+    );
+
+    // Mid-tool-exchange budget trim strips orphaned leading `role: "tool"` and trailing `assistant` turns
+    // so providers never receive a conversation starting with a tool result without its assistant tool-call!
+    const toolExchangeMessages: ModelMessage[] = [
+      { role: "user", content: "Initial question " + "u".repeat(12_000) },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "tool-call",
+            toolCallId: "call_1",
+            toolName: "searchKit",
+            input: { query: "q".repeat(12_000) },
+          },
+        ],
+      },
+      {
+        role: "tool",
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: "call_1",
+            toolName: "searchKit",
+            output: { type: "text", value: "short result" },
+          },
+        ],
+      },
+      { role: "assistant", content: "Synthesized answer from tool" },
+      { role: "user", content: "Follow-up question" },
+    ];
+    const clampedToolExchange = clampModelMessages(toolExchangeMessages, 10_000);
+    expect(clampedToolExchange[0].role).toBe("user");
+    expect(clampedToolExchange).toEqual([
+      { role: "user", content: "Follow-up question" },
+    ]);
+
     // Multi-kit end-to-end check: system-design vs bayesian-ml prompts, commit create+merge, and </untrusted_submission> escaping
     const capturedBodies: Array<{
       system: string;

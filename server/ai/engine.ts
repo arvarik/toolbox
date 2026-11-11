@@ -229,8 +229,12 @@ export function clampModelMessages(
   kept.reverse();
 
   // Keep conversation starting on a user turn when older history was trimmed,
-  // so strict alternating providers (Gemini/Anthropic) never see a leading assistant turn.
-  while (kept.length > 1 && kept[0].role === "assistant") {
+  // so strict alternating providers (Gemini/Anthropic) and OpenAI tool-call pairing
+  // never see a leading assistant turn or an orphaned leading tool-result turn.
+  while (
+    kept.length > 1 &&
+    (kept[0].role === "assistant" || kept[0].role === "tool")
+  ) {
     kept.shift();
   }
   return kept;
