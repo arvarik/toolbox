@@ -12,41 +12,27 @@ const router = Router();
 router.get("/stats", (req, res) => {
   const scope = scopeOf(req);
   try {
-    const count = (sql: string) =>
-      (db.prepare(sql).get(scope.ownerId) as { c: number }).c;
-
-    const flashcardsCount = count(
-      "SELECT COUNT(*) as c FROM flashcards WHERE ownerId = ?",
-    );
-    const decksCount = count(
-      "SELECT COUNT(*) as c FROM decks WHERE ownerId = ?",
-    );
-    const boardsCount = count(
-      "SELECT COUNT(*) as c FROM boards WHERE ownerId = ?",
-    );
-    const guideCount = count(
-      "SELECT COUNT(*) as c FROM guide_content WHERE ownerId = ? AND content != ''",
-    );
-    const cachedStartersCount = count(
-      "SELECT COUNT(*) as c FROM chat_starters WHERE ownerId = ?",
-    );
-    const profileRow = db
+    const o = scope.ownerId;
+    const stats = db
       .prepare(
-        "SELECT profile_text FROM user_learning_profile WHERE ownerId = ?",
+        `SELECT
+           (SELECT COUNT(*) FROM flashcards WHERE ownerId = ?) as flashcardsCount,
+           (SELECT COUNT(*) FROM decks WHERE ownerId = ?) as decksCount,
+           (SELECT COUNT(*) FROM boards WHERE ownerId = ?) as boardsCount,
+           (SELECT COUNT(*) FROM guide_content WHERE ownerId = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != '') as guideCount,
+           (SELECT COUNT(*) FROM chat_starters WHERE ownerId = ?) as cachedStartersCount,
+           COALESCE((SELECT length(profile_text) FROM user_learning_profile WHERE ownerId = ?), 0) as profileSize`,
       )
-      .get(scope.ownerId) as { profile_text: string } | undefined;
-    const profileSize = profileRow?.profile_text
-      ? profileRow.profile_text.length
-      : 0;
+      .get(o, o, o, o, o, o) as {
+      flashcardsCount: number;
+      decksCount: number;
+      boardsCount: number;
+      guideCount: number;
+      cachedStartersCount: number;
+      profileSize: number;
+    };
 
-    res.json({
-      flashcardsCount,
-      decksCount,
-      boardsCount,
-      guideCount,
-      cachedStartersCount,
-      profileSize,
-    });
+    res.json(stats);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("[system] Error fetching stats:", msg);

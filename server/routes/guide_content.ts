@@ -14,6 +14,7 @@ const router = Router();
 
 const VALID_HIGHLIGHT_COLORS = new Set(["amber", "sage", "coral"]);
 const MAX_REF_ID_LEN = 200;
+const MAX_GUIDE_CONTENT_LEN = 200_000;
 
 function requireValidSlotRef(
   pillarId: unknown,
@@ -62,7 +63,7 @@ router.get("/export", (req, res) => {
       .prepare(
         `SELECT pillar_id, topic_id, section_id, content
          FROM guide_content
-         WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''`,
+         WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''`,
       )
       .all(scope.ownerId, kit.id) as Array<{
       pillar_id: string;
@@ -113,22 +114,19 @@ router.get("/progress", (req, res) => {
 
   const rows = db
     .prepare(
-      `SELECT pillar_id, topic_id, section_id, length(content) as len
+      `SELECT pillar_id, topic_id, section_id
        FROM guide_content
-       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''`,
+       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''`,
     )
     .all(scope.ownerId, kit.id) as Array<{
     pillar_id: string;
     topic_id: string;
     section_id: string;
-    len: number;
   }>;
 
   const filled: Record<string, boolean> = {};
   for (const row of rows) {
-    if (row.len > 0) {
-      filled[`${row.pillar_id}__${row.topic_id}__${row.section_id}`] = true;
-    }
+    filled[`${row.pillar_id}__${row.topic_id}__${row.section_id}`] = true;
   }
   res.json(filled);
 });
@@ -176,30 +174,33 @@ router.post("/dogears/toggle", (req, res) => {
     false,
   );
 
-  const existing = db
-    .prepare(
-      `SELECT created_at FROM guide_dogears
-       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
-    )
-    .get(scope.ownerId, kit.id, pillarId, topicId, sec) as
-    | { created_at: string | null }
-    | undefined;
+  const result = db.transaction(() => {
+    const existing = db
+      .prepare(
+        `SELECT created_at FROM guide_dogears
+         WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+      )
+      .get(scope.ownerId, kit.id, pillarId, topicId, sec) as
+      | { created_at: string | null }
+      | undefined;
 
-  if (existing) {
+    if (existing) {
+      db.prepare(
+        `DELETE FROM guide_dogears
+         WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+      ).run(scope.ownerId, kit.id, pillarId, topicId, sec);
+      return { dogeared: false, createdAt: null };
+    }
+
+    const now = new Date().toISOString();
     db.prepare(
-      `DELETE FROM guide_dogears
-       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
-    ).run(scope.ownerId, kit.id, pillarId, topicId, sec);
-    res.json({ dogeared: false, createdAt: null });
-    return;
-  }
+      `INSERT INTO guide_dogears (ownerId, kit_id, pillar_id, topic_id, section_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(scope.ownerId, kit.id, pillarId, topicId, sec, now);
+    return { dogeared: true, createdAt: now };
+  })();
 
-  const now = new Date().toISOString();
-  db.prepare(
-    `INSERT INTO guide_dogears (ownerId, kit_id, pillar_id, topic_id, section_id, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(scope.ownerId, kit.id, pillarId, topicId, sec, now);
-  res.json({ dogeared: true, createdAt: now });
+  res.json(result);
 });
 
 router.get("/highlights", (req, res) => {
@@ -467,7 +468,12 @@ router.put("/resume", (req, res) => {
 router.get("/:pillarId/:topicId", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { pillarId, topicId } = req.params;
+  const { pillarId, topicId } = requireValidSlotRef(
+    req.params.pillarId,
+    req.params.topicId,
+    "",
+    false,
+  );
 
   const rows = db
     .prepare(
@@ -495,7 +501,12 @@ router.get("/:pillarId/:topicId", (req, res) => {
 router.get("/:pillarId/:topicId/:sectionId", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { pillarId, topicId, sectionId } = req.params;
+  const { pillarId, topicId, sectionId } = requireValidSlotRef(
+    req.params.pillarId,
+    req.params.topicId,
+    req.params.sectionId,
+    true,
+  );
 
   const row = db
     .prepare(
@@ -519,12 +530,21 @@ router.put(
   asyncHandler(async (req, res) => {
     const scope = scopeOf(req);
     const kit = resolveActiveKit(req, db, scope);
-    const { pillarId, topicId, sectionId } = req.params;
-    const { content } = req.body as { content?: string };
+    const { pillarId, topicId, sectionId } = requireValidSlotRef(
+      req.params.pillarId,
+      req.params.topicId,
+      req.params.sectionId,
+      true,
+    );
+    const { content } = req.body as { content?: unknown };
 
     if (content === undefined || typeof content !== "string") {
-      res.status(400).json({ message: "content is required" });
-      return;
+      throw new ValidationError("content is required");
+    }
+    if (content.length > MAX_GUIDE_CONTENT_LEN) {
+      throw new ValidationError(
+        `content exceeds maximum length of ${MAX_GUIDE_CONTENT_LEN} characters`,
+      );
     }
 
     db.prepare(
@@ -554,7 +574,12 @@ router.put(
 router.delete("/:pillarId/:topicId/:sectionId", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { pillarId, topicId, sectionId } = req.params;
+  const { pillarId, topicId, sectionId } = requireValidSlotRef(
+    req.params.pillarId,
+    req.params.topicId,
+    req.params.sectionId,
+    true,
+  );
 
   db.prepare(
     `DELETE FROM guide_content

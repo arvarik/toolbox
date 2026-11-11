@@ -58,6 +58,7 @@ import {
   calculateNextSrsState,
   getCardPreviews,
   parseDeckSettings,
+  parseUtcTimestampMs,
   retrievability,
   type DeckSettings,
 } from "../srs/scheduler.ts";
@@ -114,7 +115,7 @@ interface JoinedDeckRow {
   kit_name: string;
 }
 
-function liveCardRetrievability(card: {
+export function liveCardRetrievability(card: {
   state?: number | null;
   stability?: number | null;
   last_reviewed?: string | null;
@@ -122,17 +123,18 @@ function liveCardRetrievability(card: {
   interval?: number | null;
 }): number {
   if ((card.state ?? 0) === 0) return 0;
+  const nowMs = Date.now();
   const stability = card.stability ?? 0;
   if (stability > 0 && card.last_reviewed) {
-    const elapsedDays = Math.max(
-      0,
-      (Date.now() - new Date(card.last_reviewed).getTime()) / DAY_MS,
-    );
-    return Math.round(retrievability(elapsedDays, stability) * 1000) / 1000;
+    const lastMs = parseUtcTimestampMs(card.last_reviewed);
+    if (Number.isFinite(lastMs)) {
+      const elapsedDays = Math.max(0, (nowMs - lastMs) / DAY_MS);
+      return Math.round(retrievability(elapsedDays, stability) * 1000) / 1000;
+    }
   }
-  return !card.next_review || new Date(card.next_review).getTime() >= Date.now()
-    ? 0.9
-    : 0.5;
+  if (!card.next_review) return 0.9;
+  const nextMs = parseUtcTimestampMs(card.next_review);
+  return Number.isFinite(nextMs) && nextMs >= nowMs ? 0.9 : 0.5;
 }
 
 function collectDueCards(
@@ -263,7 +265,7 @@ function computeKitPathPayload(scope: Scope, kitDetail: OwnedKitDetail) {
     .prepare(
       `SELECT pillar_id, topic_id, section_id
        FROM guide_content
-       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''`,
+       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''`,
     )
     .all(scope.ownerId, kitDetail.id) as Array<{
     pillar_id: string;
@@ -480,7 +482,7 @@ function renderKitGuideMarkdown(scope: Scope, kitDetail: OwnedKitDetail): string
     .prepare(
       `SELECT pillar_id, topic_id, section_id, content
        FROM guide_content
-       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''`,
+       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''`,
     )
     .all(scope.ownerId, kitDetail.id) as Array<{
     pillar_id: string;
@@ -1336,7 +1338,8 @@ function registerToolboxPrompts(server: McpServer, scope: Scope): void {
           .prepare(
             `SELECT pillar_id, topic_id, section_id, content
              FROM guide_content
-             WHERE ownerId = ? AND kit_id = ? AND (? IS NULL OR topic_id = ?) AND content != ''
+             WHERE ownerId = ? AND kit_id = ? AND (? IS NULL OR topic_id = ?)
+               AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''
              LIMIT ?`,
           )
           .all(

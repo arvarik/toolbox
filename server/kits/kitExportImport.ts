@@ -391,11 +391,13 @@ export async function exportKitBackupZip(
   scope: Scope,
   slugOrId: string,
 ): Promise<{ filename: string; buffer: Buffer }> {
-  const { skeleton } = exportKitMode1(db, scope, slugOrId, { includeGuideNotes: false });
-  const kit = getOwnedKit(db, scope, slugOrId);
+  const rawKit = requireRawOwnedKit(db, scope, slugOrId);
+  const skeleton = snapshotSkeletonFromOwnedKit(db, scope, rawKit, {
+    includeGuideNotes: false,
+  });
 
   const allKitRows = (sql: string) =>
-    db.prepare(sql).all(scope.ownerId, kit.id) as Array<Record<string, unknown>>;
+    db.prepare(sql).all(scope.ownerId, rawKit.id) as Array<Record<string, unknown>>;
 
   const guideRows = allKitRows(
     "SELECT pillar_id, topic_id, section_id, content, committed_at FROM guide_content WHERE ownerId = ? AND kit_id = ?",
@@ -407,9 +409,6 @@ export async function exportKitBackupZip(
     `SELECT id, pillar_id, topic_id, section_id, quote, prefix, suffix, color, note, card_id, created_at, updated_at
      FROM guide_highlights WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC`,
   );
-  const kitMetaRow = db
-    .prepare("SELECT last_guide_ref FROM kits WHERE ownerId = ? AND id = ?")
-    .get(scope.ownerId, kit.id) as { last_guide_ref?: string | null } | undefined;
   const starterRows = allKitRows(
     "SELECT pillar_id, topic_id, suggestions, content_hash, updated_at FROM chat_starters WHERE ownerId = ? AND kit_id = ?",
   );
@@ -455,7 +454,7 @@ export async function exportKitBackupZip(
   const ns = (v: unknown) => (v as string | null) ?? null;
   const nn = (v: unknown) => (v !== null && v !== undefined ? Number(v) : null);
 
-  const kitRoot = kitUploadsDir(scope.ownerId, kit.id);
+  const kitRoot = kitUploadsDir(scope.ownerId, rawKit.id);
   const fileEntries: ZipCreateEntry[] = [];
   const exportedSources: KitBackupUserdataV1["sources"] = [];
 
@@ -498,7 +497,7 @@ export async function exportKitBackupZip(
     format: "toolbox-kit-userdata",
     schemaVersion: 1,
     exportedAt: new Date().toISOString(),
-    originalKitId: kit.id,
+    originalKitId: rawKit.id,
     guideContent: guideRows.map((r) => ({
       pillarId: s(r.pillar_id),
       topicId: s(r.topic_id),
@@ -529,7 +528,7 @@ export async function exportKitBackupZip(
       createdAt: ns(h.created_at),
       updatedAt: ns(h.updated_at),
     })),
-    lastGuideRef: ns(kitMetaRow?.last_guide_ref ?? null),
+    lastGuideRef: ns(rawKit.last_guide_ref ?? null),
     chatStarters: starterRows.map((r) => ({
       pillarId: s(r.pillar_id),
       topicId: s(r.topic_id),
@@ -649,7 +648,7 @@ export async function exportKitBackupZip(
     ...fileEntries,
   ]);
 
-  return { filename: `${kit.slug}.toolbox-backup.zip`, buffer };
+  return { filename: `${rawKit.slug}.toolbox-backup.zip`, buffer };
 }
 
 function isAllowedBackupEntryPath(name: string): boolean {
@@ -696,6 +695,25 @@ export async function importKitBackupZip(
     );
   }
   const userdata = userdataParse.data;
+
+  const assertUniqueIds = <T extends { id: string }>(items: T[], label: string): void => {
+    const seen = new Set<string>();
+    for (const item of items) {
+      if (seen.has(item.id)) {
+        throw new ValidationError(`Duplicate ${label} id in userdata.json: ${item.id}`);
+      }
+      seen.add(item.id);
+    }
+  };
+  assertUniqueIds(userdata.decks, "deck");
+  assertUniqueIds(userdata.flashcards, "flashcard");
+  assertUniqueIds(userdata.drills, "drill");
+  assertUniqueIds(userdata.drillAttempts, "drillAttempt");
+  assertUniqueIds(userdata.boards, "board");
+  assertUniqueIds(userdata.chatSessions, "chatSession");
+  assertUniqueIds(userdata.sources, "source");
+  assertUniqueIds(userdata.sourceChunks, "sourceChunk");
+  assertUniqueIds(userdata.guideHighlights, "guideHighlight");
 
   // Verify closed allowlist: every binary file entry must match a declared source in userdata.sources
   const declaredEntries = new Map<string, { oldSourceId: string; safeBasename: string }>();
@@ -816,10 +834,20 @@ export async function importKitBackupZip(
            created_at, updated_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
       );
+      const seenCardSeedKeys = new Set<string>();
       for (const c of userdata.flashcards) {
         const newCardId = cardIdMap.get(c.id);
         const newDeckId = deckIdMap.get(c.deckId);
         if (!newCardId || !newDeckId) continue;
+        let safeSeedKey = c.seedKey;
+        if (safeSeedKey !== null) {
+          const compositeSeed = `${newDeckId}\0${safeSeedKey}`;
+          if (seenCardSeedKeys.has(compositeSeed)) {
+            safeSeedKey = null;
+          } else {
+            seenCardSeedKeys.add(compositeSeed);
+          }
+        }
         insCard.run(
           newCardId,
           scope.ownerId,
@@ -839,7 +867,7 @@ export async function importKitBackupZip(
           c.sourceTopicId,
           c.sourceSectionId,
           c.isReverse,
-          c.seedKey,
+          safeSeedKey,
           c.stability,
           c.difficulty,
           c.lapses,
@@ -894,7 +922,16 @@ export async function importKitBackupZip(
            hints_json, worked_solution, rubric_json, seed_key, created_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')))`,
       );
+      const seenDrillSeedKeys = new Set<string>();
       for (const dr of userdata.drills) {
+        let safeSeedKey = dr.seedKey;
+        if (safeSeedKey !== null) {
+          if (seenDrillSeedKeys.has(safeSeedKey)) {
+            safeSeedKey = null;
+          } else {
+            seenDrillSeedKeys.add(safeSeedKey);
+          }
+        }
         insDrill.run(
           drillIdMap.get(dr.id)!,
           scope.ownerId,
@@ -905,7 +942,7 @@ export async function importKitBackupZip(
           dr.hintsJson,
           dr.workedSolution,
           dr.rubricJson,
-          dr.seedKey,
+          safeSeedKey,
           dr.createdAt,
         );
       }

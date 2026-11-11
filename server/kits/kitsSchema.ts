@@ -29,6 +29,7 @@ const RAG_TABLES_DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_rag_chunks_owner_kit ON rag_chunks(ownerId, kit_id, kind);
   CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(ownerId, kit_id, kind, source_ref_id);
+  DROP INDEX IF EXISTS idx_rag_chunks_missing_emb;
 
   CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
     chunk_id UNINDEXED,
@@ -349,7 +350,51 @@ function createV2Tables(db: Database.Database): void {
       updated_at TEXT DEFAULT (datetime('now'))
     );
   `);
+  ensureV2Indexes(db);
   db.exec(RAG_TABLES_DDL);
+}
+
+function ensureV2Indexes(db: Database.Database): void {
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_shared_kits_publisher
+      ON shared_kits(publisher_user_id);
+    CREATE INDEX IF NOT EXISTS idx_kits_forked_shared
+      ON kits(forked_from_shared_id);
+    CREATE INDEX IF NOT EXISTS idx_guide_dogears_owner_kit_created
+      ON guide_dogears(ownerId, kit_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_guide_highlights_owner_kit_created
+      ON guide_highlights(ownerId, kit_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_guide_highlights_card
+      ON guide_highlights(card_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_seed_key
+      ON flashcards(ownerId, deck_id, seed_key) WHERE seed_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_drills_seed_key
+      ON drills(ownerId, kit_id, seed_key) WHERE seed_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_flashcards_owner_deck_due
+      ON flashcards(ownerId, deck_id, state, next_review);
+    CREATE INDEX IF NOT EXISTS idx_flashcards_owner_deck_reviewed
+      ON flashcards(ownerId, deck_id, last_reviewed);
+    CREATE INDEX IF NOT EXISTS idx_flashcards_owner_deck_pos
+      ON flashcards(ownerId, deck_id, position, created_at);
+    CREATE INDEX IF NOT EXISTS idx_remediation_card
+      ON remediation_queue(card_id);
+    CREATE INDEX IF NOT EXISTS idx_remediation_owner_kit
+      ON remediation_queue(ownerId, kit_id);
+    CREATE INDEX IF NOT EXISTS idx_remediation_owner_kit_open
+      ON remediation_queue(ownerId, kit_id) WHERE resolved_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_drills_owner_kit_node_diff
+      ON drills(ownerId, kit_id, node_id, difficulty, created_at);
+    CREATE INDEX IF NOT EXISTS idx_drill_attempts_owner_drill
+      ON drill_attempts(ownerId, drill_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_boards_owner_kit_pos
+      ON boards(ownerId, kit_id, position, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_chat_sessions_owner_kit_updated
+      ON chat_sessions(ownerId, kit_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_kit_sources_owner_kit
+      ON kit_sources(ownerId, kit_id);
+    CREATE INDEX IF NOT EXISTS idx_kit_source_chunks_owner_kit_src
+      ON kit_source_chunks(ownerId, kit_id, source_id);
+  `);
 }
 
 const loadedVecDbs = new WeakSet<Database.Database>();
@@ -413,20 +458,8 @@ function ensureV2ColumnMigrations(db: Database.Database): void {
     );
     CREATE INDEX IF NOT EXISTS idx_guide_highlights_owner_kit_topic
       ON guide_highlights(ownerId, kit_id, pillar_id, topic_id);
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_seed_key
-      ON flashcards(ownerId, deck_id, seed_key) WHERE seed_key IS NOT NULL;
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_drills_seed_key
-      ON drills(ownerId, kit_id, seed_key) WHERE seed_key IS NOT NULL;
-    CREATE INDEX IF NOT EXISTS idx_flashcards_owner_deck_due
-      ON flashcards(ownerId, deck_id, state, next_review);
-    CREATE INDEX IF NOT EXISTS idx_drill_attempts_owner_drill
-      ON drill_attempts(ownerId, drill_id, created_at);
-    CREATE INDEX IF NOT EXISTS idx_kit_sources_owner_kit
-      ON kit_sources(ownerId, kit_id);
-    CREATE INDEX IF NOT EXISTS idx_kit_source_chunks_owner_kit_src
-      ON kit_source_chunks(ownerId, kit_id, source_id);
   `);
+  ensureV2Indexes(db);
   db.exec(RAG_TABLES_DDL);
 }
 
@@ -779,19 +812,31 @@ export function initKitsSchema(db: Database.Database): void {
   }
   ensureV2ColumnMigrations(db);
 
-  const ownedCounts = (ownerId: string) => {
-    const count = (sql: string) => (db.prepare(sql).get(ownerId) as { c: number }).c;
-    return {
-      kits: count("SELECT COUNT(*) as c FROM kits WHERE ownerId = ?"),
-      decks: count("SELECT COUNT(*) as c FROM decks WHERE ownerId = ?"),
-      flashcards: count("SELECT COUNT(*) as c FROM flashcards WHERE ownerId = ?"),
-      guideSections: count(
-        "SELECT COUNT(*) as c FROM guide_content WHERE ownerId = ? AND content != ''",
-      ),
-      boards: count("SELECT COUNT(*) as c FROM boards WHERE ownerId = ?"),
-      chatSessions: count("SELECT COUNT(*) as c FROM chat_sessions WHERE ownerId = ?"),
+  const ownedCountsStmt = db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM kits WHERE ownerId = ?) AS kits,
+      (SELECT COUNT(*) FROM decks WHERE ownerId = ?) AS decks,
+      (SELECT COUNT(*) FROM flashcards WHERE ownerId = ?) AS flashcards,
+      (SELECT COUNT(*) FROM guide_content WHERE ownerId = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != '') AS guideSections,
+      (SELECT COUNT(*) FROM boards WHERE ownerId = ?) AS boards,
+      (SELECT COUNT(*) FROM chat_sessions WHERE ownerId = ?) AS chatSessions
+  `);
+  const ownedCounts = (ownerId: string) =>
+    ownedCountsStmt.get(
+      ownerId,
+      ownerId,
+      ownerId,
+      ownerId,
+      ownerId,
+      ownerId,
+    ) as {
+      kits: number;
+      decks: number;
+      flashcards: number;
+      guideSections: number;
+      boards: number;
+      chatSessions: number;
     };
-  };
 
   registerOwnerDataHooks({
     countedTables: [
@@ -819,32 +864,36 @@ export function initKitsSchema(db: Database.Database): void {
       };
       addGroup("SELECT ownerId, COUNT(*) as c FROM flashcards GROUP BY ownerId");
       addGroup(
-        "SELECT ownerId, COUNT(*) as c FROM guide_content WHERE content != '' GROUP BY ownerId",
+        "SELECT ownerId, COUNT(*) as c FROM guide_content WHERE content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != '' GROUP BY ownerId",
       );
       return map;
     },
     ownedCounts,
     purgeOwnerData: (ownerId: string) => {
-      // Explicit cleanup alongside ON DELETE CASCADE for thoroughness.
-      db.prepare("DELETE FROM rag_chunks_fts WHERE ownerTok = ?").run(ownerTokFor(ownerId));
       if (hasTable(db, "rag_chunks_vec")) {
         ensureVecExtensionLoaded(db);
-        const ids = db
-          .prepare("SELECT chunk_id FROM rag_chunks WHERE ownerId = ?")
-          .all(ownerId) as Array<{ chunk_id: string }>;
-        const delVec = db.prepare(
-          "DELETE FROM rag_chunks_vec WHERE ownerId = ? AND chunk_id = ?",
-        );
-        for (const r of ids) delVec.run(ownerId, r.chunk_id);
-        db.prepare("DELETE FROM rag_chunks_vec WHERE ownerId = ?").run(ownerId);
       }
-      db.prepare("DELETE FROM rag_chunks WHERE ownerId = ?").run(ownerId);
-      db.prepare("DELETE FROM guide_highlights WHERE ownerId = ?").run(ownerId);
-      db.prepare("DELETE FROM guide_dogears WHERE ownerId = ?").run(ownerId);
-      db.prepare("DELETE FROM kits WHERE ownerId = ?").run(ownerId);
-      db.prepare("DELETE FROM study_sessions WHERE ownerId = ?").run(ownerId);
-      db.prepare("DELETE FROM user_learning_profile WHERE ownerId = ?").run(ownerId);
-      db.prepare("DELETE FROM user_ai_settings WHERE ownerId = ?").run(ownerId);
+      db.transaction(() => {
+        // Explicit cleanup alongside ON DELETE CASCADE for thoroughness.
+        db.prepare("DELETE FROM rag_chunks_fts WHERE ownerTok = ?").run(ownerTokFor(ownerId));
+        if (hasTable(db, "rag_chunks_vec")) {
+          const ids = db
+            .prepare("SELECT chunk_id FROM rag_chunks WHERE ownerId = ?")
+            .all(ownerId) as Array<{ chunk_id: string }>;
+          const delVec = db.prepare(
+            "DELETE FROM rag_chunks_vec WHERE ownerId = ? AND chunk_id = ?",
+          );
+          for (const r of ids) delVec.run(ownerId, r.chunk_id);
+          db.prepare("DELETE FROM rag_chunks_vec WHERE ownerId = ?").run(ownerId);
+        }
+        db.prepare("DELETE FROM rag_chunks WHERE ownerId = ?").run(ownerId);
+        db.prepare("DELETE FROM guide_highlights WHERE ownerId = ?").run(ownerId);
+        db.prepare("DELETE FROM guide_dogears WHERE ownerId = ?").run(ownerId);
+        db.prepare("DELETE FROM kits WHERE ownerId = ?").run(ownerId);
+        db.prepare("DELETE FROM study_sessions WHERE ownerId = ?").run(ownerId);
+        db.prepare("DELETE FROM user_learning_profile WHERE ownerId = ?").run(ownerId);
+        db.prepare("DELETE FROM user_ai_settings WHERE ownerId = ?").run(ownerId);
+      })();
     },
   });
 }
@@ -855,6 +904,14 @@ export interface ActiveKitContext {
   skeleton: KitSkeletonV1;
 }
 
+function parseKitSkeletonSafe(skeletonJson: string): KitSkeletonV1 {
+  try {
+    return JSON.parse(skeletonJson) as KitSkeletonV1;
+  } catch {
+    return SYSTEM_DESIGN_KIT_SKELETON;
+  }
+}
+
 /**
  * Ensures the caller owns a `system-design` Kit (forked lazily from Official Shared Kits)
  * and returns its ID and parsed skeleton. Used by v1 routes until `/k/:slug` lands in M2.
@@ -863,20 +920,19 @@ export function ensureDefaultSystemDesignKit(
   db: Database.Database,
   scope: Scope,
 ): ActiveKitContext {
-  const existing = db
-    .prepare(
-      "SELECT id, slug, skeleton_json FROM kits WHERE ownerId = ? AND slug = 'system-design'",
-    )
-    .get(scope.ownerId) as { id: string; slug: string; skeleton_json: string } | undefined;
+  const selectExisting = db.prepare(
+    "SELECT id, slug, skeleton_json FROM kits WHERE ownerId = ? AND slug = 'system-design'",
+  );
+  const existing = selectExisting.get(scope.ownerId) as
+    | { id: string; slug: string; skeleton_json: string }
+    | undefined;
 
   if (existing) {
-    let skeleton = SYSTEM_DESIGN_KIT_SKELETON;
-    try {
-      skeleton = JSON.parse(existing.skeleton_json) as KitSkeletonV1;
-    } catch {
-      // Fallback to canonical skeleton if corrupted
-    }
-    return { id: existing.id, slug: existing.slug, skeleton };
+    return {
+      id: existing.id,
+      slug: existing.slug,
+      skeleton: parseKitSkeletonSafe(existing.skeleton_json),
+    };
   }
 
   const id = crypto.randomUUID();
@@ -885,23 +941,39 @@ export function ensureDefaultSystemDesignKit(
     .prepare("SELECT id, latest_version FROM shared_kits WHERE slug = 'system-design'")
     .get() as { id: string; latest_version: number } | undefined;
 
-  db.prepare(
-    `INSERT INTO kits (
-       id, ownerId, slug, name, description, icon, color, status,
-       skeleton_json, forked_from_shared_id, forked_version, created_at, updated_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, datetime('now'), datetime('now'))`,
-  ).run(
-    id,
-    scope.ownerId,
-    identity.slug,
-    identity.name,
-    identity.description,
-    identity.icon,
-    identity.color,
-    JSON.stringify(SYSTEM_DESIGN_KIT_SKELETON),
-    shared?.id ?? null,
-    shared?.latest_version ?? 1,
-  );
+  const info = db
+    .prepare(
+      `INSERT INTO kits (
+         id, ownerId, slug, name, description, icon, color, status,
+         skeleton_json, forked_from_shared_id, forked_version, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, datetime('now'), datetime('now'))
+       ON CONFLICT(ownerId, slug) DO NOTHING`,
+    )
+    .run(
+      id,
+      scope.ownerId,
+      identity.slug,
+      identity.name,
+      identity.description,
+      identity.icon,
+      identity.color,
+      JSON.stringify(SYSTEM_DESIGN_KIT_SKELETON),
+      shared?.id ?? null,
+      shared?.latest_version ?? 1,
+    );
+
+  if (info.changes === 0) {
+    const raced = selectExisting.get(scope.ownerId) as
+      | { id: string; slug: string; skeleton_json: string }
+      | undefined;
+    if (raced) {
+      return {
+        id: raced.id,
+        slug: raced.slug,
+        skeleton: parseKitSkeletonSafe(raced.skeleton_json),
+      };
+    }
+  }
 
   return { id, slug: identity.slug, skeleton: SYSTEM_DESIGN_KIT_SKELETON };
 }

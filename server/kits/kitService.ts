@@ -96,6 +96,8 @@ export interface SharedKitSummary {
   id: string;
   slug: string;
   publisherUserId: string | null;
+  authorId: string | null;
+  authorName: string;
   latestVersion: number;
   name: string;
   description: string;
@@ -104,6 +106,11 @@ export interface SharedKitSummary {
   tags: string[];
   isOfficial: boolean;
   downloadsCount: number;
+  pillarCount: number;
+  topicCount: number;
+  nodeCount: number;
+  starterCardCount: number;
+  starterDrillCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -349,7 +356,7 @@ export function seedKitStarterContent(
          ON CONFLICT(ownerId, kit_id, pillar_id, topic_id, section_id) DO UPDATE SET
            content = excluded.content,
            committed_at = excluded.committed_at
-         WHERE guide_content.content IS NULL OR guide_content.content = ''`,
+         WHERE guide_content.content IS NULL OR trim(guide_content.content, ' ' || char(9) || char(10) || char(13)) = ''`,
       );
       for (const note of skeleton.seeds.baselineGuideNotes) {
         if (!note.content.trim()) continue;
@@ -411,7 +418,7 @@ function hydrateKitSummary(
         .prepare(
           `SELECT pillar_id, topic_id, section_id
            FROM guide_content
-           WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''`,
+           WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''`,
         )
         .all(scope.ownerId, row.id) as Array<{
         pillar_id: string;
@@ -589,7 +596,7 @@ export function listOwnedKits(db: Database.Database, scope: Scope): OwnedKitSumm
     .prepare(
       `SELECT kit_id, pillar_id, topic_id, section_id
        FROM guide_content
-       WHERE ownerId = ? AND content IS NOT NULL AND content != ''`,
+       WHERE ownerId = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''`,
     )
     .all(scope.ownerId) as Array<{
     kit_id: string;
@@ -749,7 +756,7 @@ export function getArchivedGuideNotes(
     .prepare(
       `SELECT pillar_id, topic_id, section_id, content, committed_at
        FROM guide_content
-       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''
+       WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''
        ORDER BY committed_at DESC`,
     )
     .all(scope.ownerId, current.id) as Array<{
@@ -894,30 +901,182 @@ interface RawSharedKitRow {
   downloads_count: number;
   created_at: string;
   updated_at: string;
+  publisher_username?: string | null;
+  publisher_display_name?: string | null;
+}
+
+export interface SharedSkeletonCounts {
+  author: string | null;
+  pillarCount: number;
+  topicCount: number;
+  nodeCount: number;
+  starterCardCount: number;
+  starterDrillCount: number;
+}
+
+const ZERO_SKELETON_COUNTS: SharedSkeletonCounts = Object.freeze({
+  author: null,
+  pillarCount: 0,
+  topicCount: 0,
+  nodeCount: 0,
+  starterCardCount: 0,
+  starterDrillCount: 0,
+});
+
+const SHARED_KIT_CACHE_MAX = 500;
+const sharedKitCountsCacheByDb = new WeakMap<
+  Database.Database,
+  Map<string, SharedSkeletonCounts>
+>();
+const parsedTagsCache = new Map<string, readonly string[]>();
+
+function setBoundedCache<K, V>(
+  cache: Map<K, V>,
+  key: K,
+  value: V,
+  maxEntries = SHARED_KIT_CACHE_MAX,
+): void {
+  if (cache.has(key)) {
+    cache.delete(key);
+  } else if (cache.size >= maxEntries) {
+    const oldest = cache.keys().next().value;
+    if (oldest !== undefined) cache.delete(oldest);
+  }
+  cache.set(key, value);
+}
+
+function getSharedKitCountsCache(
+  db: Database.Database,
+): Map<string, SharedSkeletonCounts> {
+  let cache = sharedKitCountsCacheByDb.get(db);
+  if (!cache) {
+    cache = new Map<string, SharedSkeletonCounts>();
+    sharedKitCountsCacheByDb.set(db, cache);
+  }
+  return cache;
+}
+
+function sharedKitCacheKey(row: {
+  id: string;
+  latest_version: number;
+  updated_at: string;
+}): string {
+  return `${row.id}:${row.latest_version}:${row.updated_at}`;
+}
+
+export function computeSkeletonCounts(
+  rawSkeleton: string | null | undefined,
+): SharedSkeletonCounts {
+  if (typeof rawSkeleton !== "string" || !rawSkeleton.trim()) {
+    return ZERO_SKELETON_COUNTS;
+  }
+  try {
+    const parsed = JSON.parse(rawSkeleton) as unknown;
+    if (!parsed || typeof parsed !== "object") return ZERO_SKELETON_COUNTS;
+    const obj = parsed as Record<string, unknown>;
+
+    const identity =
+      obj.identity && typeof obj.identity === "object"
+        ? (obj.identity as Record<string, unknown>)
+        : null;
+    const author =
+      typeof identity?.author === "string" && identity.author.trim()
+        ? identity.author.trim()
+        : null;
+
+    const pillars = Array.isArray(obj.pillars) ? obj.pillars : null;
+    const pillarCount = pillars ? pillars.length : 0;
+    let topicCount = 0;
+    if (pillars) {
+      for (const p of pillars) {
+        if (p && typeof p === "object") {
+          const topics = (p as Record<string, unknown>).topics;
+          if (Array.isArray(topics)) topicCount += topics.length;
+        }
+      }
+    }
+
+    const graph =
+      obj.graph && typeof obj.graph === "object"
+        ? (obj.graph as Record<string, unknown>)
+        : null;
+    const nodeCount = Array.isArray(graph?.nodes) ? graph.nodes.length : 0;
+
+    const seeds =
+      obj.seeds && typeof obj.seeds === "object"
+        ? (obj.seeds as Record<string, unknown>)
+        : null;
+    const starterDeck =
+      seeds?.starterDeck && typeof seeds.starterDeck === "object"
+        ? (seeds.starterDeck as Record<string, unknown>)
+        : null;
+    const starterCardCount = Array.isArray(starterDeck?.cards)
+      ? starterDeck.cards.length
+      : Array.isArray(seeds?.cards)
+        ? seeds.cards.length
+        : 0;
+    const starterDrillCount = Array.isArray(seeds?.drills) ? seeds.drills.length : 0;
+
+    return {
+      author,
+      pillarCount,
+      topicCount,
+      nodeCount,
+      starterCardCount,
+      starterDrillCount,
+    };
+  } catch {
+    return ZERO_SKELETON_COUNTS;
+  }
 }
 
 function parseTags(raw: string): string[] {
+  if (!raw || raw === "[]") return [];
+  const cached = parsedTagsCache.get(raw);
+  if (cached) return [...cached];
   try {
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((t): t is string => typeof t === "string") : [];
+    const clean = Array.isArray(parsed)
+      ? parsed.filter((t): t is string => typeof t === "string")
+      : [];
+    setBoundedCache(parsedTagsCache, raw, clean);
+    return [...clean];
   } catch {
+    setBoundedCache(parsedTagsCache, raw, []);
     return [];
   }
 }
 
-function mapSharedKitRow(row: RawSharedKitRow): SharedKitSummary {
+function mapSharedKitRow(
+  row: RawSharedKitRow,
+  counts: SharedSkeletonCounts,
+): SharedKitSummary {
+  const isOfficial = row.is_official === 1;
+  const authorName =
+    counts.author ||
+    row.publisher_display_name?.trim() ||
+    row.publisher_username?.trim() ||
+    (isOfficial ? "Toolbox Official" : "Community");
+
   return {
     id: row.id,
     slug: row.slug,
     publisherUserId: row.publisher_user_id,
+    authorId: row.publisher_user_id,
+    authorName,
     latestVersion: row.latest_version,
     name: row.name,
     description: row.description,
     icon: row.icon,
     color: row.color,
     tags: parseTags(row.tags),
-    isOfficial: row.is_official === 1,
+    isOfficial,
     downloadsCount: row.downloads_count,
+    pillarCount: counts.pillarCount,
+    topicCount: counts.topicCount,
+    nodeCount: counts.nodeCount,
+    starterCardCount: counts.starterCardCount,
+    starterDrillCount: counts.starterDrillCount,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -929,35 +1088,91 @@ export function listSharedKits(
 ): SharedKitSummary[] {
   const rows = db
     .prepare(
-      `SELECT * FROM shared_kits
-       ORDER BY is_official DESC, downloads_count DESC, updated_at DESC`,
+      `SELECT sk.id, sk.slug, sk.publisher_user_id, sk.latest_version, sk.name,
+              sk.description, sk.icon, sk.color, sk.tags, sk.is_official,
+              sk.downloads_count, sk.created_at, sk.updated_at,
+              u.username as publisher_username, u.displayName as publisher_display_name
+       FROM shared_kits sk
+       LEFT JOIN users u ON u.id = sk.publisher_user_id
+       ORDER BY sk.is_official DESC, sk.downloads_count DESC, sk.updated_at DESC`,
     )
     .all() as RawSharedKitRow[];
+
+  const countsCache = getSharedKitCountsCache(db);
+  const misses = rows.filter((r) => !countsCache.has(sharedKitCacheKey(r)));
+
+  if (misses.length > 0) {
+    const skeletonByKey = new Map<string, string>();
+    for (let i = 0; i < misses.length; i += 250) {
+      const chunk = misses.slice(i, i + 250);
+      const placeholders = chunk.map(() => "(?, ?)").join(", ");
+      const params: Array<string | number> = [];
+      for (const m of chunk) {
+        params.push(m.id, m.latest_version);
+      }
+      const verRows = db
+        .prepare(
+          `SELECT shared_kit_id, version, skeleton_json
+           FROM shared_kit_versions
+           WHERE (shared_kit_id, version) IN (VALUES ${placeholders})`,
+        )
+        .all(...params) as Array<{
+        shared_kit_id: string;
+        version: number;
+        skeleton_json: string;
+      }>;
+      for (const v of verRows) {
+        skeletonByKey.set(`${v.shared_kit_id}:${v.version}`, v.skeleton_json);
+      }
+    }
+
+    for (const m of misses) {
+      const rawSkel = skeletonByKey.get(`${m.id}:${m.latest_version}`);
+      setBoundedCache(
+        countsCache,
+        sharedKitCacheKey(m),
+        computeSkeletonCounts(rawSkel),
+      );
+    }
+  }
 
   const term = query.q?.trim().toLowerCase() ?? "";
   const tagFilter = query.tag?.trim().toLowerCase() ?? "";
 
-  return rows.map(mapSharedKitRow).filter((item) => {
-    if (tagFilter && !item.tags.some((t) => t.toLowerCase() === tagFilter)) return false;
-    if (!term) return true;
-    return (
-      item.name.toLowerCase().includes(term) ||
-      item.description.toLowerCase().includes(term) ||
-      item.slug.toLowerCase().includes(term) ||
-      item.tags.some((t) => t.toLowerCase().includes(term))
-    );
-  });
+  return rows
+    .map((r) =>
+      mapSharedKitRow(
+        r,
+        countsCache.get(sharedKitCacheKey(r)) ?? ZERO_SKELETON_COUNTS,
+      ),
+    )
+    .filter((item) => {
+      if (tagFilter && !item.tags.some((t) => t.toLowerCase() === tagFilter)) return false;
+      if (!term) return true;
+      return (
+        item.name.toLowerCase().includes(term) ||
+        item.description.toLowerCase().includes(term) ||
+        item.slug.toLowerCase().includes(term) ||
+        item.authorName.toLowerCase().includes(term) ||
+        item.tags.some((t) => t.toLowerCase().includes(term))
+      );
+    });
 }
 
 export function getSharedKitBySlug(db: Database.Database, slug: string): SharedKitDetail {
-  const row = db.prepare("SELECT * FROM shared_kits WHERE slug = ?").get(slug) as
-    | RawSharedKitRow
-    | undefined;
+  const row = db
+    .prepare(
+      `SELECT sk.*, u.username as publisher_username, u.displayName as publisher_display_name
+       FROM shared_kits sk
+       LEFT JOIN users u ON u.id = sk.publisher_user_id
+       WHERE sk.slug = ?`,
+    )
+    .get(slug) as RawSharedKitRow | undefined;
   if (!row) throw new NotFoundError("Shared Kit", slug);
 
   const versions = db
     .prepare(
-      `SELECT version, changelog, skeleton_json, created_at
+      `SELECT version, changelog, created_at
        FROM shared_kit_versions
        WHERE shared_kit_id = ?
        ORDER BY version DESC`,
@@ -965,20 +1180,29 @@ export function getSharedKitBySlug(db: Database.Database, slug: string): SharedK
     .all(row.id) as Array<{
     version: number;
     changelog: string;
-    skeleton_json: string;
     created_at: string;
   }>;
 
   if (versions.length === 0) throw new NotFoundError("Shared Kit version", slug);
 
+  const latestRaw = db
+    .prepare(
+      `SELECT skeleton_json
+       FROM shared_kit_versions
+       WHERE shared_kit_id = ? AND version = ?`,
+    )
+    .get(row.id, versions[0].version) as { skeleton_json: string } | undefined;
+
+  const counts = computeSkeletonCounts(latestRaw?.skeleton_json);
+  const skeleton = parseStoredSkeleton(latestRaw?.skeleton_json ?? "");
   return {
-    ...mapSharedKitRow(row),
+    ...mapSharedKitRow(row, counts),
     versions: versions.map((v) => ({
       version: v.version,
       changelog: v.changelog,
       createdAt: v.created_at,
     })),
-    skeleton: parseStoredSkeleton(versions[0].skeleton_json),
+    skeleton,
   };
 }
 
@@ -997,7 +1221,7 @@ export function snapshotSkeletonFromOwnedKit(
       .prepare(
         `SELECT pillar_id, topic_id, section_id, content
          FROM guide_content
-         WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''
+         WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''
          ORDER BY pillar_id, topic_id, section_id`,
       )
       .all(scope.ownerId, kit.id) as Array<{

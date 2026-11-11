@@ -14,6 +14,7 @@ import { computeGraphHealth, type HealthCardRow } from "../graph/health.ts";
 import {
   getCardPreviews,
   parseDeckSettings,
+  parseUtcTimestampMs,
   type DeckSettings,
 } from "../srs/scheduler.ts";
 import logger from "../utils/logger.ts";
@@ -81,7 +82,9 @@ function loadDeckIndex(
 function isStudyableNow(card: GraphCardRow, now: Date = new Date()): boolean {
   const state = card.state || 0;
   if (state === 0) return true;
-  return !card.next_review || new Date(card.next_review) <= now;
+  if (!card.next_review) return true;
+  const nextMs = parseUtcTimestampMs(card.next_review);
+  return !Number.isFinite(nextMs) || nextMs <= now.getTime();
 }
 
 function toSessionCard(
@@ -236,7 +239,7 @@ router.get("/nodes/:id", (req, res) => {
         const filled = (
           db
             .prepare(
-              "SELECT COUNT(*) AS count FROM guide_content WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND content != ''",
+              "SELECT COUNT(*) AS count FROM guide_content WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''",
             )
             .get(scope.ownerId, kit.id, node.pillarId, node.topicId) as {
             count: number;

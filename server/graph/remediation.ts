@@ -10,6 +10,7 @@ import {
   type CardForNodeMatching,
 } from "../../shared/kits/kitSkeleton.ts";
 import { SYSTEM_DESIGN_KIT_SKELETON } from "../../shared/kits/systemDesignKit.ts";
+import { parseUtcTimestampMs } from "../srs/scheduler.ts";
 
 export const MAX_REMEDIATION_CARDS = 3;
 export const MAX_CARDS_PER_LAPSE = MAX_REMEDIATION_CARDS;
@@ -53,7 +54,8 @@ export function isShaky(
   const ease = card.ease_factor ?? 2.5;
   if (ease < SHAKY_EASE) return true;
   if ((card.interval || 0) < SHAKY_INTERVAL_DAYS) return true;
-  if (card.next_review && new Date(card.next_review) <= now) return true;
+  const nextMs = parseUtcTimestampMs(card.next_review);
+  if (Number.isFinite(nextMs) && nextMs <= now.getTime()) return true;
   return false;
 }
 
@@ -61,9 +63,9 @@ function byWeakness(a: RemediationCardRow, b: RemediationCardRow): number {
   const easeA = a.ease_factor ?? 2.5;
   const easeB = b.ease_factor ?? 2.5;
   if (easeA !== easeB) return easeA - easeB;
-  const nextA = a.next_review ? Date.parse(a.next_review) : 0;
-  const nextB = b.next_review ? Date.parse(b.next_review) : 0;
-  return nextA - nextB;
+  const nextA = parseUtcTimestampMs(a.next_review);
+  const nextB = parseUtcTimestampMs(b.next_review);
+  return (Number.isFinite(nextA) ? nextA : 0) - (Number.isFinite(nextB) ? nextB : 0);
 }
 
 export function planRemediation(
@@ -164,13 +166,14 @@ function enqueueRemediation(
     `INSERT INTO remediation_queue (ownerId, kit_id, card_id, source_card_id, node_id, node_name, reason)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
+  const cardById = new Map(cards.map((c) => [c.id, c]));
   const queued: QueuedRemediationItem[] = [];
   for (const item of plan) {
     if (hasOpenRow.get(scope.ownerId, item.cardId)) continue;
     insert.run(scope.ownerId, kitId, item.cardId, sourceRefId, item.nodeId, item.nodeName, item.reason);
     queued.push({
       cardId: item.cardId,
-      front: cards.find((c) => c.id === item.cardId)?.front || "",
+      front: cardById.get(item.cardId)?.front || "",
       nodeId: item.nodeId,
       nodeName: item.nodeName,
       reason: item.reason,
@@ -191,9 +194,11 @@ export function queueLapseRemediation(
 ): Array<Omit<QueuedRemediationItem, "nodeId">> {
   const cards = kitRemediationCards(db, scope, kit.id);
   const plan = planRemediation(card, cards, kit.skeleton.graph);
-  return enqueueRemediation(db, scope, kit.id, card.id, plan, cards).map(
-    ({ nodeId: _nodeId, ...item }) => item,
-  );
+  if (plan.length === 0) return [];
+  const inserted = db.transaction(() =>
+    enqueueRemediation(db, scope, kit.id, card.id, plan, cards),
+  )();
+  return inserted.map(({ nodeId: _nodeId, ...item }) => item);
 }
 
 /**

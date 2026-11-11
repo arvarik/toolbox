@@ -6,7 +6,7 @@ import {
   type CardForNodeMatching,
 } from "../../shared/kits/kitSkeleton.ts";
 import { SYSTEM_DESIGN_KIT_SKELETON } from "../../shared/kits/systemDesignKit.ts";
-import { retrievability } from "../srs/scheduler.ts";
+import { parseUtcTimestampMs, retrievability } from "../srs/scheduler.ts";
 
 export const MASTERED_MIN_EASE = 2.5;
 export const MASTERED_MIN_INTERVAL_DAYS = 21;
@@ -77,7 +77,8 @@ export function cardStatus(
   if (state === 3) return "lapsed";
   const ease = card.ease_factor ?? 2.5;
   if (ease < FRAGILE_EASE) return "lapsed";
-  if (card.next_review && new Date(card.next_review) <= now) return "due";
+  const nextMs = parseUtcTimestampMs(card.next_review);
+  if (Number.isFinite(nextMs) && nextMs <= now.getTime()) return "due";
   if (
     ease >= MASTERED_MIN_EASE &&
     (card.interval || 0) > MASTERED_MIN_INTERVAL_DAYS
@@ -97,12 +98,12 @@ export function cardStrength(
       typeof nowOrMs === "number" ? nowOrMs : nowOrMs.getTime();
     let elapsedDays = 0;
     if (card.last_reviewed) {
-      const lastMs = Date.parse(card.last_reviewed);
+      const lastMs = parseUtcTimestampMs(card.last_reviewed);
       if (Number.isFinite(lastMs)) {
         elapsedDays = Math.max(0, (nowMs - lastMs) / DAY_MS);
       }
     } else if (card.next_review) {
-      const nextMs = Date.parse(card.next_review);
+      const nextMs = parseUtcTimestampMs(card.next_review);
       if (Number.isFinite(nextMs)) {
         const daysUntilDue = (nextMs - nowMs) / DAY_MS;
         elapsedDays = Math.max(0, (card.interval || 0) - daysUntilDue);
@@ -137,17 +138,18 @@ export function nodeHealth(
   let scoreSum = 0;
   let hasRemediation = false;
   let dueSoon = false;
-  const soonCutoff = new Date(now.getTime() + DUE_SOON_HOURS * 3600 * 1000);
+  const soonCutoffMs = now.getTime() + DUE_SOON_HOURS * 3600 * 1000;
 
   for (const card of cards) {
     const status = cardStatus(card, now);
     counts[status] += 1;
     scoreSum += cardStrength(card, now);
     if (remediationCardIds.has(card.id)) hasRemediation = true;
+    const nextMs = parseUtcTimestampMs(card.next_review);
     if (
       (card.state === 2 || card.state === 1 || card.state === 3) &&
-      card.next_review &&
-      new Date(card.next_review) <= soonCutoff
+      Number.isFinite(nextMs) &&
+      nextMs <= soonCutoffMs
     ) {
       dueSoon = true;
     }

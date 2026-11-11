@@ -12,6 +12,7 @@ import {
   nextIntervalDays,
   nextRecallStability,
   parseDeckSettings,
+  parseUtcTimestampMs,
   retrievability,
 } from "../srs/scheduler.ts";
 
@@ -155,12 +156,12 @@ export function applyImplicitPrerequisiteCredit(
       const { stability: s, difficulty: d } = bootstrapSm2Card(card);
       let elapsedDays = s;
       if (card.last_reviewed) {
-        const parsed = Date.parse(card.last_reviewed);
+        const parsed = parseUtcTimestampMs(card.last_reviewed);
         if (Number.isFinite(parsed)) {
           elapsedDays = Math.max(0, (nowMs - parsed) / DAY_MS);
         }
       } else if (card.next_review) {
-        const nextMs = Date.parse(card.next_review);
+        const nextMs = parseUtcTimestampMs(card.next_review);
         if (Number.isFinite(nextMs)) {
           const daysUntilDue = (nextMs - nowMs) / DAY_MS;
           elapsedDays = Math.max(0, (card.interval || s) - daysUntilDue);
@@ -183,7 +184,7 @@ export function applyImplicitPrerequisiteCredit(
 
       const candidateNextMs = nowMs + newInterval * DAY_MS;
       const existingNextMs = card.next_review
-        ? Date.parse(card.next_review)
+        ? parseUtcTimestampMs(card.next_review)
         : 0;
       const finalNextMs = Number.isFinite(existingNextMs)
         ? Math.max(existingNextMs, candidateNextMs)
@@ -220,10 +221,17 @@ export function creditReviewedCard(
   kit: Pick<ActiveKitContext, "id" | "skeleton">,
   card: CardForNodeMatching & { id: string },
 ): number {
+  const matchedNodes = nodesForCard(card, kit.skeleton.graph.nodes);
+  if (matchedNodes.length === 0) return 0;
   const creditedIds = new Set<string>();
-  for (const nodeId of nodesForCard(card, kit.skeleton.graph.nodes)) {
-    const credit = applyImplicitPrerequisiteCredit(db, scope, kit, { nodeId, excludeCardId: card.id });
-    for (const id of credit.updatedCardIds) creditedIds.add(id);
-  }
+  db.transaction(() => {
+    for (const nodeId of matchedNodes) {
+      const credit = applyImplicitPrerequisiteCredit(db, scope, kit, {
+        nodeId,
+        excludeCardId: card.id,
+      });
+      for (const id of credit.updatedCardIds) creditedIds.add(id);
+    }
+  })();
   return creditedIds.size;
 }

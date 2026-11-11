@@ -1,9 +1,11 @@
 import { Router } from "express";
 import db from "../db.ts";
+import { ValidationError } from "../platform/net/errors.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
 import logger from "../utils/logger.ts";
 
 const router = Router();
+const MAX_PROFILE_TEXT_LEN = 50_000;
 
 router.get("/", (req, res) => {
   const scope = scopeOf(req);
@@ -23,11 +25,15 @@ router.get("/", (req, res) => {
 
 router.put("/", (req, res) => {
   const scope = scopeOf(req);
-  const { profileText } = req.body as { profileText?: unknown };
+  const { profileText } = (req.body ?? {}) as { profileText?: unknown };
 
   if (typeof profileText !== "string") {
-    res.status(400).json({ message: "profileText must be a string" });
-    return;
+    throw new ValidationError("profileText must be a string");
+  }
+  if (profileText.length > MAX_PROFILE_TEXT_LEN) {
+    throw new ValidationError(
+      `profileText cannot exceed ${MAX_PROFILE_TEXT_LEN} characters`,
+    );
   }
 
   try {

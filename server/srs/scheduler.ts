@@ -71,6 +71,47 @@ function clamp(min: number, max: number, value: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+export function parseUtcTimestampMs(raw: string | null | undefined): number {
+  if (!raw || typeof raw !== "string") return NaN;
+  const trimmed = raw.trim();
+  if (!trimmed) return NaN;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(trimmed)) {
+    return Date.parse(`${trimmed.replace(" ", "T")}Z`);
+  }
+  return Date.parse(trimmed);
+}
+
+function toFiniteOrUndefined(val: unknown): number | undefined {
+  if (typeof val === "number") return Number.isFinite(val) ? val : undefined;
+  if (typeof val === "string" && val.trim() !== "") {
+    const n = Number(val.trim());
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+function sanitizeFiniteInt(
+  val: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const n = toFiniteOrUndefined(val);
+  if (n === undefined) return fallback;
+  return clamp(min, max, Math.trunc(n));
+}
+
+function sanitizeFiniteFloat(
+  val: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const n = toFiniteOrUndefined(val);
+  if (n === undefined) return fallback;
+  return clamp(min, max, n);
+}
+
 export function clampDesiredRetention(value: number | undefined | null): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0.9;
   return clamp(0.75, 0.97, value);
@@ -79,25 +120,88 @@ export function clampDesiredRetention(value: number | undefined | null): number 
 export function parseDeckSettings(
   settingsJson: string | null | undefined,
 ): DeckSettings {
-  let settings: DeckSettings = { ...DEFAULT_DECK_SETTINGS };
+  let raw: Record<string, unknown> = {};
   if (settingsJson) {
     try {
-      const parsed = JSON.parse(settingsJson) as Partial<DeckSettings>;
-      settings = { ...settings, ...parsed };
+      const parsed = JSON.parse(settingsJson) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        raw = parsed as Record<string, unknown>;
+      }
     } catch {
       // Malformed settings — fall back to defaults
     }
   }
-  settings.desired_retention = clampDesiredRetention(
-    settings.desired_retention,
-  );
-  if (!settings.steps && settings.learning_steps) {
-    settings.steps = settings.learning_steps;
-  }
-  if (!settings.lapse_steps && settings.relearning_steps) {
-    settings.lapse_steps = settings.relearning_steps;
-  }
-  return settings;
+  const stepsRaw =
+    typeof raw.steps === "string" && raw.steps.trim()
+      ? raw.steps.trim()
+      : typeof raw.learning_steps === "string" && raw.learning_steps.trim()
+        ? raw.learning_steps.trim()
+        : DEFAULT_DECK_SETTINGS.steps;
+  const lapseStepsRaw =
+    typeof raw.lapse_steps === "string" && raw.lapse_steps.trim()
+      ? raw.lapse_steps.trim()
+      : typeof raw.relearning_steps === "string" && raw.relearning_steps.trim()
+        ? raw.relearning_steps.trim()
+        : DEFAULT_DECK_SETTINGS.lapse_steps;
+
+  return {
+    ...DEFAULT_DECK_SETTINGS,
+    new_limit: sanitizeFiniteInt(
+      raw.new_limit,
+      DEFAULT_DECK_SETTINGS.new_limit,
+      0,
+      10_000,
+    ),
+    review_limit: sanitizeFiniteInt(
+      raw.review_limit,
+      DEFAULT_DECK_SETTINGS.review_limit,
+      0,
+      10_000,
+    ),
+    steps: stepsRaw,
+    lapse_steps: lapseStepsRaw,
+    learning_steps: stepsRaw,
+    relearning_steps: lapseStepsRaw,
+    easy_bonus: sanitizeFiniteFloat(
+      raw.easy_bonus,
+      DEFAULT_DECK_SETTINGS.easy_bonus,
+      1.0,
+      10.0,
+    ),
+    desired_retention: clampDesiredRetention(
+      toFiniteOrUndefined(raw.desired_retention),
+    ),
+    graduating_interval: sanitizeFiniteInt(
+      raw.graduating_interval,
+      DEFAULT_DECK_SETTINGS.graduating_interval!,
+      1,
+      365,
+    ),
+    easy_interval: sanitizeFiniteInt(
+      raw.easy_interval,
+      DEFAULT_DECK_SETTINGS.easy_interval!,
+      1,
+      365,
+    ),
+    starting_ease: sanitizeFiniteFloat(
+      raw.starting_ease,
+      DEFAULT_DECK_SETTINGS.starting_ease!,
+      1.3,
+      5.0,
+    ),
+    interval_modifier: sanitizeFiniteFloat(
+      raw.interval_modifier,
+      DEFAULT_DECK_SETTINGS.interval_modifier!,
+      0.1,
+      10.0,
+    ),
+    hard_interval: sanitizeFiniteFloat(
+      raw.hard_interval,
+      DEFAULT_DECK_SETTINGS.hard_interval!,
+      1.0,
+      10.0,
+    ),
+  };
 }
 
 export function retrievability(
@@ -229,6 +333,7 @@ export function qualityToFsrsGrade(
   quality: number,
   confidence?: string | null,
 ): FsrsGrade {
+  if (!Number.isFinite(quality)) return 1;
   // "low" is what the web app and the MCP tool send for a guess.
   const guessed = confidence === "guessed" || confidence === "low";
   const effective = guessed && quality > 3 ? 3 : quality;
@@ -238,20 +343,42 @@ export function qualityToFsrsGrade(
   return 4;
 }
 
-function parseStepsMinutes(raw: string | undefined, fallback: number[]): number[] {
-  if (!raw || !raw.trim()) return fallback;
+export function parseStepsMinutes(raw: string | undefined, fallback: number[]): number[] {
+  if (typeof raw !== "string" || !raw.trim()) return fallback;
   const parsed = raw
     .trim()
-    .split(/\s+/)
+    .split(/[\s,]+/)
     .map((token) => {
-      const val = parseFloat(token);
+      const lower = token.trim().toLowerCase();
+      if (!lower) return NaN;
+      const val = parseFloat(lower);
       if (!Number.isFinite(val) || val <= 0) return NaN;
-      if (token.endsWith("d")) return Math.round(val * 24 * 60);
-      if (token.endsWith("h")) return Math.round(val * 60);
-      return Math.max(1, Math.round(val));
+      if (lower.endsWith("d")) return Math.round(val * 24 * 60);
+      if (lower.endsWith("h")) return Math.round(val * 60);
+      if (lower.endsWith("s")) return val / 60;
+      if (lower.endsWith("m")) return val >= 1 ? Math.round(val) : val;
+      return val >= 1 ? Math.round(val) : val;
     })
     .filter((n) => Number.isFinite(n) && n > 0);
   return parsed.length > 0 ? parsed : fallback;
+}
+
+function stepMinGap(baseMins: number): number {
+  return baseMins < 1 ? Math.min(0.25, baseMins / 2) : 1;
+}
+
+function stepMidpoint(a: number, b: number): number {
+  return a < 1 || b < 1 ? (a + b) / 2 : Math.round((a + b) / 2);
+}
+
+function stepScale(a: number, factor: number): number {
+  return a < 1 ? a * factor : Math.round(a * factor);
+}
+
+function highConfidenceAgainMins(stepMins: number): number {
+  if (stepMins >= 2) return Math.round(stepMins / 2);
+  if (stepMins >= 1) return 1;
+  return stepMins / 2;
 }
 
 function deriveReviewElapsedDays(
@@ -260,13 +387,13 @@ function deriveReviewElapsedDays(
   nowMs: number,
 ): number {
   if (card.last_reviewed) {
-    const lastMs = Date.parse(card.last_reviewed);
+    const lastMs = parseUtcTimestampMs(card.last_reviewed);
     if (Number.isFinite(lastMs)) {
       return Math.max(0, (nowMs - lastMs) / DAY_MS);
     }
   }
   if (card.next_review) {
-    const nextMs = Date.parse(card.next_review);
+    const nextMs = parseUtcTimestampMs(card.next_review);
     if (Number.isFinite(nextMs)) {
       const daysUntilDue = (nextMs - nowMs) / DAY_MS;
       return Math.max(0.5, (card.interval || fallbackStability) - daysUntilDue);
@@ -289,8 +416,10 @@ export function calculateNextSrsState(
 
   const desiredRetention = clampDesiredRetention(settings?.desired_retention);
   const intervalModifier =
-    settings?.interval_modifier && settings.interval_modifier > 0
-      ? settings.interval_modifier
+    typeof settings?.interval_modifier === "number" &&
+    Number.isFinite(settings.interval_modifier) &&
+    settings.interval_modifier > 0
+      ? clamp(0.1, 10.0, settings.interval_modifier)
       : 1.0;
 
   const stepsMins = parseStepsMinutes(
@@ -328,7 +457,7 @@ export function calculateNextSrsState(
       nextRepetitions = 0;
       const againMins =
         confidence === "high"
-          ? Math.max(1, Math.round(stepsMins[0] / 2))
+          ? highConfidenceAgainMins(stepsMins[0])
           : stepsMins[0];
       nextReviewMs = nowMs + againMins * MIN_MS;
     } else if (grade === 2) {
@@ -336,13 +465,14 @@ export function calculateNextSrsState(
       nextLearningStep = 0;
       nextInterval = 0;
       nextRepetitions = 0;
+      const gap = stepMinGap(stepsMins[0]);
       const hardMins =
         stepsMins.length > 1
           ? Math.max(
-              stepsMins[0] + 1,
-              Math.round((stepsMins[0] + stepsMins[1]) / 2),
+              stepsMins[0] + gap,
+              stepMidpoint(stepsMins[0], stepsMins[1]),
             )
-          : Math.max(stepsMins[0] + 1, Math.round(stepsMins[0] * 1.5));
+          : Math.max(stepsMins[0] + gap, stepScale(stepsMins[0], 1.5));
       nextReviewMs = nowMs + hardMins * MIN_MS;
     } else if (grade === 3) {
       if (stepsMins.length > 1) {
@@ -350,11 +480,12 @@ export function calculateNextSrsState(
         nextLearningStep = 1;
         nextInterval = 0;
         nextRepetitions = 0;
+        const gap = stepMinGap(stepsMins[0]);
         const hardMins = Math.max(
-          stepsMins[0] + 1,
-          Math.round((stepsMins[0] + stepsMins[1]) / 2),
+          stepsMins[0] + gap,
+          stepMidpoint(stepsMins[0], stepsMins[1]),
         );
-        const goodMins = Math.max(hardMins + 1, stepsMins[1]);
+        const goodMins = Math.max(hardMins + stepMinGap(hardMins), stepsMins[1]);
         nextReviewMs = nowMs + goodMins * MIN_MS;
       } else {
         nextState = 2;
@@ -408,23 +539,25 @@ export function calculateNextSrsState(
       nextState = stayState;
       nextLearningStep = idx;
       nextInterval = 0;
+      const gap = stepMinGap(steps[0]);
       const hardMins =
         idx < steps.length - 1
           ? Math.max(
-              steps[0] + 1,
-              Math.round((steps[idx] + steps[idx + 1]) / 2),
+              steps[0] + gap,
+              stepMidpoint(steps[idx], steps[idx + 1]),
             )
-          : Math.max(steps[0] + 1, Math.round(steps[idx] * 1.5));
+          : Math.max(steps[0] + gap, stepScale(steps[idx], 1.5));
       nextReviewMs = nowMs + hardMins * MIN_MS;
     } else if (grade === 3 && idx < steps.length - 1) {
       nextState = stayState;
       nextLearningStep = idx + 1;
       nextInterval = 0;
+      const gap = stepMinGap(steps[0]);
       const hardMins = Math.max(
-        steps[0] + 1,
-        Math.round((steps[idx] + steps[idx + 1]) / 2),
+        steps[0] + gap,
+        stepMidpoint(steps[idx], steps[idx + 1]),
       );
-      nextReviewMs = nowMs + Math.max(hardMins + 1, steps[idx + 1]) * MIN_MS;
+      nextReviewMs = nowMs + Math.max(hardMins + stepMinGap(hardMins), steps[idx + 1]) * MIN_MS;
     } else if (grade === 3) {
       nextState = 2;
       nextLearningStep = 0;
@@ -463,7 +596,7 @@ export function calculateNextSrsState(
       nextStability = nextForgetStability(prevD, prevS, r);
       const againMins =
         confidence === "high"
-          ? Math.max(1, Math.round(lapseStepsMins[0] / 2))
+          ? highConfidenceAgainMins(lapseStepsMins[0])
           : lapseStepsMins[0];
       nextReviewMs = nowMs + againMins * MIN_MS;
     } else {
@@ -524,10 +657,12 @@ export function getCardPreviews(
   const preview = (quality: number): string => {
     const s = calculateNextSrsState(card, quality, settings, "medium", now);
     if (s.state === 1 || s.state === 3) {
-      const diffMins = Math.max(
+      const diffSecs = Math.max(
         1,
-        Math.round((new Date(s.next_review).getTime() - now.getTime()) / MIN_MS),
+        Math.round((parseUtcTimestampMs(s.next_review) - now.getTime()) / 1000),
       );
+      if (diffSecs < 60) return `${diffSecs}s`;
+      const diffMins = Math.max(1, Math.round(diffSecs / 60));
       if (diffMins < 60) return `${diffMins}m`;
       const diffHours = Math.round(diffMins / 60);
       return diffHours < 24 ? `${diffHours}h` : `${Math.round(diffHours / 24)}d`;
@@ -547,10 +682,9 @@ export function getCardPreviews(
 }
 
 export function formatRelativeTime(dateStr: string | null | undefined): string {
-  if (!dateStr) return "Never studied";
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
+  const dateMs = parseUtcTimestampMs(dateStr);
+  if (!Number.isFinite(dateMs)) return "Never studied";
+  const diffMs = Date.now() - dateMs;
   const diffDays = Math.floor(diffMs / DAY_MS);
   if (diffDays <= 0) return "Today";
   if (diffDays === 1) return "Yesterday";

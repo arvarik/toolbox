@@ -107,11 +107,25 @@ function sendAttachment(
   res.send(payload);
 }
 
-function handleSkeletonImport(
+async function syncRagIfPopulated(
+  scope: ReturnType<typeof scopeOf>,
+  kitId: string,
+): Promise<void> {
+  const existingChunks = (
+    db
+      .prepare("SELECT COUNT(*) as c FROM rag_chunks WHERE ownerId = ? AND kit_id = ?")
+      .get(scope.ownerId, kitId) as { c: number }
+  ).c;
+  if (existingChunks > 0) {
+    await syncDomainSourcesToRag(db, scope, kitId, { pruneStale: true });
+  }
+}
+
+async function handleSkeletonImport(
   req: Request,
   res: Response,
   errMessage: string,
-): void {
+): Promise<void> {
   const scope = scopeOf(req);
   const body = req.body as Record<string, unknown> | undefined;
   if (!body || typeof body !== "object") {
@@ -123,6 +137,9 @@ function handleSkeletonImport(
     (hasWrapper ? body.onCollision : undefined) ?? req.query.onCollision,
   );
   const result = importKitMode1(db, scope, rawSkeleton, { onCollision });
+  if (result.mode === "updated") {
+    await syncRagIfPopulated(scope, result.kit.id);
+  }
   res
     .status(result.mode === "created" || result.mode === "copied" ? 201 : 200)
     .json(result);
@@ -141,6 +158,9 @@ async function handleBackupUpload(req: Request, res: Response): Promise<void> {
     );
     const zipBuf = await fs.promises.readFile(uploadPath);
     const result = await importKitBackupZip(db, scope, zipBuf, { onCollision });
+    if (result.mode === "updated") {
+      await syncRagIfPopulated(scope, result.kit.id);
+    }
     res
       .status(result.mode === "created" || result.mode === "copied" ? 201 : 200)
       .json(result);
@@ -156,7 +176,7 @@ router.get("/", (req, res) => {
 router.post(
   "/import-kit",
   asyncHandler(async (req, res) => {
-    handleSkeletonImport(req, res, "Expected JSON Kit skeleton payload");
+    await handleSkeletonImport(req, res, "Expected JSON Kit skeleton payload");
   }),
 );
 
@@ -179,7 +199,7 @@ router.post(
       await handleBackupUpload(req, res);
       return;
     }
-    handleSkeletonImport(
+    await handleSkeletonImport(
       req,
       res,
       "Expected JSON skeleton or multipart backup archive",
@@ -272,14 +292,7 @@ const handleSyncKit = asyncHandler(async (req, res) => {
     body && typeof body === "object" && body.skeleton !== undefined
       ? syncKitStructure(db, scope, kitId, body.skeleton)
       : pullUpstreamKitUpdate(db, scope, kitId);
-  const existingChunks = (
-    db
-      .prepare("SELECT COUNT(*) as c FROM rag_chunks WHERE ownerId = ? AND kit_id = ?")
-      .get(scope.ownerId, result.kit.id) as { c: number }
-  ).c;
-  if (existingChunks > 0) {
-    await syncDomainSourcesToRag(db, scope, result.kit.id, { pruneStale: true });
-  }
+  await syncRagIfPopulated(scope, result.kit.id);
   res.json(result);
 });
 
