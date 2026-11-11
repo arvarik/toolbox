@@ -188,7 +188,7 @@ router.get(
         .prepare(
           `SELECT kit_id, pillar_id, topic_id, section_id, content
            FROM guide_content
-           WHERE ownerId = ? AND content != '' AND (${tupleConds})`,
+           WHERE ownerId = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != '' AND (${tupleConds})`,
         )
         .all(scope.ownerId, ...tupleParams) as Array<Record<string, unknown>>;
       const bySlot = new Map(
@@ -212,7 +212,8 @@ router.get(
       .prepare(
         `SELECT kit_id, pillar_id, topic_id, section_id, content
          FROM guide_content
-         WHERE ownerId = ? AND (? IS NULL OR kit_id = ?) AND content != ''
+         WHERE ownerId = ? AND (? IS NULL OR kit_id = ?)
+           AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''
            AND (content LIKE ? ESCAPE '\\' OR section_id LIKE ? ESCAPE '\\' OR topic_id LIKE ? ESCAPE '\\')
          LIMIT 10`,
       )

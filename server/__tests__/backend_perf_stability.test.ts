@@ -6,7 +6,9 @@ import db from "../db.ts";
 import { computeGraphHealth } from "../graph/health.ts";
 import { exportKitBackupZip } from "../kits/kitExportImport.ts";
 import { ensureDefaultSystemDesignKit } from "../kits/kitsSchema.ts";
+import { liveCardRetrievability } from "../mcp/toolboxMcpTools.ts";
 import { createZipArchive, extractZipArchive } from "../platform/archive/zip.ts";
+import { getOwnerDataHooks } from "../platform/db/connection.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
 import {
   ensureEmbeddingStore,
@@ -16,7 +18,9 @@ import {
 import {
   calculateNextSrsState,
   formatRelativeTime,
+  getCardPreviews,
   parseDeckSettings,
+  parseStepsMinutes,
   parseUtcTimestampMs,
   qualityToFsrsGrade,
 } from "../srs/scheduler.ts";
@@ -740,5 +744,206 @@ describe("Backend Performance, Stability & API Harmony Suite", () => {
         3,
       ),
     ).toContain("idx_drills_owner_kit_node_diff");
+  });
+
+  it("6. honors s/m/h/d FSRS step units, UTC-safe MCP retrievability, TZ-offset due bounds, and whitespace guide predicates", async () => {
+    const { bobAgent, bobScope } = tenants;
+
+    // 6a. Sub-minute ("s"), hour ("h"/"H"), day ("d"/"D") & comma-separated FSRS step parsing + scheduling
+    expect(parseStepsMinutes("30s, 2H 1D", [1, 10])).toEqual([0.5, 120, 1440]);
+    expect(parseStepsMinutes("15S 45s", [1, 10])).toEqual([0.25, 0.75]);
+    expect(parseStepsMinutes("   ", [1, 10])).toEqual([1, 10]);
+
+    const fixedNow = new Date("2026-11-11T12:00:00.000Z");
+    const fixedNowMs = fixedNow.getTime();
+
+    const againSubMin = calculateNextSrsState(
+      { state: 0 },
+      1,
+      { steps: "30s 10m" },
+      "medium",
+      fixedNow,
+    );
+    expect(againSubMin.state).toBe(1);
+    expect(Date.parse(againSubMin.next_review)).toBe(fixedNowMs + 30_000);
+
+    const againSubMinHighConf = calculateNextSrsState(
+      { state: 0 },
+      1,
+      { steps: "30s 10m" },
+      "high",
+      fixedNow,
+    );
+    expect(Date.parse(againSubMinHighConf.next_review)).toBe(fixedNowMs + 15_000);
+
+    const hardMidpoint = calculateNextSrsState(
+      { state: 0 },
+      3,
+      { steps: "30s 2H" },
+      "medium",
+      fixedNow,
+    );
+    expect(hardMidpoint.state).toBe(1);
+    expect(Date.parse(hardMidpoint.next_review)).toBe(fixedNowMs + 60.25 * 60_000);
+
+    const goodTwoHours = calculateNextSrsState(
+      { state: 0 },
+      4,
+      { steps: "30s 2H" },
+      "medium",
+      fixedNow,
+    );
+    expect(goodTwoHours.state).toBe(1);
+    expect(Date.parse(goodTwoHours.next_review)).toBe(fixedNowMs + 120 * 60_000);
+
+    const againOneDay = calculateNextSrsState(
+      { state: 0 },
+      1,
+      { steps: "1D" },
+      "medium",
+      fixedNow,
+    );
+    expect(againOneDay.state).toBe(1);
+    expect(Date.parse(againOneDay.next_review)).toBe(fixedNowMs + 1440 * 60_000);
+
+    const subMinPreviews = getCardPreviews({ state: 0 }, { steps: "30s 2H" }, fixedNow);
+    expect(subMinPreviews.again).toBe("30s");
+    expect(subMinPreviews.good).toBe("2h");
+
+    // Default >=1m steps preserve exact minute intervals
+    const defaultPreviews = getCardPreviews({ state: 0 }, { steps: "1m 10m" }, fixedNow);
+    expect(defaultPreviews.again).toBe("1m");
+    expect(defaultPreviews.good).toBe("10m");
+
+    // 6b. MCP liveCardRetrievability UTC parity & corrupt-timestamp NaN guard
+    const twoDaysAgoMs = Date.now() - 2 * 86_400_000;
+    const twoDaysAgoIso = new Date(twoDaysAgoMs).toISOString().slice(0, 19) + "Z";
+    const twoDaysAgoSqlite = twoDaysAgoIso.slice(0, 19).replace("T", " ");
+
+    const rFromIso = liveCardRetrievability({
+      state: 2,
+      stability: 6.5,
+      last_reviewed: twoDaysAgoIso,
+    });
+    const rFromSqlite = liveCardRetrievability({
+      state: 2,
+      stability: 6.5,
+      last_reviewed: twoDaysAgoSqlite,
+    });
+    expect(Number.isFinite(rFromIso)).toBe(true);
+    expect(rFromSqlite).toBe(rFromIso);
+
+    const rCorrupt = liveCardRetrievability({
+      state: 2,
+      stability: 5.0,
+      last_reviewed: "corrupt-last-reviewed",
+      next_review: "corrupt-next-review",
+    });
+    expect(Number.isFinite(rCorrupt)).toBe(true);
+    expect(rCorrupt).toBe(0.5);
+    expect(liveCardRetrievability({ state: 0, stability: 5.0 })).toBe(0);
+
+    // 6c. Due-queue B-tree upper bound handles second-precision "...Z" & positive/negative TZ offsets
+    const tzSkel = makeKitSkeleton((s) => {
+      s.identity.slug = "tz-whitespace-probe-kit";
+      s.identity.name = "TZ & Whitespace Probe Kit";
+    });
+    const tzKitRes = await bobAgent
+      .post("/api/kits/import-kit")
+      .send({ skeleton: tzSkel })
+      .expect(201);
+    const tzKitSlug = tzKitRes.body.kit.slug as string;
+
+    const tzDeckRes = await bobAgent
+      .post("/api/decks")
+      .set("X-Toolbox-Kit", tzKitSlug)
+      .send({ name: "TZ Offset Due Deck" })
+      .expect(201);
+    const tzDeckId = tzDeckRes.body.id as string;
+
+    const makeBobCard = async (front: string) => {
+      const r = await bobAgent
+        .post(`/api/decks/${tzDeckId}/cards`)
+        .send({ front, back: `Back: ${front}` })
+        .expect(201);
+      return r.body.id as string;
+    };
+
+    const formatWithOffset = (utcMs: number, offsetMinutes: number): string => {
+      const shifted = new Date(utcMs + offsetMinutes * 60_000).toISOString().slice(0, 19);
+      const sign = offsetMinutes >= 0 ? "+" : "-";
+      const abs = Math.abs(offsetMinutes);
+      const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+      const mm = String(abs % 60).padStart(2, "0");
+      return `${shifted}${sign}${hh}:${mm}`;
+    };
+
+    const secPrecisionDueId = await makeBobCard("Second-Precision Z Overdue");
+    const posOffset2hDueId = await makeBobCard("UTC+02:00 Overdue 15m Ago");
+    const posOffset14hDueId = await makeBobCard("UTC+14:00 Overdue 5m Ago");
+    const negOffsetFutureId = await makeBobCard("UTC-05:00 Future +30m");
+    const posOffsetFutureId = await makeBobCard("UTC+02:00 Future +30m");
+
+    const refNow = Date.now();
+    const secPrecisionZ = new Date(refNow - 2_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const overduePlus2 = formatWithOffset(refNow - 15 * 60_000, 120);
+    const overduePlus14 = formatWithOffset(refNow - 5 * 60_000, 14 * 60);
+    const futureMinus5 = formatWithOffset(refNow + 30 * 60_000, -300);
+    const futurePlus2 = formatWithOffset(refNow + 30 * 60_000, 120);
+
+    for (const [cid, nextRev] of [
+      [secPrecisionDueId, secPrecisionZ],
+      [posOffset2hDueId, overduePlus2],
+      [posOffset14hDueId, overduePlus14],
+      [negOffsetFutureId, futureMinus5],
+      [posOffsetFutureId, futurePlus2],
+    ] as const) {
+      db.prepare(
+        "UPDATE flashcards SET state = 2, repetitions = 2, interval = 2, next_review = ? WHERE ownerId = ? AND id = ?",
+      ).run(nextRev, bobScope.ownerId, cid);
+    }
+
+    for (const url of [
+      `/api/decks/${tzDeckId}/cards/due`,
+      `/api/decks/all/cards/due?kit=${encodeURIComponent(tzKitSlug)}`,
+      `/api/srs/due?kit=${encodeURIComponent(tzKitSlug)}`,
+    ]) {
+      const dueRes = await bobAgent.get(url).expect(200);
+      const ids = (dueRes.body as Array<{ id: string }>).map((c) => c.id);
+      expect(ids).toContain(secPrecisionDueId);
+      expect(ids).toContain(posOffset2hDueId);
+      expect(ids).toContain(posOffset14hDueId);
+      expect(ids).not.toContain(negOffsetFutureId);
+      expect(ids).not.toContain(posOffsetFutureId);
+    }
+
+    // 6d. Multi-whitespace guide content ("\n\t\r") treated as empty across ownedCounts, search & graph
+    const hooks = getOwnerDataHooks();
+    const countsBefore = hooks.ownedCounts(bobScope.ownerId).guideSections;
+    const totalItemsBefore = hooks.countItemsByOwner().get(bobScope.ownerId) ?? 0;
+
+    await bobAgent
+      .put("/api/guide-content/basics/borrowing/mechanics")
+      .set("X-Toolbox-Kit", tzKitSlug)
+      .send({ content: "   \n\t\r   " })
+      .expect(200);
+
+    expect(hooks.ownedCounts(bobScope.ownerId).guideSections).toBe(countsBefore);
+    expect(hooks.countItemsByOwner().get(bobScope.ownerId) ?? 0).toBe(totalItemsBefore);
+
+    const searchWsRes = await bobAgent
+      .get("/api/search?q=borrowing")
+      .set("X-Toolbox-Kit", tzKitSlug)
+      .expect(200);
+    expect(searchWsRes.body.guideContent).toEqual([]);
+
+    const graphWsRes = await bobAgent
+      .get("/api/graph")
+      .set("X-Toolbox-Kit", tzKitSlug)
+      .expect(200);
+    const borrowingNode = (
+      graphWsRes.body.nodes as Array<{ id: string; filledSections: number }>
+    ).find((n) => n.id === "ownership");
+    expect(borrowingNode?.filledSections ?? 0).toBe(0);
   });
 });

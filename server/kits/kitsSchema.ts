@@ -817,7 +817,7 @@ export function initKitsSchema(db: Database.Database): void {
       (SELECT COUNT(*) FROM kits WHERE ownerId = ?) AS kits,
       (SELECT COUNT(*) FROM decks WHERE ownerId = ?) AS decks,
       (SELECT COUNT(*) FROM flashcards WHERE ownerId = ?) AS flashcards,
-      (SELECT COUNT(*) FROM guide_content WHERE ownerId = ? AND content != '' AND trim(content) != '') AS guideSections,
+      (SELECT COUNT(*) FROM guide_content WHERE ownerId = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != '') AS guideSections,
       (SELECT COUNT(*) FROM boards WHERE ownerId = ?) AS boards,
       (SELECT COUNT(*) FROM chat_sessions WHERE ownerId = ?) AS chatSessions
   `);
@@ -864,7 +864,7 @@ export function initKitsSchema(db: Database.Database): void {
       };
       addGroup("SELECT ownerId, COUNT(*) as c FROM flashcards GROUP BY ownerId");
       addGroup(
-        "SELECT ownerId, COUNT(*) as c FROM guide_content WHERE content != '' GROUP BY ownerId",
+        "SELECT ownerId, COUNT(*) as c FROM guide_content WHERE content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != '' GROUP BY ownerId",
       );
       return map;
     },

@@ -539,7 +539,8 @@ export async function syncDomainSourcesToRag(
     .prepare(
       `SELECT kit_id, pillar_id, topic_id, section_id, content
        FROM guide_content
-       WHERE ownerId = ? AND (? IS NULL OR kit_id = ?) AND content != ''`,
+       WHERE ownerId = ? AND (? IS NULL OR kit_id = ?)
+         AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''`,
     )
     .all(scope.ownerId, k, k) as Array<{
     kit_id: string;

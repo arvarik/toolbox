@@ -239,7 +239,7 @@ router.get("/nodes/:id", (req, res) => {
         const filled = (
           db
             .prepare(
-              "SELECT COUNT(*) AS count FROM guide_content WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND content != ''",
+              "SELECT COUNT(*) AS count FROM guide_content WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''",
             )
             .get(scope.ownerId, kit.id, node.pillarId, node.topicId) as {
             count: number;

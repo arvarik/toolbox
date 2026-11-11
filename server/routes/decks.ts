@@ -286,7 +286,12 @@ export function collectDueReviewQueue(
     });
   }
 
-  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  // Pad the B-tree range bound by +14h so second-precision '...Z' strings (where 'Z' > '.')
+  // and positive-offset ISO timestamps (up to UTC+14) stay inside the index scan before
+  // exact UTC filtering via `datetime(next_review) <= datetime(?)`.
+  const btreeUpperIso = new Date(nowMs + 14 * 3600_000).toISOString();
   const candidateCards = db
     .prepare(
       `SELECT * FROM flashcards
@@ -301,8 +306,8 @@ export function collectDueReviewQueue(
     )
     .all(
       ...(resolvedKitId
-        ? [scope.ownerId, scope.ownerId, resolvedKitId, nowIso, nowIso, nowIso, nowIso]
-        : [scope.ownerId, nowIso, nowIso, nowIso, nowIso]),
+        ? [scope.ownerId, scope.ownerId, resolvedKitId, btreeUpperIso, nowIso, btreeUpperIso, nowIso]
+        : [scope.ownerId, btreeUpperIso, nowIso, btreeUpperIso, nowIso]),
     ) as FlashcardRow[];
 
   const cardsByDeck = Map.groupBy(candidateCards, (card) => card.deck_id);
@@ -792,7 +797,9 @@ export function deckSessionCards(
     )
     .get(scope.ownerId, deckId) as { newToday: number; reviewsToday: number };
 
-  const nowIso = new Date().toISOString();
+  const nowMs = Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+  const btreeUpperIso = new Date(nowMs + 14 * 3600_000).toISOString();
   const learningCards = db
     .prepare(
       `SELECT * FROM flashcards
@@ -802,7 +809,7 @@ export function deckSessionCards(
          AND ${PREREQ_UNLOCKED_SQL}
        ORDER BY datetime(next_review) ASC`,
     )
-    .all(scope.ownerId, deckId, nowIso, nowIso) as FlashcardRow[];
+    .all(scope.ownerId, deckId, btreeUpperIso, nowIso) as FlashcardRow[];
 
   const remainingReviews = Math.max(
     0,
@@ -820,7 +827,7 @@ export function deckSessionCards(
              ORDER BY datetime(next_review) ASC
              LIMIT ?`,
           )
-          .all(scope.ownerId, deckId, nowIso, nowIso, remainingReviews) as FlashcardRow[])
+          .all(scope.ownerId, deckId, btreeUpperIso, nowIso, remainingReviews) as FlashcardRow[])
       : [];
 
   const remainingNew = Math.max(0, settings.new_limit - (todayRow.newToday || 0));

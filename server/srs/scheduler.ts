@@ -343,20 +343,42 @@ export function qualityToFsrsGrade(
   return 4;
 }
 
-function parseStepsMinutes(raw: string | undefined, fallback: number[]): number[] {
+export function parseStepsMinutes(raw: string | undefined, fallback: number[]): number[] {
   if (typeof raw !== "string" || !raw.trim()) return fallback;
   const parsed = raw
     .trim()
-    .split(/\s+/)
+    .split(/[\s,]+/)
     .map((token) => {
-      const val = parseFloat(token);
+      const lower = token.trim().toLowerCase();
+      if (!lower) return NaN;
+      const val = parseFloat(lower);
       if (!Number.isFinite(val) || val <= 0) return NaN;
-      if (token.endsWith("d")) return Math.round(val * 24 * 60);
-      if (token.endsWith("h")) return Math.round(val * 60);
-      return Math.max(1, Math.round(val));
+      if (lower.endsWith("d")) return Math.round(val * 24 * 60);
+      if (lower.endsWith("h")) return Math.round(val * 60);
+      if (lower.endsWith("s")) return val / 60;
+      if (lower.endsWith("m")) return val >= 1 ? Math.round(val) : val;
+      return val >= 1 ? Math.round(val) : val;
     })
     .filter((n) => Number.isFinite(n) && n > 0);
   return parsed.length > 0 ? parsed : fallback;
+}
+
+function stepMinGap(baseMins: number): number {
+  return baseMins < 1 ? Math.min(0.25, baseMins / 2) : 1;
+}
+
+function stepMidpoint(a: number, b: number): number {
+  return a < 1 || b < 1 ? (a + b) / 2 : Math.round((a + b) / 2);
+}
+
+function stepScale(a: number, factor: number): number {
+  return a < 1 ? a * factor : Math.round(a * factor);
+}
+
+function highConfidenceAgainMins(stepMins: number): number {
+  if (stepMins >= 2) return Math.round(stepMins / 2);
+  if (stepMins >= 1) return 1;
+  return stepMins / 2;
 }
 
 function deriveReviewElapsedDays(
@@ -435,7 +457,7 @@ export function calculateNextSrsState(
       nextRepetitions = 0;
       const againMins =
         confidence === "high"
-          ? Math.max(1, Math.round(stepsMins[0] / 2))
+          ? highConfidenceAgainMins(stepsMins[0])
           : stepsMins[0];
       nextReviewMs = nowMs + againMins * MIN_MS;
     } else if (grade === 2) {
@@ -443,13 +465,14 @@ export function calculateNextSrsState(
       nextLearningStep = 0;
       nextInterval = 0;
       nextRepetitions = 0;
+      const gap = stepMinGap(stepsMins[0]);
       const hardMins =
         stepsMins.length > 1
           ? Math.max(
-              stepsMins[0] + 1,
-              Math.round((stepsMins[0] + stepsMins[1]) / 2),
+              stepsMins[0] + gap,
+              stepMidpoint(stepsMins[0], stepsMins[1]),
             )
-          : Math.max(stepsMins[0] + 1, Math.round(stepsMins[0] * 1.5));
+          : Math.max(stepsMins[0] + gap, stepScale(stepsMins[0], 1.5));
       nextReviewMs = nowMs + hardMins * MIN_MS;
     } else if (grade === 3) {
       if (stepsMins.length > 1) {
@@ -457,11 +480,12 @@ export function calculateNextSrsState(
         nextLearningStep = 1;
         nextInterval = 0;
         nextRepetitions = 0;
+        const gap = stepMinGap(stepsMins[0]);
         const hardMins = Math.max(
-          stepsMins[0] + 1,
-          Math.round((stepsMins[0] + stepsMins[1]) / 2),
+          stepsMins[0] + gap,
+          stepMidpoint(stepsMins[0], stepsMins[1]),
         );
-        const goodMins = Math.max(hardMins + 1, stepsMins[1]);
+        const goodMins = Math.max(hardMins + stepMinGap(hardMins), stepsMins[1]);
         nextReviewMs = nowMs + goodMins * MIN_MS;
       } else {
         nextState = 2;
@@ -515,23 +539,25 @@ export function calculateNextSrsState(
       nextState = stayState;
       nextLearningStep = idx;
       nextInterval = 0;
+      const gap = stepMinGap(steps[0]);
       const hardMins =
         idx < steps.length - 1
           ? Math.max(
-              steps[0] + 1,
-              Math.round((steps[idx] + steps[idx + 1]) / 2),
+              steps[0] + gap,
+              stepMidpoint(steps[idx], steps[idx + 1]),
             )
-          : Math.max(steps[0] + 1, Math.round(steps[idx] * 1.5));
+          : Math.max(steps[0] + gap, stepScale(steps[idx], 1.5));
       nextReviewMs = nowMs + hardMins * MIN_MS;
     } else if (grade === 3 && idx < steps.length - 1) {
       nextState = stayState;
       nextLearningStep = idx + 1;
       nextInterval = 0;
+      const gap = stepMinGap(steps[0]);
       const hardMins = Math.max(
-        steps[0] + 1,
-        Math.round((steps[idx] + steps[idx + 1]) / 2),
+        steps[0] + gap,
+        stepMidpoint(steps[idx], steps[idx + 1]),
       );
-      nextReviewMs = nowMs + Math.max(hardMins + 1, steps[idx + 1]) * MIN_MS;
+      nextReviewMs = nowMs + Math.max(hardMins + stepMinGap(hardMins), steps[idx + 1]) * MIN_MS;
     } else if (grade === 3) {
       nextState = 2;
       nextLearningStep = 0;
@@ -570,7 +596,7 @@ export function calculateNextSrsState(
       nextStability = nextForgetStability(prevD, prevS, r);
       const againMins =
         confidence === "high"
-          ? Math.max(1, Math.round(lapseStepsMins[0] / 2))
+          ? highConfidenceAgainMins(lapseStepsMins[0])
           : lapseStepsMins[0];
       nextReviewMs = nowMs + againMins * MIN_MS;
     } else {
@@ -631,10 +657,12 @@ export function getCardPreviews(
   const preview = (quality: number): string => {
     const s = calculateNextSrsState(card, quality, settings, "medium", now);
     if (s.state === 1 || s.state === 3) {
-      const diffMins = Math.max(
+      const diffSecs = Math.max(
         1,
-        Math.round((new Date(s.next_review).getTime() - now.getTime()) / MIN_MS),
+        Math.round((parseUtcTimestampMs(s.next_review) - now.getTime()) / 1000),
       );
+      if (diffSecs < 60) return `${diffSecs}s`;
+      const diffMins = Math.max(1, Math.round(diffSecs / 60));
       if (diffMins < 60) return `${diffMins}m`;
       const diffHours = Math.round(diffMins / 60);
       return diffHours < 24 ? `${diffHours}h` : `${Math.round(diffHours / 24)}d`;
