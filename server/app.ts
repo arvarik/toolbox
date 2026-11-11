@@ -19,7 +19,7 @@ import {
   createRateLimiter,
 } from "./platform/net/rateLimit.ts";
 import { trustProxyHops } from "./platform/net/originAndFetch.ts";
-import { hostGuard } from "./platform/net/hostGuard.ts";
+import { hostGuard, mcpCorsPreflight } from "./platform/net/hostGuard.ts";
 import { attachRequestContext } from "./platform/tenancy/scope.ts";
 import { countPasswordAccounts } from "./platform/auth/authService.ts";
 import {
@@ -122,6 +122,7 @@ export function createApp(): Express {
   app.use(refuseCrossSiteWrites);
 
   app.use("/api/auth", authRouter);
+  app.use("/api/mcp", mcpCorsPreflight);
   mountMcpRoutes(app);
   app.use("/api/admin", requireAdmin, requirePasswordCurrent, adminRouter);
 

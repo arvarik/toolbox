@@ -11,16 +11,28 @@ interface HostConfig {
 
 let cached: HostConfig | null = null;
 
+function isValidPort(portStr: string): boolean {
+  if (!/^\d{1,5}$/.test(portStr)) return false;
+  const port = Number(portStr);
+  return port >= 1 && port <= 65535;
+}
+
 function stripBracketsAndPort(raw: string): string {
   const trimmed = raw.trim().toLowerCase();
   if (!trimmed) return "";
   if (trimmed.startsWith("[")) {
     const close = trimmed.indexOf("]");
-    return close === -1 ? "" : trimmed.slice(1, close);
+    if (close === -1) return "";
+    const rest = trimmed.slice(close + 1);
+    if (rest !== "" && (!rest.startsWith(":") || !isValidPort(rest.slice(1)))) {
+      return "";
+    }
+    return trimmed.slice(1, close);
   }
   const firstColon = trimmed.indexOf(":");
   const lastColon = trimmed.lastIndexOf(":");
   if (firstColon !== -1 && firstColon === lastColon) {
+    if (!isValidPort(trimmed.slice(firstColon + 1))) return "";
     return trimmed.slice(0, firstColon);
   }
   return trimmed;
@@ -131,6 +143,14 @@ export function mcpOriginGuard(
   if (isHttpScheme && allowedCors !== null && trimmed === allowedCors) {
     res.setHeader("Access-Control-Allow-Origin", allowedCors);
     res.vary("Origin");
+    if (req.method === "OPTIONS") {
+      res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type, Accept, MCP-Protocol-Version",
+      );
+      res.setHeader("Access-Control-Max-Age", "600");
+    }
     return next();
   }
 
@@ -141,4 +161,22 @@ export function mcpOriginGuard(
       { code: "ORIGIN_NOT_ALLOWED" },
     ),
   );
+}
+
+/**
+ * Handles CORS preflight (`OPTIONS /api/mcp`) for browser MCP clients before Bearer auth runs.
+ */
+export function mcpCorsPreflight(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (req.method !== "OPTIONS" || (req.path !== "/" && req.path !== "")) {
+    return next();
+  }
+  mcpOriginGuard(req, res, (err?: unknown) => {
+    if (err) return next(err);
+    res.setHeader("Allow", "POST, OPTIONS");
+    res.status(204).end();
+  });
 }

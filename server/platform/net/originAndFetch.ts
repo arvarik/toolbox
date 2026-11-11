@@ -75,6 +75,16 @@ export function oidcCallbackUrl(req: Request): string {
   return `${publicOrigin(req)}/api/auth/oidc/callback`;
 }
 
+function safeConfiguredOrigin(): string | null {
+  const configured = process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN;
+  if (!configured) return null;
+  try {
+    return validatePublicUrl(configured);
+  } catch {
+    return null;
+  }
+}
+
 export function isOwnOrigin(req: Request, origin: string): boolean {
   let parsed: URL;
   try {
@@ -85,8 +95,8 @@ export function isOwnOrigin(req: Request, origin: string): boolean {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return false;
   }
-  const configured = process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN;
-  if (origin === validatePublicUrl(configured)) return true;
+  const configuredOrigin = safeConfiguredOrigin();
+  if (configuredOrigin !== null && origin === configuredOrigin) return true;
   if (req.secure && parsed.protocol !== "https:") return false;
   return parsed.host === (req.host ?? "").toLowerCase();
 }

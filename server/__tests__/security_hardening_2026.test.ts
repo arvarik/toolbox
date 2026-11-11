@@ -152,6 +152,17 @@ describe("2026 Open-Source Security Hardening Suite", () => {
       "localhost, evil.example",
       "[localhost]",
       "[127.0.0.1]",
+      "[::1]@evil.rebind.example",
+      "[::1]evil.rebind.example",
+      "[::1]:80@evil.rebind.example",
+      "[::1]:notaport",
+      "[::1]:0",
+      "[::1]:70000",
+      "localhost:80@evil.rebind.example",
+      "127.0.0.1:notaport",
+      "127.0.0.1:0",
+      "127.0.0.1:65536",
+      ":3100",
       "evil@localhost",
       "bad host",
       "evil/localhost",
@@ -160,6 +171,7 @@ describe("2026 Open-Source Security Hardening Suite", () => {
     }
     expect(isHostAllowed("localhost:3100")).toBe(true);
     expect(isHostAllowed("[::1]:3100")).toBe(true);
+    expect(isHostAllowed("[::1]")).toBe(true);
   });
 
   it("4. blocks HTTP->HTTPS cross-scheme Origin downgrade and rejects wildcard/malformed CORS_ORIGIN on MCP", async () => {
@@ -239,7 +251,7 @@ describe("2026 Open-Source Security Hardening Suite", () => {
           );
         }
 
-        // Exact validated CORS_ORIGIN sets Access-Control-Allow-Origin + Vary: Origin without credentials
+        // Exact validated CORS_ORIGIN handles unauthenticated OPTIONS preflight + POST without credentials
         await withEnv(
           {
             TRUST_PROXY_HOPS: "1",
@@ -247,6 +259,44 @@ describe("2026 Open-Source Security Hardening Suite", () => {
             CORS_ORIGIN: "https://mcp-client.example",
           },
           async () => {
+            const preflightOk = await request(app)
+              .options("/api/mcp")
+              .set("Host", "study.example.com")
+              .set("X-Forwarded-Proto", "https")
+              .set("Origin", "https://mcp-client.example")
+              .set("Access-Control-Request-Method", "POST")
+              .set(
+                "Access-Control-Request-Headers",
+                "authorization, content-type, mcp-protocol-version",
+              )
+              .expect(204);
+            expect(preflightOk.headers["access-control-allow-origin"]).toBe(
+              "https://mcp-client.example",
+            );
+            expect(String(preflightOk.headers.vary ?? "")).toContain("Origin");
+            expect(preflightOk.headers["access-control-allow-methods"]).toBe(
+              "POST, OPTIONS",
+            );
+            expect(preflightOk.headers["access-control-allow-headers"]).toBe(
+              "Authorization, Content-Type, Accept, MCP-Protocol-Version",
+            );
+            expect(preflightOk.headers.allow).toBe("POST, OPTIONS");
+            expect(
+              preflightOk.headers["access-control-allow-credentials"],
+            ).toBeUndefined();
+
+            const preflightBlocked = await request(app)
+              .options("/api/mcp")
+              .set("Host", "study.example.com")
+              .set("X-Forwarded-Proto", "https")
+              .set("Origin", "https://untrusted.example")
+              .set("Access-Control-Request-Method", "POST")
+              .expect(403);
+            expect(preflightBlocked.body.error.code).toBe("ORIGIN_NOT_ALLOWED");
+            expect(
+              preflightBlocked.headers["access-control-allow-origin"],
+            ).toBeUndefined();
+
             const okMcp = await request(app)
               .post("/api/mcp")
               .set("Host", "study.example.com")
@@ -261,6 +311,47 @@ describe("2026 Open-Source Security Hardening Suite", () => {
             );
             expect(String(okMcp.headers.vary ?? "")).toContain("Origin");
             expect(okMcp.headers["access-control-allow-credentials"]).toBeUndefined();
+          },
+        );
+
+        // Malformed PUBLIC_URL / PUBLIC_ORIGIN never throws unhandled 500 in isOwnOrigin
+        await withEnv(
+          {
+            TRUST_PROXY_HOPS: "1",
+            ALLOWED_HOSTS: "study.example.com",
+            PUBLIC_URL: "https://bad.example/trailing-path",
+            PUBLIC_ORIGIN: "https://also-bad.example?query=1",
+          },
+          async () => {
+            const crossSiteWrite = await request(app)
+              .post("/api/decks")
+              .set("Host", "study.example.com")
+              .set("X-Forwarded-Proto", "https")
+              .set("Cookie", sessionCookie)
+              .set("Origin", "https://evil.example")
+              .send({ name: "Should 403 Not 500" })
+              .expect(403);
+            expect(crossSiteWrite.body.error.code).toBe("CROSS_SITE_REQUEST");
+
+            const crossOriginMcp = await request(app)
+              .post("/api/mcp")
+              .set("Host", "study.example.com")
+              .set("X-Forwarded-Proto", "https")
+              .set("Authorization", `Bearer ${mcpToken}`)
+              .set("Origin", "https://evil.example")
+              .set("Accept", "application/json, text/event-stream")
+              .send({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} })
+              .expect(403);
+            expect(crossOriginMcp.body.error.code).toBe("ORIGIN_NOT_ALLOWED");
+
+            await request(app)
+              .post("/api/decks")
+              .set("Host", "study.example.com")
+              .set("X-Forwarded-Proto", "https")
+              .set("Cookie", sessionCookie)
+              .set("Origin", "https://study.example.com")
+              .send({ name: "Host Fallback Under Malformed PUBLIC_URL" })
+              .expect(201);
           },
         );
       },
