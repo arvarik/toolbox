@@ -542,7 +542,7 @@ router.post(
         `Hard Drill Prompt:\n${drillRow.prompt}`,
         `Reference Worked Solution:\n${drillRow.worked_solution}`,
         `Required Rubric Points (plus clear, jargon-free Feynman synthesis):\n${rubricPoints.map((p, i) => `${i + 1}. ${p}`).join("\n")}\n${rubricPoints.length + 1}. Clear, accurate first-principles Feynman synthesis of ${node.name}`,
-        `<untrusted_submission>\n[Drill Solution]\n${cleanSubmission}\n\n[Feynman Explanation]\n${cleanFeynman}\n</untrusted_submission>`,
+        `<untrusted_submission>\n[Drill Solution]\n${cleanSubmission.slice(0, 32_000).replace(/<\/untrusted_/gi, "<\\/untrusted_")}\n\n[Feynman Explanation]\n${cleanFeynman.slice(0, 32_000).replace(/<\/untrusted_/gi, "<\\/untrusted_")}\n</untrusted_submission>`,
       ].join("\n\n"),
     });
 
@@ -788,7 +788,7 @@ router.post(
         rubricPoints.length > 0
           ? `Rubric Criteria:\n${rubricPoints.map((p, i) => `${i + 1}. ${p}`).join("\n")}`
           : "",
-        `<untrusted_submission>\n${cleanSubmission}\n</untrusted_submission>`,
+        `<untrusted_submission>\n${cleanSubmission.slice(0, 32_000).replace(/<\/untrusted_/gi, "<\\/untrusted_")}\n</untrusted_submission>`,
       ]
         .filter(Boolean)
         .join("\n\n"),

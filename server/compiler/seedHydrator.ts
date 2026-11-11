@@ -458,7 +458,7 @@ export async function runSeedKitJob(
           `Concept Nodes to Seed:\n${nodesDesc}\n\n` +
           groundingBlock,
         schema: PillarSeedLlmSchema,
-        maxOutputTokens: 6144,
+        maxOutputTokens: 12288,
         feature: "compiler.seedPillar",
       });
 

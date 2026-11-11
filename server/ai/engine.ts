@@ -29,6 +29,8 @@ const STREAM_TIMEOUT_MS = 600_000;
 const MAX_TOOL_STEPS = 8;
 const MAX_RETRY_TOKENS = 32_768;
 const MAX_STRUCTURED_MODES = 256;
+const MAX_MESSAGE_CHARS = 64_000;
+const DEFAULT_HISTORY_BUDGET_CHARS = 160_000;
 
 // A stream that starts and then goes silent this long is cut off, instead of
 // holding the request until STREAM_TIMEOUT_MS.
@@ -40,6 +42,133 @@ export function __setStreamIdleTimeoutMs(ms: number): void {
 
 // Suppress AI SDK console warning when Rung 2 intentionally pairs json_object mode with Output.object
 (globalThis as { AI_SDK_LOG_WARNINGS?: boolean }).AI_SDK_LOG_WARNINGS = false;
+
+const SECRET_PATTERNS: Array<[RegExp, string]> = [
+  [/([?&](?:key|api_key|apikey|token|secret)=)[^&\s"']+/gi, "$1[redacted]"],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]"],
+  [/\bAIza[0-9A-Za-z_-]{20,}\b/g, "AIza[redacted]"],
+  [/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}\b/g, "sk-[redacted]"],
+];
+
+export function redactAiErrorMessage(raw: string): string {
+  let out = raw;
+  for (const [pattern, replacement] of SECRET_PATTERNS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+function sanitizeThrownAiError(err: unknown, seen = new Set<unknown>()): unknown {
+  if (!err || typeof err !== "object" || seen.has(err)) return err;
+  seen.add(err);
+  const e = err as {
+    message?: unknown;
+    stack?: unknown;
+    cause?: unknown;
+    lastError?: unknown;
+  };
+  if (typeof e.message === "string") {
+    try {
+      e.message = redactAiErrorMessage(e.message);
+    } catch {
+      // Read-only getter on exotic Error subclass
+    }
+  }
+  if (typeof e.stack === "string") {
+    try {
+      e.stack = redactAiErrorMessage(e.stack);
+    } catch {
+      // Ignore read-only stack
+    }
+  }
+  if (e.cause) sanitizeThrownAiError(e.cause, seen);
+  if (e.lastError) sanitizeThrownAiError(e.lastError, seen);
+  return err;
+}
+
+function unwrapUpstreamProviderError(err: unknown): {
+  statusCode: number;
+  retryAfter?: string;
+} | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as {
+    name?: string;
+    statusCode?: number;
+    responseHeaders?: Record<string, string | undefined>;
+    lastError?: unknown;
+    cause?: unknown;
+  };
+  if (e.name === "AI_RetryError") return unwrapUpstreamProviderError(e.lastError);
+  if (e.name === "AI_APICallError" && typeof e.statusCode === "number") {
+    if (e.statusCode === 429 || e.statusCode >= 500) {
+      return {
+        statusCode: e.statusCode,
+        retryAfter: e.responseHeaders?.["retry-after"],
+      };
+    }
+  }
+  return e.cause ? unwrapUpstreamProviderError(e.cause) : null;
+}
+
+export function isForwardableAiError(err: unknown): boolean {
+  if (err instanceof AppError) return true;
+  if ((err as { name?: string } | null)?.name === "TimeoutError") return true;
+  return unwrapUpstreamProviderError(err) !== null;
+}
+
+export function formatStreamErrorMessage(err: unknown): string {
+  const upstream = unwrapUpstreamProviderError(err);
+  if (upstream?.statusCode === 429) {
+    return "The AI provider is rate limiting this instance. Try again shortly.";
+  }
+  if (upstream && upstream.statusCode >= 500) {
+    return `The AI provider failed with HTTP ${upstream.statusCode}. Try again shortly.`;
+  }
+  if ((err as { name?: string } | null)?.name === "TimeoutError") {
+    return "An upstream service did not answer in time. Try again shortly.";
+  }
+  const raw = err instanceof Error ? err.message : String(err);
+  return redactAiErrorMessage(raw) || "AI stream failed.";
+}
+
+export function clampModelMessages(
+  messages: ModelMessage[],
+  budgetChars: number = DEFAULT_HISTORY_BUDGET_CHARS,
+): ModelMessage[] {
+  if (messages.length === 0) return messages;
+  const normalized: ModelMessage[] = messages.map((m) => {
+    if (typeof m.content === "string" && m.content.length > MAX_MESSAGE_CHARS) {
+      return {
+        ...m,
+        content: `${m.content.slice(0, MAX_MESSAGE_CHARS)}\n…[truncated]`,
+      } as ModelMessage;
+    }
+    return m;
+  });
+
+  const measure = (m: ModelMessage): number =>
+    typeof m.content === "string"
+      ? m.content.length
+      : JSON.stringify(m.content).length;
+
+  const kept: ModelMessage[] = [];
+  let used = 0;
+  for (let i = normalized.length - 1; i >= 0; i--) {
+    const item = normalized[i];
+    const len = measure(item);
+    if (kept.length > 0 && used + len > budgetChars) break;
+    kept.push(item);
+    used += len;
+  }
+  kept.reverse();
+
+  // Keep conversation starting on a user turn when older history was trimmed,
+  // so strict alternating providers (Gemini/Anthropic) never see a leading assistant turn.
+  while (kept.length > 1 && kept[0].role === "assistant") {
+    kept.shift();
+  }
+  return kept;
+}
 
 const MODEL_FACTORIES: Record<
   "gemini" | "claude" | "openai",
@@ -85,15 +214,13 @@ function buildLanguageModelFromDescriptor(
       baseURL: desc.baseUrl,
       apiKey: desc.apiKey || undefined,
       supportsStructuredOutputs,
-      // A user's endpoint was checked when saved; DNS and redirects can change, so check every call.
-      ...(desc.keySource === "byok"
-        ? {
-            fetch: guardedFetch({
-              allowPrivate: desc.allowPrivate,
-              timeoutMs: STREAM_TIMEOUT_MS,
-            }),
-          }
-        : {}),
+      // Always route OpenAI-compatible traffic through guardedFetch: BYOK blocks all private/RFC1918
+      // hosts (unless ALLOW_PRIVATE_BYOK_ENDPOINTS=true), and admin/instance endpoints still block
+      // cloud metadata IPs (169.254.169.254 / fd00:ec2::254) and strip Authorization on cross-origin redirects.
+      fetch: guardedFetch({
+        allowPrivate: desc.allowPrivate,
+        timeoutMs: STREAM_TIMEOUT_MS,
+      }),
     });
     return provider.chatModel(desc.upstreamModelId);
   }
@@ -141,24 +268,58 @@ function finishStructuredCall(
   }
 }
 
-function isReasoningExhausted(result: {
-  text: string;
-  finishReason?: string;
-  reasoningText?: string;
-  usage?: unknown;
-}): boolean {
-  if (result.text.trim() !== "") return false;
-  if (result.finishReason === "length") return true;
-  if (result.reasoningText && result.reasoningText.trim() !== "") return true;
-  const usage = result.usage as
+function readReasoningTokens(usage: unknown): number {
+  const u = usage as
     | {
         reasoningTokens?: number;
         outputTokenDetails?: { reasoningTokens?: number };
       }
     | undefined;
-  const reasoningTokens =
-    usage?.reasoningTokens ?? usage?.outputTokenDetails?.reasoningTokens ?? 0;
-  return reasoningTokens > 0;
+  return u?.reasoningTokens ?? u?.outputTokenDetails?.reasoningTokens ?? 0;
+}
+
+function isReasoningExhausted(result: {
+  text?: string;
+  finishReason?: string;
+  reasoningText?: string;
+  usage?: unknown;
+}): boolean {
+  if ((result.text ?? "").trim() !== "") return false;
+  if (result.finishReason === "length") return true;
+  if (result.reasoningText && result.reasoningText.trim() !== "") return true;
+  return readReasoningTokens(result.usage) > 0;
+}
+
+function isLengthTruncatedError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { finishReason?: string; cause?: unknown };
+  if (e.finishReason === "length") return true;
+  return e.cause ? isLengthTruncatedError(e.cause) : false;
+}
+
+function isReasoningExhaustedError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as {
+    text?: string;
+    finishReason?: string;
+    reasoningText?: string;
+    usage?: unknown;
+    cause?: unknown;
+  };
+  if (
+    (e.finishReason !== undefined ||
+      e.usage !== undefined ||
+      e.reasoningText !== undefined) &&
+    isReasoningExhausted({
+      text: typeof e.text === "string" ? e.text : "",
+      finishReason: e.finishReason,
+      reasoningText: e.reasoningText,
+      usage: e.usage,
+    })
+  ) {
+    return true;
+  }
+  return e.cause ? isReasoningExhaustedError(e.cause) : false;
 }
 
 function throwReasoningExhausted(modelId: string, maxTokens: number): never {
@@ -192,37 +353,47 @@ export async function runText({
     scope,
     capability,
   });
+  const boundedMessages = messages ? clampModelMessages(messages) : undefined;
   const startedAt = Date.now();
+  let effectiveMaxTokens = maxOutputTokens;
 
-  let result = await generateText({
-    model: languageModel,
-    system,
-    ...(messages ? { messages } : { prompt: prompt ?? "" }),
-    maxOutputTokens,
-    abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-  });
-
-  if (isReasoningExhausted(result)) {
-    const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
-    logger.warn(
-      `[ai] ${feature} reasoning budget exhausted at ${maxOutputTokens} tokens (model=${modelId}); retrying with ${retryTokens}`,
-    );
+  let result;
+  try {
     result = await generateText({
       model: languageModel,
       system,
-      ...(messages ? { messages } : { prompt: prompt ?? "" }),
-      maxOutputTokens: retryTokens,
+      ...(boundedMessages ? { messages: boundedMessages } : { prompt: prompt ?? "" }),
+      maxOutputTokens,
       abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     });
+
     if (isReasoningExhausted(result)) {
-      throwReasoningExhausted(modelId, retryTokens);
+      const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
+      if (retryTokens > maxOutputTokens) {
+        effectiveMaxTokens = retryTokens;
+        logger.warn(
+          `[ai] ${feature} reasoning budget exhausted at ${maxOutputTokens} tokens (model=${modelId}); retrying with ${retryTokens}`,
+        );
+        result = await generateText({
+          model: languageModel,
+          system,
+          ...(boundedMessages ? { messages: boundedMessages } : { prompt: prompt ?? "" }),
+          maxOutputTokens: retryTokens,
+          abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        });
+      }
+      if (isReasoningExhausted(result)) {
+        throwReasoningExhausted(modelId, effectiveMaxTokens);
+      }
     }
+  } catch (err) {
+    throw sanitizeThrownAiError(err);
   }
 
   logCall(feature, modelId, result.usage, result.finishReason, startedAt);
   if (result.finishReason === "length") {
     logger.warn(
-      `[ai] ${feature} output was truncated at ${maxOutputTokens} tokens (model=${modelId})`,
+      `[ai] ${feature} output was truncated at ${effectiveMaxTokens} tokens (model=${modelId})`,
     );
   }
   return result.text;
@@ -230,6 +401,9 @@ export async function runText({
 
 function shouldDowngradeStructuredRung(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
+  // Never mistake token-limit truncation for response_format incompatibility.
+  if (isLengthTruncatedError(err)) return false;
+
   const e = err as {
     statusCode?: number;
     name?: string;
@@ -245,6 +419,14 @@ function shouldDowngradeStructuredRung(err: unknown): boolean {
   ) {
     return false;
   }
+  const msg = e.message ?? "";
+  if (
+    /context_length|maximum context|too many tokens|prompt is too long/i.test(
+      msg,
+    )
+  ) {
+    return false;
+  }
   if (e.statusCode === 400 || e.statusCode === 422) return true;
   if (
     typeof e.name === "string" &&
@@ -252,9 +434,8 @@ function shouldDowngradeStructuredRung(err: unknown): boolean {
   ) {
     return true;
   }
-  const msg = e.message ?? "";
   if (
-    /response_format|json_schema|json_object|structured|no object generated|could not parse/i.test(
+    /response_format|responseSchema|json_schema|json_object|json mode|structured|no object generated|could not parse/i.test(
       msg,
     )
   ) {
@@ -287,27 +468,285 @@ function withJsonSchemaInstruction(
   return system ? `${system}\n\n${instruction}` : instruction;
 }
 
-function extractJsonPayload(raw: string): unknown {
-  let cleaned = raw.trim();
-  const fenceMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (fenceMatch) {
-    cleaned = fenceMatch[1].trim();
-  } else {
-    const anyFence = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    if (anyFence) cleaned = anyFence[1].trim();
+function stripReasoningBlocks(raw: string): string {
+  // Remove closed <think>/<thinking>/<reasoning>/<thought> blocks emitted by reasoning models.
+  let out = raw.replace(
+    /<(think|thinking|reasoning|thought)\b[^>]*>[\s\S]*?<\/\1>/gi,
+    "",
+  );
+  // If an unclosed <think> tag precedes a closing tag fragment or nothing valid, strip leading tag.
+  const openMatch = out.match(/^\s*<(think|thinking|reasoning|thought)\b[^>]*>/i);
+  if (openMatch) {
+    out = out.slice(openMatch[0].length);
   }
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const firstBrace = cleaned.search(/[{[]/);
-    const lastBrace = Math.max(
-      cleaned.lastIndexOf("}"),
-      cleaned.lastIndexOf("]"),
-    );
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+  return out.trim();
+}
+
+function stripTrailingCommasOutsideStrings(jsonLike: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < jsonLike.length; i++) {
+    const ch = jsonLike[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
     }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < jsonLike.length && /\s/.test(jsonLike[j])) j++;
+      if (jsonLike[j] === "}" || jsonLike[j] === "]") {
+        continue;
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function tryParseJsonCandidate(candidate: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(candidate) };
+  } catch {
+    try {
+      return { ok: true, value: JSON.parse(stripTrailingCommasOutsideStrings(candidate)) };
+    } catch {
+      return { ok: false };
+    }
+  }
+}
+
+function scanBalancedJsonAt(text: string, startIdx: number): string | null {
+  const open = text[startIdx];
+  if (open !== "{" && open !== "[") return null;
+  const stack: string[] = [open === "{" ? "}" : "]"];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startIdx + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      stack.push("}");
+    } else if (ch === "[") {
+      stack.push("]");
+    } else if (ch === "}" || ch === "]") {
+      if (stack[stack.length - 1] !== ch) return null;
+      stack.pop();
+      if (stack.length === 0) {
+        return text.slice(startIdx, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+export function extractJsonPayload(raw: string): unknown {
+  const cleaned = stripReasoningBlocks(raw);
+  if (!cleaned) {
     throw new Error("Model did not return valid JSON.");
+  }
+
+  // 1. Fast path: pure JSON object or array
+  const direct = tryParseJsonCandidate(cleaned);
+  if (direct.ok) return direct.value;
+
+  // 2. Outer markdown fence only (anchored to end of string so inner ```python blocks never truncate!)
+  if (cleaned.startsWith("```") && cleaned.endsWith("```")) {
+    const firstNewline = cleaned.indexOf("\n");
+    if (firstNewline !== -1) {
+      const inner = cleaned.slice(firstNewline + 1, -3).trim();
+      const fenced = tryParseJsonCandidate(inner);
+      if (fenced.ok) return fenced.value;
+    }
+  }
+
+  // 3. Prefer a ```json fenced block when leading prose contains {placeholders}
+  const jsonFenceRegex = /```(?:json)?\s*([{[])/gi;
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = jsonFenceRegex.exec(cleaned)) !== null) {
+    const braceIdx = fenceMatch.index + fenceMatch[0].length - 1;
+    const slice = scanBalancedJsonAt(cleaned, braceIdx);
+    if (slice) {
+      const parsed = tryParseJsonCandidate(slice);
+      if (parsed.ok) return parsed.value;
+    }
+  }
+
+  // 4. General string-aware balanced scan across any { or [ in the response
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (ch === "{" || ch === "[") {
+      const slice = scanBalancedJsonAt(cleaned, i);
+      if (slice) {
+        const parsed = tryParseJsonCandidate(slice);
+        if (parsed.ok) return parsed.value;
+        i += slice.length - 1;
+      }
+    }
+  }
+
+  throw new Error("Model did not return valid JSON.");
+}
+
+export function unwrapArrayCandidate(parsed: unknown): unknown {
+  if (Array.isArray(parsed) || !parsed || typeof parsed !== "object") {
+    return parsed;
+  }
+  const obj = parsed as Record<string, unknown>;
+  for (const key of ["elements", "items", "data", "results"]) {
+    if (Array.isArray(obj[key])) return obj[key];
+  }
+  const arrayValues = Object.values(obj).filter(Array.isArray);
+  if (arrayValues.length === 1) return arrayValues[0];
+  return parsed;
+}
+
+async function callStructuredWithLengthRetry<
+  R extends {
+    usage?: { inputTokens?: number; outputTokens?: number };
+    finishReason?: string;
+    text?: string;
+    reasoningText?: string;
+  },
+>({
+  feature,
+  modelId,
+  maxOutputTokens,
+  invoke,
+}: {
+  feature: string;
+  modelId: string;
+  maxOutputTokens: number;
+  invoke: (tokens: number) => Promise<R>;
+}): Promise<{ result: R; effectiveMaxTokens: number }> {
+  try {
+    let result = await invoke(maxOutputTokens);
+    let effectiveMaxTokens = maxOutputTokens;
+
+    if (
+      (result.finishReason === "length" || isReasoningExhausted(result)) &&
+      maxOutputTokens < MAX_RETRY_TOKENS
+    ) {
+      const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
+      effectiveMaxTokens = retryTokens;
+      logger.warn(
+        `[ai] ${feature} structured output hit ${maxOutputTokens}-token budget (model=${modelId}); retrying with ${retryTokens}`,
+      );
+      result = await invoke(retryTokens);
+    }
+
+    if (isReasoningExhausted(result)) {
+      throwReasoningExhausted(modelId, effectiveMaxTokens);
+    }
+    return { result, effectiveMaxTokens };
+  } catch (err) {
+    if (err instanceof AppError) throw err;
+    if (!isLengthTruncatedError(err) && !isReasoningExhaustedError(err)) {
+      throw err;
+    }
+
+    const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
+    if (retryTokens > maxOutputTokens) {
+      logger.warn(
+        `[ai] ${feature} structured output truncated at ${maxOutputTokens} tokens (model=${modelId}); retrying with ${retryTokens}`,
+      );
+      try {
+        const retryResult = await invoke(retryTokens);
+        if (isReasoningExhausted(retryResult)) {
+          throwReasoningExhausted(modelId, retryTokens);
+        }
+        return { result: retryResult, effectiveMaxTokens: retryTokens };
+      } catch (retryErr) {
+        if (retryErr instanceof AppError) throw retryErr;
+        if (isReasoningExhaustedError(retryErr)) {
+          throwReasoningExhausted(modelId, retryTokens);
+        }
+        if (isLengthTruncatedError(retryErr)) {
+          throw new Error(
+            `The model response was cut off at ${retryTokens} output tokens. Retry with a shorter input or a higher output limit.`,
+            { cause: retryErr },
+          );
+        }
+        throw retryErr;
+      }
+    }
+
+    if (isReasoningExhaustedError(err)) {
+      throwReasoningExhausted(modelId, maxOutputTokens);
+    }
+    throw new Error(
+      `The model response was cut off at ${maxOutputTokens} output tokens. Retry with a shorter input or a higher output limit.`,
+      { cause: err },
+    );
+  }
+}
+
+async function runPromptGuidedStructured<T>({
+  languageModel,
+  modelId,
+  system,
+  prompt,
+  schema,
+  element,
+  maxOutputTokens,
+  feature,
+  startedAt,
+}: {
+  languageModel: LanguageModel;
+  modelId: string;
+  system?: string;
+  prompt: string;
+  schema?: z.ZodType;
+  element?: z.ZodType;
+  maxOutputTokens: number;
+  feature: string;
+  startedAt: number;
+}): Promise<T> {
+  const augmentedSystem = withJsonSchemaInstruction(system, schema, element, false);
+  const { result, effectiveMaxTokens } = await callStructuredWithLengthRetry({
+    feature,
+    modelId,
+    maxOutputTokens,
+    invoke: (tokens) =>
+      generateText({
+        model: languageModel,
+        system: augmentedSystem,
+        prompt,
+        maxOutputTokens: tokens,
+        abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      }),
+  });
+
+  finishStructuredCall(feature, modelId, result, startedAt, effectiveMaxTokens);
+
+  const parsedJson = extractJsonPayload(result.text);
+  try {
+    if (element) {
+      return z.array(element).parse(unwrapArrayCandidate(parsedJson)) as T;
+    }
+    return schema!.parse(parsedJson) as T;
+  } catch (parseErr) {
+    const detail =
+      parseErr instanceof Error ? parseErr.message : String(parseErr);
+    throw new Error(`Model output failed schema validation: ${detail}`, {
+      cause: parseErr,
+    });
   }
 }
 
@@ -339,15 +778,21 @@ async function runOpenAiCompatibleStructured<T>({
   if (rung === "json_schema") {
     try {
       const model = buildLanguageModelFromDescriptor(desc, true);
-      const result = await generateText({
-        model,
-        system,
-        prompt,
-        output,
+      const { result, effectiveMaxTokens } = await callStructuredWithLengthRetry({
+        feature,
+        modelId: desc.modelId,
         maxOutputTokens,
-        abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        invoke: (tokens) =>
+          generateText({
+            model,
+            system,
+            prompt,
+            output,
+            maxOutputTokens: tokens,
+            abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+          }),
       });
-      finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
+      finishStructuredCall(feature, desc.modelId, result, startedAt, effectiveMaxTokens);
       rememberStructuredMode(cacheKey, "json_schema");
       return result.output as T;
     } catch (err) {
@@ -363,15 +808,21 @@ async function runOpenAiCompatibleStructured<T>({
   if (rung === "json_object") {
     try {
       const model = buildLanguageModelFromDescriptor(desc, false);
-      const result = await generateText({
-        model,
-        system: withJsonSchemaInstruction(system, schema, element, true),
-        prompt,
-        output,
+      const { result, effectiveMaxTokens } = await callStructuredWithLengthRetry({
+        feature,
+        modelId: desc.modelId,
         maxOutputTokens,
-        abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        invoke: (tokens) =>
+          generateText({
+            model,
+            system: withJsonSchemaInstruction(system, schema, element, true),
+            prompt,
+            output,
+            maxOutputTokens: tokens,
+            abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+          }),
       });
-      finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
+      finishStructuredCall(feature, desc.modelId, result, startedAt, effectiveMaxTokens);
       rememberStructuredMode(cacheKey, "json_object");
       return result.output as T;
     } catch (err) {
@@ -385,49 +836,17 @@ async function runOpenAiCompatibleStructured<T>({
   }
 
   // Rung 3: Plain prompt JSON (zero response_format on the wire, e.g. LM Studio)
-  const model = buildLanguageModelFromDescriptor(desc, false);
-  const augmentedSystem = withJsonSchemaInstruction(system, schema, element, false);
-
-  let result = await generateText({
-    model,
-    system: augmentedSystem,
+  return runPromptGuidedStructured<T>({
+    languageModel: buildLanguageModelFromDescriptor(desc, false),
+    modelId: desc.modelId,
+    system,
     prompt,
+    schema,
+    element,
     maxOutputTokens,
-    abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+    feature,
+    startedAt,
   });
-
-  if (isReasoningExhausted(result)) {
-    const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
-    result = await generateText({
-      model,
-      system: augmentedSystem,
-      prompt,
-      maxOutputTokens: retryTokens,
-      abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-    });
-    if (isReasoningExhausted(result)) {
-      throwReasoningExhausted(desc.modelId, retryTokens);
-    }
-  }
-
-  finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
-
-  const parsedJson = extractJsonPayload(result.text);
-  if (element) {
-    const candidate = Array.isArray(parsedJson)
-      ? parsedJson
-      : parsedJson &&
-          typeof parsedJson === "object" &&
-          Array.isArray((parsedJson as { elements?: unknown }).elements)
-        ? (parsedJson as { elements: unknown[] }).elements
-        : parsedJson &&
-            typeof parsedJson === "object" &&
-            Array.isArray((parsedJson as { items?: unknown }).items)
-          ? (parsedJson as { items: unknown[] }).items
-          : parsedJson;
-    return z.array(element).parse(candidate) as T;
-  }
-  return schema!.parse(parsedJson) as T;
 }
 
 export async function runStructured<T = unknown>({
@@ -467,7 +886,8 @@ export async function runStructured<T = unknown>({
         startedAt,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      sanitizeThrownAiError(err);
+      const msg = redactAiErrorMessage(err instanceof Error ? err.message : String(err));
       logger.error(
         `[ai] ${feature} structured generation failed (model=${desc.modelId}): ${msg}`,
       );
@@ -480,26 +900,60 @@ export async function runStructured<T = unknown>({
     ? Output.array({ element })
     : Output.object({ schema: schema! });
 
-  let result;
   try {
-    result = await generateText({
-      model: languageModel,
-      system,
-      prompt,
-      output,
+    const { result, effectiveMaxTokens } = await callStructuredWithLengthRetry({
+      feature,
+      modelId: desc.modelId,
       maxOutputTokens,
-      abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      invoke: (tokens) =>
+        generateText({
+          model: languageModel,
+          system,
+          prompt,
+          output,
+          maxOutputTokens: tokens,
+          abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        }),
     });
+    finishStructuredCall(feature, desc.modelId, result, startedAt, effectiveMaxTokens);
+    return result.output as T;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // Fallback for built-in models (e.g. Gemma on Gemini API) that reject native responseSchema
+    // or emit reasoning/fenced prose around valid JSON.
+    if (shouldDowngradeStructuredRung(err)) {
+      logger.warn(
+        `[ai] ${feature} native structured output rejected on ${desc.modelId}; falling back to prompt JSON`,
+      );
+      try {
+        return await runPromptGuidedStructured<T>({
+          languageModel,
+          modelId: desc.modelId,
+          system,
+          prompt,
+          schema,
+          element,
+          maxOutputTokens,
+          feature,
+          startedAt,
+        });
+      } catch (fallbackErr) {
+        sanitizeThrownAiError(fallbackErr);
+        const msg = redactAiErrorMessage(
+          fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+        );
+        logger.error(
+          `[ai] ${feature} structured generation failed (model=${desc.modelId}): ${msg}`,
+        );
+        throw fallbackErr;
+      }
+    }
+    sanitizeThrownAiError(err);
+    const msg = redactAiErrorMessage(err instanceof Error ? err.message : String(err));
     logger.error(
       `[ai] ${feature} structured generation failed (model=${desc.modelId}): ${msg}`,
     );
     throw err;
   }
-
-  finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
-  return result.output as T;
 }
 
 export function chatStream({
@@ -532,14 +986,16 @@ export function chatStream({
   const result = streamText({
     model: languageModel,
     system,
-    messages,
+    messages: clampModelMessages(messages),
     tools,
     stopWhen: stepCountIs(MAX_TOOL_STEPS),
     maxOutputTokens,
     abortSignal: AbortSignal.any(signals),
     timeout: { chunkMs: streamIdleTimeoutMs },
     onError: ({ error }) => {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = redactAiErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      );
       logger.error(`[ai] chat stream error (model=${modelId}): ${msg}`);
     },
     onAbort: () => {

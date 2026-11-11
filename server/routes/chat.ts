@@ -1,4 +1,4 @@
-import { Router, type Response } from "express";
+import { Router, type NextFunction, type Response } from "express";
 import crypto from "node:crypto";
 import { tool, type ModelMessage, type ToolSet } from "ai";
 import { z } from "zod";
@@ -17,7 +17,15 @@ import {
   upsertRagChunksBatch,
   type RagChunkKind,
 } from "../search/hybridSearch.ts";
-import { runText, runStructured, chatStream } from "../ai/engine.ts";
+import {
+  chatStream,
+  clampModelMessages,
+  formatStreamErrorMessage,
+  isForwardableAiError,
+  redactAiErrorMessage,
+  runStructured,
+  runText,
+} from "../ai/engine.ts";
 
 const router = Router();
 
@@ -39,12 +47,17 @@ interface IncomingChatSession {
 
 function fail(
   res: Response,
+  next: NextFunction,
   tag: string,
   err: unknown,
   fallback: string,
   expose = false,
 ): void {
-  const msg = getErrorMessage(err);
+  if (isForwardableAiError(err)) {
+    next(err);
+    return;
+  }
+  const msg = redactAiErrorMessage(getErrorMessage(err));
   logger.error(`[${tag}] Error:`, { error: msg });
   res.status(500).json({ message: expose ? msg || fallback : fallback });
 }
@@ -131,7 +144,7 @@ function tutorSystemPrompt(
   return parts.join("\n\n");
 }
 
-router.get("/starters", async (req, res) => {
+router.get("/starters", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const pillarId = String(req.query.pillarId || "");
@@ -228,6 +241,7 @@ ${userProfile || "No profile available yet."}
 Generate 12 to 15 targeted, short, actionable starter questions the learner could click to ask YOU next.`;
 
     let suggestions: string[];
+    let usedFallback = false;
     try {
       suggestions = await runStructured<string[]>({
         model,
@@ -241,28 +255,31 @@ Generate 12 to 15 targeted, short, actionable starter questions the learner coul
         throw new Error("Empty suggestions");
       }
     } catch {
+      usedFallback = true;
       suggestions = [
         "Let's do a deep dive on this topic",
         "Test my knowledge on this topic",
       ];
     }
 
-    db.prepare(
-      `INSERT INTO chat_starters (ownerId, kit_id, pillar_id, topic_id, suggestions, content_hash, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-       ON CONFLICT(ownerId, kit_id, pillar_id, topic_id) DO UPDATE SET
-         suggestions = excluded.suggestions,
-         content_hash = excluded.content_hash,
-         updated_at = excluded.updated_at`,
-    ).run(scope.ownerId, kit.id, pillarId, topicId, JSON.stringify(suggestions), contentHash);
+    if (!usedFallback) {
+      db.prepare(
+        `INSERT INTO chat_starters (ownerId, kit_id, pillar_id, topic_id, suggestions, content_hash, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(ownerId, kit_id, pillar_id, topic_id) DO UPDATE SET
+           suggestions = excluded.suggestions,
+           content_hash = excluded.content_hash,
+           updated_at = excluded.updated_at`,
+      ).run(scope.ownerId, kit.id, pillarId, topicId, JSON.stringify(suggestions), contentHash);
+    }
 
     res.json({ suggestions: pickSix(suggestions) });
   } catch (err) {
-    fail(res, "chat/starters", err, "Failed to generate starters.");
+    fail(res, next, "chat/starters", err, "Failed to generate starters.");
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { message, context, persona, history = [], model } = req.body as {
@@ -289,7 +306,7 @@ router.post("/", async (req, res) => {
     });
     res.json({ response });
   } catch (err) {
-    fail(res, "chat", err, "Failed to get AI response.", true);
+    fail(res, next, "chat", err, "Failed to get AI response.", true);
   }
 });
 
@@ -388,7 +405,7 @@ async function extractEpisodicMemories({
   message: string;
   generatedText: string;
 }): Promise<void> {
-  const transcript = toModelMessages(history)
+  const transcript = clampModelMessages(toModelMessages(history), 48_000)
     .map((m) => `${m.role}: ${String(m.content)}`)
     .join("\n");
 
@@ -512,6 +529,8 @@ router.post("/stream", async (req, res) => {
     });
 
     let generatedText = "";
+    let streamErrored = false;
+    let finishReason = "";
     for await (const part of result.fullStream) {
       if (res.writableEnded) break;
       if (part.type === "text-delta" && part.text) {
@@ -520,11 +539,13 @@ router.post("/stream", async (req, res) => {
       } else if (part.type === "tool-call") {
         sendSse({ tool: `Running ${part.toolName}...` });
       } else if (part.type === "error") {
-        sendSse({ error: getErrorMessage(part.error) });
+        streamErrored = true;
+        sendSse({ error: formatStreamErrorMessage(part.error) });
       } else if (part.type === "abort" && !abortController.signal.aborted) {
         // A timeout, not the client, ended the stream: report it instead of a truncated [DONE].
         throw new Error("The AI provider stopped responding before the answer finished. Try again.");
       } else if (part.type === "finish") {
+        finishReason = part.finishReason;
         const usage = part.totalUsage;
         logger.info(
           `[ai] chat/stream model=${modelId} finish=${part.finishReason} in=${usage?.inputTokens ?? "?"} out=${usage?.outputTokens ?? "?"}`,
@@ -533,24 +554,43 @@ router.post("/stream", async (req, res) => {
     }
 
     if (!res.writableEnded) {
-      res.write("data: [DONE]\n\n");
-      res.end();
+      if (streamErrored) {
+        res.end();
+      } else if (!abortController.signal.aborted && !generatedText.trim()) {
+        sendSse({
+          error:
+            finishReason === "length"
+              ? "Model exhausted its output token budget without producing a reply. Try a shorter prompt or switch models."
+              : "Model returned an empty response. Try rephrasing your prompt.",
+        });
+        res.end();
+      } else {
+        res.write("data: [DONE]\n\n");
+        res.end();
+      }
     }
 
-    if (!isBackgroundJobsDisabled() && !abortController.signal.aborted && generatedText) {
+    if (
+      !streamErrored &&
+      !isBackgroundJobsDisabled() &&
+      !abortController.signal.aborted &&
+      generatedText.trim()
+    ) {
       extractEpisodicMemories({
         scope,
         kitId: kit.id,
         model,
         history,
-        message,
-        generatedText,
+        message: message.slice(0, 16_000),
+        generatedText: generatedText.slice(0, 32_000),
       }).catch((err: unknown) =>
-        logger.error("[chat/memory] Error:", { error: getErrorMessage(err) }),
+        logger.error("[chat/memory] Error:", {
+          error: redactAiErrorMessage(getErrorMessage(err)),
+        }),
       );
     }
   } catch (err) {
-    const msg = getErrorMessage(err);
+    const msg = formatStreamErrorMessage(err);
     logger.error("[chat/stream] Error:", { error: msg });
     if (!res.writableEnded) {
       sendSse({ error: msg });
@@ -561,7 +601,7 @@ router.post("/stream", async (req, res) => {
   }
 });
 
-router.post("/generate-flashcards", async (req, res) => {
+router.post("/generate-flashcards", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { text, topicName, model, sessionContext, sections, pillarId, topicId } = req.body as {
@@ -581,15 +621,17 @@ router.post("/generate-flashcards", async (req, res) => {
 
   try {
     const contextBlock = sessionContext
-      ? `\n\nFor additional context, this text comes from a study session about "${topicName || kit.skeleton.identity.name}". Here is some surrounding conversation context:\n--- SESSION CONTEXT ---\n${sessionContext}\n--- END CONTEXT ---\nUse this context ONLY to better understand the concepts — the flashcard content should primarily come from the source text below.\n`
+      ? `\n\nFor additional context, this text comes from a study session about "${topicName || kit.skeleton.identity.name}". Here is some surrounding conversation context:\n--- SESSION CONTEXT ---\n${sessionContext.slice(0, 32_000)}\n--- END CONTEXT ---\nUse this context ONLY to better understand the concepts — the flashcard content should primarily come from the source text below.\n`
       : "";
 
     const sectionAware = Boolean(sections && sections.length > 0);
-    const sourceBlock = sectionAware
-      ? sections!
-          .map((s) => `=== SECTION: "${s.sectionName}" (id: "${s.sectionId}") ===\n${s.content}`)
-          .join("\n\n---\n\n")
-      : (text ?? "");
+    const sourceBlock = (
+      sectionAware
+        ? sections!
+            .map((s) => `=== SECTION: "${s.sectionName}" (id: "${s.sectionId}") ===\n${s.content}`)
+            .join("\n\n---\n\n")
+        : (text ?? "")
+    ).slice(0, 120_000);
 
     const sectionAwareInstructions = sectionAware
       ? `\n7. TAG EACH CARD with the section it came from using sourceSectionId and sourceSectionName fields. Use the exact section id and name provided above.\n8. Generate cards from EACH section that has substantive content. Aim for 2-4 cards per section, but skip sections with insufficient depth.`
@@ -640,11 +682,11 @@ ${sourceBlock}`;
 
     res.json({ cards });
   } catch (err) {
-    fail(res, "chat/generate-flashcards", err, "Failed to generate flashcards.", true);
+    fail(res, next, "chat/generate-flashcards", err, "Failed to generate flashcards.", true);
   }
 });
 
-router.post("/generate-reverse-cards", async (req, res) => {
+router.post("/generate-reverse-cards", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { cards, model } = req.body as {
@@ -657,7 +699,10 @@ router.post("/generate-reverse-cards", async (req, res) => {
   }
 
   try {
-    const cardList = cards.map((c, i) => `[Card ${i}]\nQ: ${c.front}\nA: ${c.back}`).join("\n\n");
+    const cardList = cards
+      .map((c, i) => `[Card ${i}]\nQ: ${c.front}\nA: ${c.back}`)
+      .join("\n\n")
+      .slice(0, 64_000);
     const prompt = `You are an expert flashcard creator for ${kit.skeleton.identity.name}. Given the flashcards below, generate ONE reverse card for each that tests the SAME concept from a different angle or retrieval pathway.
 
 RULES:
@@ -687,11 +732,11 @@ Generate one reverse card per input card.`;
 
     res.json({ reverseCards });
   } catch (err) {
-    fail(res, "chat/generate-reverse-cards", err, "Failed to generate reverse cards.", true);
+    fail(res, next, "chat/generate-reverse-cards", err, "Failed to generate reverse cards.", true);
   }
 });
 
-router.post("/summarize", async (req, res) => {
+router.post("/summarize", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { excerpts = [], sectionId, sectionName, topicName, model } = req.body as {
@@ -717,7 +762,7 @@ Below are excerpts from their AI-assisted study conversation. Extract and synthe
 Format as clean, dense markdown suitable for a study reference guide (## headers, bullet points, inline backticks, **bold** key terms).
 
 --- CONVERSATION EXCERPTS ---
-${excerpts.join("\n\n---\n\n")}
+${excerpts.join("\n\n---\n\n").slice(0, 120_000)}
 --- END EXCERPTS ---
 
 Now write the guide section content:`;
@@ -731,11 +776,11 @@ Now write the guide section content:`;
     });
     res.json({ content });
   } catch (err) {
-    fail(res, "chat/summarize", err, "Failed to summarize.", true);
+    fail(res, next, "chat/summarize", err, "Failed to summarize.", true);
   }
 });
 
-router.post("/evaluate-interceptor", async (req, res) => {
+router.post("/evaluate-interceptor", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { explanation, front, back, model } = req.body as {
@@ -751,7 +796,9 @@ router.post("/evaluate-interceptor", async (req, res) => {
   }
 
   try {
-    const fencedExplanation = explanation.replace(/<\/untrusted_/gi, "<\\/untrusted_");
+    const fencedExplanation = explanation
+      .slice(0, 32_000)
+      .replace(/<\/untrusted_/gi, "<\\/untrusted_");
     const prompt = `You are a rigorous, anti-sycophancy learning evaluator for ${kit.skeleton.identity.name}. The learner was asked a flashcard question and must explain WHY the answer is true to prove genuine understanding rather than pattern-matching.
 
 Question: ${front}
@@ -803,7 +850,13 @@ Follow this strict falsification-first evaluation order:
         factualOrLogicalErrors: evaluation.factualOrLogicalErrors,
       });
     } catch (err) {
-      logger.error("[chat/evaluate-interceptor] Evaluation failed:", { error: getErrorMessage(err) });
+      if (isForwardableAiError(err)) {
+        next(err);
+        return;
+      }
+      logger.error("[chat/evaluate-interceptor] Evaluation failed:", {
+        error: redactAiErrorMessage(getErrorMessage(err)),
+      });
       res.json({
         pass: false,
         feedback: "Error evaluating response format.",
@@ -812,11 +865,11 @@ Follow this strict falsification-first evaluation order:
       });
     }
   } catch (err) {
-    fail(res, "chat/evaluate-interceptor", err, "Failed to evaluate.");
+    fail(res, next, "chat/evaluate-interceptor", err, "Failed to evaluate.");
   }
 });
 
-router.post("/concept-map", async (req, res) => {
+router.post("/concept-map", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { history = [], model } = req.body as { history?: StoredMessage[]; model?: string };
@@ -827,12 +880,13 @@ router.post("/concept-map", async (req, res) => {
   }
 
   try {
+    const boundedHistory = clampModelMessages(toModelMessages(history), 120_000);
     const prompt = `You are an expert educational visualizer for ${kit.skeleton.identity.name}. Extract the key concepts, entities, and their relationships from the following chat history.
 Your output MUST be a valid, syntactically correct \`mermaid\` graph definition (e.g. \`graph TD\`).
 Use concise node labels and relationship labels. Only output the markdown block containing the mermaid code.
 
 Chat History:
-${history.map((msg) => `${msg.role}: ${msg.content}`).join("\n\n")}`;
+${boundedHistory.map((msg) => `${msg.role}: ${String(msg.content)}`).join("\n\n")}`;
 
     let responseText = await runText({
       model,
@@ -848,11 +902,11 @@ ${history.map((msg) => `${msg.role}: ${msg.content}`).join("\n\n")}`;
 
     res.json({ response: responseText });
   } catch (err) {
-    fail(res, "chat/concept-map", err, "Failed to generate concept map.", true);
+    fail(res, next, "chat/concept-map", err, "Failed to generate concept map.", true);
   }
 });
 
-router.post("/commit", async (req, res) => {
+router.post("/commit", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const {
@@ -887,9 +941,20 @@ router.post("/commit", async (req, res) => {
   }
 
   try {
-    const conversationText = messages
-      .map((m, i) => `[MSG ${i}][${m.role === "ai" ? "Tutor" : "Student"}]: ${m.content}`)
-      .join("\n\n");
+    const MAX_COMMIT_CHARS = 140_000;
+    const keptCommitTurns: string[] = [];
+    let commitUsed = 0;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      const text = typeof m?.content === "string" ? m.content.slice(0, 64_000) : "";
+      if (!text.trim()) continue;
+      const line = `[MSG ${i}][${m.role === "ai" ? "Tutor" : "Student"}]: ${text}`;
+      if (keptCommitTurns.length > 0 && commitUsed + line.length > MAX_COMMIT_CHARS) break;
+      keptCommitTurns.push(line);
+      commitUsed += line.length;
+    }
+    keptCommitTurns.reverse();
+    const conversationText = keptCommitTurns.join("\n\n");
 
     const getExisting = db.prepare(
       "SELECT content FROM guide_content WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?",
@@ -976,7 +1041,7 @@ Return the targeted sections with their complete updated content.`;
       });
       identifiedSections = parsed.sections || [];
     } catch (parseErr) {
-      fail(res, "chat/commit", parseErr, "Failed to analyze conversation sections.", true);
+      fail(res, next, "chat/commit", parseErr, "Failed to analyze conversation sections.", true);
       return;
     }
 
@@ -999,11 +1064,11 @@ Return the targeted sections with their complete updated content.`;
 
     res.json({ updates });
   } catch (err) {
-    fail(res, "chat/commit", err, "Failed to analyze session. Please try again.");
+    fail(res, next, "chat/commit", err, "Failed to analyze session. Please try again.");
   }
 });
 
-router.post("/commit/save", async (req, res) => {
+router.post("/commit/save", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { pillarId, topicId, updates = [] } = req.body as {
@@ -1050,11 +1115,11 @@ router.post("/commit/save", async (req, res) => {
 
     res.json({ ok: true, savedCount });
   } catch (err) {
-    fail(res, "chat/commit/save", err, "Failed to save guide updates.");
+    fail(res, next, "chat/commit/save", err, "Failed to save guide updates.");
   }
 });
 
-router.get("/sessions", (req, res) => {
+router.get("/sessions", (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   try {
@@ -1085,7 +1150,7 @@ router.get("/sessions", (req, res) => {
     }
     res.json(sessions);
   } catch (err) {
-    fail(res, "chat/sessions", err, "Failed to fetch sessions.");
+    fail(res, next, "chat/sessions", err, "Failed to fetch sessions.");
   }
 });
 
@@ -1116,7 +1181,7 @@ function upsertChatSession(scope: Scope, kitId: string, s: IncomingChatSession):
   );
 }
 
-router.post("/sessions", (req, res) => {
+router.post("/sessions", (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { session } = req.body as { session?: IncomingChatSession };
@@ -1128,11 +1193,11 @@ router.post("/sessions", (req, res) => {
     upsertChatSession(scope, kit.id, session);
     res.json({ success: true });
   } catch (err) {
-    fail(res, "chat/sessions POST", err, "Failed to save session.");
+    fail(res, next, "chat/sessions POST", err, "Failed to save session.");
   }
 });
 
-router.post("/sessions/bulk", (req, res) => {
+router.post("/sessions/bulk", (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { sessions } = req.body as { sessions?: Record<string, IncomingChatSession> };
@@ -1148,11 +1213,11 @@ router.post("/sessions/bulk", (req, res) => {
     })();
     res.json({ success: true });
   } catch (err) {
-    fail(res, "chat/sessions/bulk", err, "Failed to save sessions in bulk.");
+    fail(res, next, "chat/sessions/bulk", err, "Failed to save sessions in bulk.");
   }
 });
 
-router.delete("/sessions/:id", (req, res) => {
+router.delete("/sessions/:id", (req, res, next) => {
   const scope = scopeOf(req);
   try {
     db.prepare("DELETE FROM chat_sessions WHERE ownerId = ? AND id = ?").run(
@@ -1161,7 +1226,7 @@ router.delete("/sessions/:id", (req, res) => {
     );
     res.json({ success: true });
   } catch (err) {
-    fail(res, "chat/sessions DELETE", err, "Failed to delete session.");
+    fail(res, next, "chat/sessions DELETE", err, "Failed to delete session.");
   }
 });
 
