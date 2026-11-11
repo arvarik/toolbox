@@ -1005,23 +1005,22 @@ router.post(
       source_section_id,
       is_reverse,
       reverse_of_id,
-    } = req.body as Record<string, unknown>;
+    } = (req.body ?? {}) as Record<string, unknown>;
 
-    if (
-      typeof front !== "string" ||
-      !front.trim() ||
-      front.length > 20_000 ||
-      typeof back !== "string" ||
-      !back.trim() ||
-      back.length > 40_000
-    ) {
-      throw new ValidationError("Valid non-empty front and back strings are required");
+    if (front !== undefined && (typeof front !== "string" || front.length > 20_000)) {
+      throw new ValidationError("front must be a string up to 20000 characters");
+    }
+    if (back !== undefined && (typeof back !== "string" || back.length > 40_000)) {
+      throw new ValidationError("back must be a string up to 40000 characters");
+    }
+    const frontText = typeof front === "string" ? front.trim() : "";
+    const backText = typeof back === "string" ? back.trim() : "";
+    if (!frontText && !backText) {
+      throw new ValidationError("At least one of front or back must be non-empty");
     }
 
     const id = randomUUID();
     const nodeId = typeof node_id === "string" && node_id.trim() ? node_id.trim().slice(0, 200) : null;
-    const frontText = front.trim();
-    const backText = back.trim();
 
     db.transaction(() => {
       const maxPos = db
@@ -1098,15 +1097,15 @@ router.put(
 
     let safeFront: string | null = null;
     if (front !== undefined) {
-      if (typeof front !== "string" || !front.trim() || front.length > 20_000) {
-        throw new ValidationError("front must be a non-empty string up to 20000 characters");
+      if (typeof front !== "string" || front.length > 20_000) {
+        throw new ValidationError("front must be a string up to 20000 characters");
       }
       safeFront = front.trim();
     }
     let safeBack: string | null = null;
     if (back !== undefined) {
-      if (typeof back !== "string" || !back.trim() || back.length > 40_000) {
-        throw new ValidationError("back must be a non-empty string up to 40000 characters");
+      if (typeof back !== "string" || back.length > 40_000) {
+        throw new ValidationError("back must be a string up to 40000 characters");
       }
       safeBack = back.trim();
     }
@@ -1167,14 +1166,18 @@ router.put(
 
     const card = getOwnedCard(scope, cardId)!;
 
-    await upsertRagChunk(db, scope, {
-      kitId: deck.kit_id,
-      kind: "flashcard",
-      sourceRefId: card.id,
-      nodeId: card.node_id,
-      title: card.front,
-      content: `${card.front}\n${card.back}`,
-    });
+    if (card.front.trim() || card.back.trim()) {
+      await upsertRagChunk(db, scope, {
+        kitId: deck.kit_id,
+        kind: "flashcard",
+        sourceRefId: card.id,
+        nodeId: card.node_id,
+        title: card.front,
+        content: `${card.front}\n${card.back}`,
+      });
+    } else {
+      deleteRagChunksBySource(db, scope, deck.kit_id, "flashcard", card.id);
+    }
 
     res.json(card);
   }),

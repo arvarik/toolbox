@@ -1,11 +1,12 @@
 // @vitest-environment node
 import type { Express } from "express";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "../app.ts";
 import db from "../db.ts";
 import { computeGraphHealth } from "../graph/health.ts";
 import { exportKitBackupZip } from "../kits/kitExportImport.ts";
-import { ensureDefaultSystemDesignKit } from "../kits/kitsSchema.ts";
+import { computeSkeletonCounts, listSharedKits } from "../kits/kitService.ts";
+import { ensureDefaultSystemDesignKit, initKitsSchema } from "../kits/kitsSchema.ts";
 import { liveCardRetrievability } from "../mcp/toolboxMcpTools.ts";
 import { createZipArchive, extractZipArchive } from "../platform/archive/zip.ts";
 import { getOwnerDataHooks } from "../platform/db/connection.ts";
@@ -945,5 +946,256 @@ describe("Backend Performance, Stability & API Harmony Suite", () => {
       graphWsRes.body.nodes as Array<{ id: string; filledSections: number }>
     ).find((n) => n.id === "ownership");
     expect(borrowingNode?.filledSections ?? 0).toBe(0);
+  });
+
+  it("7. preserves DeckEditor save loops with half-filled cards, caches Shared Library skeleton counts without 500s, and drops dead partial index", async () => {
+    const { aliceAgent, aliceScope } = tenants;
+    const defaultKit = ensureDefaultSystemDesignKit(db, aliceScope);
+
+    // 7a. DeckEditor multi-card create & update loop with half-filled cards (front-only, back-only, full)
+    const editorDeckRes = await aliceAgent
+      .post("/api/decks")
+      .set("X-Toolbox-Kit", defaultKit.slug)
+      .send({ name: "DeckEditor Half-Filled Save Loop Deck", description: "Initial", tags: "srs" })
+      .expect(201);
+    const editorDeckId = editorDeckRes.body.id as string;
+
+    const initialPayloads = [
+      { front: "Front-only draft question", back: "" },
+      { front: "   ", back: "Back-only cloze note" },
+      { front: "Complete question after half-filled cards", back: "Complete answer" },
+    ];
+    const createdCards: Array<{ id: string; front: string; back: string }> = [];
+    for (const payload of initialPayloads) {
+      const res = await aliceAgent
+        .post(`/api/decks/${editorDeckId}/cards`)
+        .send(payload)
+        .expect(201);
+      createdCards.push(res.body);
+    }
+    expect(createdCards[0]).toMatchObject({ front: "Front-only draft question", back: "" });
+    expect(createdCards[1]).toMatchObject({ front: "", back: "Back-only cloze note" });
+    expect(createdCards[2]).toMatchObject({
+      front: "Complete question after half-filled cards",
+      back: "Complete answer",
+    });
+
+    // DeckEditor edit loop: PUT metadata, PUT every existing card (including half-filled), POST newly added half-filled card
+    await aliceAgent
+      .put(`/api/decks/${editorDeckId}`)
+      .send({ name: "DeckEditor Updated Name", description: "Updated", tags: "srs,drafts" })
+      .expect(200);
+
+    const editLoopUpdates = [
+      { id: createdCards[0]!.id, front: "Front-only draft question (edited)", back: "   " },
+      { id: createdCards[1]!.id, front: "", back: "Back-only cloze note (edited)" },
+      {
+        id: createdCards[2]!.id,
+        front: "Later card still saved cleanly",
+        back: "Later card answer updated",
+      },
+    ];
+    for (const u of editLoopUpdates) {
+      const putRes = await aliceAgent
+        .put(`/api/decks/${editorDeckId}/cards/${u.id}`)
+        .send({ front: u.front, back: u.back, prerequisite_id: null })
+        .expect(200);
+      expect(putRes.body.id).toBe(u.id);
+    }
+
+    const fourthHalfCard = await aliceAgent
+      .post(`/api/decks/${editorDeckId}/cards`)
+      .send({ front: "Appended half-filled card", back: "" })
+      .expect(201);
+    expect(fourthHalfCard.body.front).toBe("Appended half-filled card");
+    expect(fourthHalfCard.body.back).toBe("");
+
+    const reloadedDeck = await aliceAgent.get(`/api/decks/${editorDeckId}`).expect(200);
+    expect(reloadedDeck.body.cards).toHaveLength(4);
+    expect(reloadedDeck.body.cards[2]).toMatchObject({
+      front: "Later card still saved cleanly",
+      back: "Later card answer updated",
+    });
+
+    // Clearing both sides of an existing card via PUT succeeds cleanly and drops stale RAG chunks
+    const clearedPut = await aliceAgent
+      .put(`/api/decks/${editorDeckId}/cards/${fourthHalfCard.body.id}`)
+      .send({ front: "", back: "" })
+      .expect(200);
+    expect(clearedPut.body).toMatchObject({ front: "", back: "" });
+
+    // Creating a brand-new card with BOTH sides empty or non-string/oversized still rejects with 400
+    await aliceAgent
+      .post(`/api/decks/${editorDeckId}/cards`)
+      .send({ front: "   ", back: "\n\t" })
+      .expect(400);
+    await aliceAgent
+      .post(`/api/decks/${editorDeckId}/cards`)
+      .send({ front: 123, back: "Valid" })
+      .expect(400);
+    await aliceAgent
+      .put(`/api/decks/${editorDeckId}/cards/${createdCards[0]!.id}`)
+      .send({ back: 456 })
+      .expect(400);
+
+    // 7b. Shared Library defensive skeleton count extraction & zero-parse/zero-blob repeat cache
+    const syntheticSharedFixtures = [
+      {
+        id: "shared-no-seeds",
+        slug: "shared-no-seeds",
+        name: "No Seeds Kit",
+        skeletonJson: JSON.stringify({
+          identity: { author: "Minimal Author" },
+          pillars: [{ id: "p1", topics: [{ id: "t1" }, { id: "t2" }] }],
+          graph: { nodes: [{ id: "n1" }, { id: "n2" }, { id: "n3" }] },
+        }),
+        expected: {
+          pillarCount: 1,
+          topicCount: 2,
+          nodeCount: 3,
+          starterCardCount: 0,
+          starterDrillCount: 0,
+        },
+      },
+      {
+        id: "shared-no-graph",
+        slug: "shared-no-graph",
+        name: "No Graph Kit",
+        skeletonJson: JSON.stringify({
+          pillars: [{ id: "p1", topics: null }],
+          seeds: { cards: [{ key: "c1" }, { key: "c2" }], drills: [{ key: "d1" }] },
+        }),
+        expected: {
+          pillarCount: 1,
+          topicCount: 0,
+          nodeCount: 0,
+          starterCardCount: 2,
+          starterDrillCount: 1,
+        },
+      },
+      {
+        id: "shared-empty-obj",
+        slug: "shared-empty-obj",
+        name: "Empty Object Kit",
+        skeletonJson: "{}",
+        expected: {
+          pillarCount: 0,
+          topicCount: 0,
+          nodeCount: 0,
+          starterCardCount: 0,
+          starterDrillCount: 0,
+        },
+      },
+      {
+        id: "shared-corrupt-json",
+        slug: "shared-corrupt-json",
+        name: "Corrupt JSON Kit",
+        skeletonJson: "{corrupt-skeleton-json",
+        expected: {
+          pillarCount: 0,
+          topicCount: 0,
+          nodeCount: 0,
+          starterCardCount: 0,
+          starterDrillCount: 0,
+        },
+      },
+    ];
+
+    const insShared = db.prepare(
+      `INSERT INTO shared_kits (
+         id, slug, publisher_user_id, latest_version, name, description,
+         icon, color, tags, is_official, downloads_count, created_at, updated_at
+       ) VALUES (?, ?, NULL, 1, ?, 'Resilience fixture', '📦', '#006a91', '["resilience"]', 0, 0, '2026-11-11 00:00:00', '2026-11-11 00:00:00')`,
+    );
+    const insSharedVer = db.prepare(
+      `INSERT INTO shared_kit_versions (shared_kit_id, version, changelog, skeleton_json, created_at)
+       VALUES (?, 1, 'fixture', ?, '2026-11-11 00:00:00')`,
+    );
+
+    try {
+      for (const fx of syntheticSharedFixtures) {
+        insShared.run(fx.id, fx.slug, fx.name);
+        insSharedVer.run(fx.id, fx.skeletonJson);
+      }
+
+      expect(computeSkeletonCounts(null)).toMatchObject({
+        pillarCount: 0,
+        topicCount: 0,
+        nodeCount: 0,
+        starterCardCount: 0,
+        starterDrillCount: 0,
+      });
+
+      // Warm call via HTTP endpoint: must return 200 with exact defensive counts (never 500!)
+      const firstListRes = await aliceAgent.get("/api/shared-kits").expect(200);
+      const listedBySlug = new Map(
+        (firstListRes.body.kits as Array<Record<string, unknown>>).map((k) => [
+          String(k.slug),
+          k,
+        ]),
+      );
+      for (const fx of syntheticSharedFixtures) {
+        expect(listedBySlug.get(fx.slug)).toMatchObject(fx.expected);
+        const slugDetail = await aliceAgent.get(`/api/shared-kits/${fx.slug}`).expect(200);
+        expect(slugDetail.body.sharedKit).toMatchObject(fx.expected);
+      }
+
+      // Repeat calls must read ZERO skeleton_json blobs from SQLite and invoke JSON.parse ZERO times!
+      const preparedSqls: string[] = [];
+      const origPrepare = db.prepare.bind(db);
+      const prepareSpy = vi.spyOn(db, "prepare").mockImplementation(((sql: string) => {
+        preparedSqls.push(sql);
+        return origPrepare(sql);
+      }) as typeof db.prepare);
+      const jsonParseSpy = vi.spyOn(JSON, "parse");
+
+      try {
+        const cachedList = listSharedKits(db);
+        expect(cachedList.length).toBeGreaterThanOrEqual(syntheticSharedFixtures.length + 1);
+        expect(jsonParseSpy).not.toHaveBeenCalled();
+        expect(
+          preparedSqls.some(
+            (s) => s.includes("shared_kit_versions") || s.includes("skeleton_json"),
+          ),
+        ).toBe(false);
+
+        preparedSqls.length = 0;
+        await aliceAgent.get("/api/shared-kits?tag=resilience").expect(200);
+        expect(
+          preparedSqls.some(
+            (s) => s.includes("shared_kit_versions") || s.includes("skeleton_json"),
+          ),
+        ).toBe(false);
+      } finally {
+        jsonParseSpy.mockRestore();
+        prepareSpy.mockRestore();
+      }
+    } finally {
+      const delShared = db.prepare("DELETE FROM shared_kits WHERE id = ?");
+      for (const fx of syntheticSharedFixtures) {
+        delShared.run(fx.id);
+      }
+    }
+
+    // 7c. Dead partial index idx_rag_chunks_missing_emb is absent and dropped from pre-existing DBs
+    expect(
+      db
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_rag_chunks_missing_emb'",
+        )
+        .get(),
+    ).toBeUndefined();
+
+    db.exec(
+      "CREATE INDEX idx_rag_chunks_missing_emb ON rag_chunks(ownerId, chunk_id) WHERE embedding_gen IS NULL",
+    );
+    initKitsSchema(db);
+    expect(
+      db
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_rag_chunks_missing_emb'",
+        )
+        .get(),
+    ).toBeUndefined();
   });
 });

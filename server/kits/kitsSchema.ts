@@ -29,7 +29,7 @@ const RAG_TABLES_DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_rag_chunks_owner_kit ON rag_chunks(ownerId, kit_id, kind);
   CREATE INDEX IF NOT EXISTS idx_rag_chunks_source ON rag_chunks(ownerId, kit_id, kind, source_ref_id);
-  CREATE INDEX IF NOT EXISTS idx_rag_chunks_missing_emb ON rag_chunks(ownerId, chunk_id) WHERE embedding_gen IS NULL;
+  DROP INDEX IF EXISTS idx_rag_chunks_missing_emb;
 
   CREATE VIRTUAL TABLE IF NOT EXISTS rag_chunks_fts USING fts5(
     chunk_id UNINDEXED,
