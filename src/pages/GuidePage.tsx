@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams } from 'react-router'
 import {
   Calculator,
@@ -23,6 +23,30 @@ interface ArchivedNote {
   topicId: string
   sectionId: string
   content: string
+}
+
+function toggleDogearEntry(
+  list: GuideDogearItem[],
+  pId: string,
+  tId: string,
+  secId = '',
+): GuideDogearItem[] {
+  const exists = list.some(
+    (d) => d.pillarId === pId && d.topicId === tId && (d.sectionId || '') === secId,
+  )
+  return exists
+    ? list.filter(
+        (d) => !(d.pillarId === pId && d.topicId === tId && (d.sectionId || '') === secId),
+      )
+    : [
+        ...list,
+        {
+          pillarId: pId,
+          topicId: tId,
+          sectionId: secId,
+          createdAt: new Date().toISOString(),
+        },
+      ]
 }
 
 /**
@@ -74,19 +98,27 @@ export default function GuidePage() {
       .catch(() => null)
   }, [pillarId, topicId, kitId, kitSlug])
 
+  const dogearsRef = useRef<GuideDogearItem[]>(dogears)
+  dogearsRef.current = dogears
+
   // Load folded page dogears for active Kit
   const loadDogears = useCallback(() => {
     if (!guideContentApi?.listDogears) {
+      dogearsRef.current = []
       setDogears([])
       return
     }
     Promise.resolve(guideContentApi.listDogears())
       .then((items) => {
         const list = Array.isArray(items) ? items : []
+        dogearsRef.current = list
         setDogears(list)
         useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: list.length })
       })
-      .catch(() => setDogears([]))
+      .catch(() => {
+        dogearsRef.current = []
+        setDogears([])
+      })
   }, [])
 
   useEffect(() => {
@@ -94,46 +126,20 @@ export default function GuidePage() {
   }, [kitId, kitSlug, loadDogears])
 
   const handleToggleDogear = useCallback((pId: string, tId: string, secId = '') => {
-    let previous: GuideDogearItem[] = []
-    let nextCount = 0
-    setDogears((prev) => {
-      previous = prev
-      const exists = prev.some(
-        (d) =>
-          d.pillarId === pId &&
-          d.topicId === tId &&
-          (d.sectionId || '') === secId,
-      )
-      const next = exists
-        ? prev.filter(
-            (d) =>
-              !(
-                d.pillarId === pId &&
-                d.topicId === tId &&
-                (d.sectionId || '') === secId
-              ),
-          )
-        : [
-            ...prev,
-            {
-              pillarId: pId,
-              topicId: tId,
-              sectionId: secId,
-              createdAt: new Date().toISOString(),
-            },
-          ]
-      nextCount = next.length
-      return next
-    })
-    useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: nextCount })
+    const next = toggleDogearEntry(dogearsRef.current, pId, tId, secId)
+    dogearsRef.current = next
+    setDogears(next)
+    useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: next.length })
 
     Promise.resolve(guideContentApi?.toggleDogear?.(pId, tId, secId))
       .then(() => {
         window.dispatchEvent(new Event('guide-dogears-updated'))
       })
       .catch(() => {
-        setDogears(previous)
-        useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: previous.length })
+        const reverted = toggleDogearEntry(dogearsRef.current, pId, tId, secId)
+        dogearsRef.current = reverted
+        setDogears(reverted)
+        useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: reverted.length })
       })
   }, [])
 

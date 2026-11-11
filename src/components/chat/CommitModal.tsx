@@ -36,17 +36,14 @@ function extractSummaryBullets(update: CommitSectionUpdate): string[] {
 }
 
 function buildLineDiff(existingRaw: string | undefined, nextRaw: string): DiffHunk[] {
-  // ponytail: O(M*N) positional LCS capped at 60 non-empty lines per section; upgrade to Myers diff if sections exceed ~500 lines
   const oldLines = (existingRaw || '')
     .split('\n')
     .map((l) => l.trimEnd())
     .filter((l) => l.trim().length > 0)
-    .slice(0, 60)
   const newLines = nextRaw
     .split('\n')
     .map((l) => l.trimEnd())
     .filter((l) => l.trim().length > 0)
-    .slice(0, 60)
 
   if (oldLines.length === 0) {
     return newLines.map((line) => ({ type: 'add', line }))
@@ -54,6 +51,37 @@ function buildLineDiff(existingRaw: string | undefined, nextRaw: string): DiffHu
 
   const m = oldLines.length
   const n = newLines.length
+
+  // ponytail: exact LCS up to 250k cells (~500x500 lines); above that, anchor common prefix/suffix so 100% of lines still show without quadratic lag
+  if (m * n > 250_000) {
+    let prefixLen = 0
+    while (
+      prefixLen < m &&
+      prefixLen < n &&
+      oldLines[prefixLen].trim() === newLines[prefixLen].trim()
+    ) {
+      prefixLen++
+    }
+    let suffixLen = 0
+    while (
+      suffixLen < m - prefixLen &&
+      suffixLen < n - prefixLen &&
+      oldLines[m - 1 - suffixLen].trim() === newLines[n - 1 - suffixLen].trim()
+    ) {
+      suffixLen++
+    }
+    const fallback: DiffHunk[] = []
+    for (let i = 0; i < prefixLen; i++) fallback.push({ type: 'ctx', line: newLines[i] })
+    for (let i = prefixLen; i < m - suffixLen; i++) {
+      fallback.push({ type: 'del', line: oldLines[i] })
+    }
+    for (let j = prefixLen; j < n - suffixLen; j++) {
+      fallback.push({ type: 'add', line: newLines[j] })
+    }
+    for (let j = n - suffixLen; j < n; j++) fallback.push({ type: 'ctx', line: newLines[j] })
+    return fallback
+  }
+
   const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
   for (let i = m - 1; i >= 0; i--) {
     for (let j = n - 1; j >= 0; j--) {
@@ -82,7 +110,7 @@ function buildLineDiff(existingRaw: string | undefined, nextRaw: string): DiffHu
   }
   while (i < m) hunks.push({ type: 'del', line: oldLines[i++] })
   while (j < n) hunks.push({ type: 'add', line: newLines[j++] })
-  return hunks.slice(0, 80)
+  return hunks
 }
 
 /**

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router'
 import {
   Cpu,
@@ -143,6 +143,7 @@ export default function BlueprintShell({
   const [generatedCards, setGeneratedCards] = useState<GeneratedFlashcardDraft[]>([])
   const [isGeneratingCards, setIsGeneratingCards] = useState(false)
   const [pendingHighlightIdForCard, setPendingHighlightIdForCard] = useState<string | null>(null)
+  const userInteractedContextRef = useRef<string>('')
 
   // Reset expanded/edit state when Kit, pillar, or topic changes
   if (contextKey !== prevContextKey) {
@@ -154,13 +155,23 @@ export default function BlueprintShell({
     setEditingSection(null)
   }
 
-  // Auto-expand any dogeared sections or deep-linked #blueprint-<section> hash target
+  // Deep-linked #blueprint-<section> hash: open target section and scroll only when topic/hash changes
+  useEffect(() => {
+    if (!pillarId || !topicId || !hashSectionId) return
+    setExpandedSections((prev) =>
+      prev[hashSectionId] ? prev : { ...prev, [hashSectionId]: true },
+    )
+    const el = document.getElementById(`blueprint-${hashSectionId}`)
+    el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  }, [pillarId, topicId, contextKey, hashSectionId])
+
+  // Auto-expand dogeared sections on initial topic arrival (never re-open after user collapses/toggles)
   useEffect(() => {
     if (!pillarId || !topicId) return
+    if (userInteractedContextRef.current === contextKey) return
     const sectionIdsToOpen = effectiveDogears
       .filter((d) => d.pillarId === pillarId && d.topicId === topicId && Boolean(d.sectionId))
       .map((d) => d.sectionId)
-    if (hashSectionId) sectionIdsToOpen.push(hashSectionId)
     if (sectionIdsToOpen.length > 0) {
       setExpandedSections((prev) => {
         let changed = false
@@ -174,11 +185,7 @@ export default function BlueprintShell({
         return changed ? next : prev
       })
     }
-    if (hashSectionId) {
-      const el = document.getElementById(`blueprint-${hashSectionId}`)
-      el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
-    }
-  }, [pillarId, topicId, effectiveDogears, hashSectionId])
+  }, [pillarId, topicId, contextKey, effectiveDogears])
 
   // Fetch committed content when pillar+topic+Kit are selected
   const fetchContent = useCallback(() => {
@@ -259,29 +266,31 @@ export default function BlueprintShell({
 
   const handleToggleDogear = useCallback(
     (pId: string, tId: string, secId = '') => {
+      userInteractedContextRef.current = contextKey
       if (controlledToggleDogear) {
         controlledToggleDogear(pId, tId, secId)
         return
       }
-      setLocalDogears((prev) => {
-        const exists = prev.some(
+      const flip = (list: GuideDogearItem[]) => {
+        const exists = list.some(
           (d) => d.pillarId === pId && d.topicId === tId && (d.sectionId || '') === secId,
         )
         return exists
-          ? prev.filter(
+          ? list.filter(
               (d) =>
                 !(d.pillarId === pId && d.topicId === tId && (d.sectionId || '') === secId),
             )
           : [
-              ...prev,
+              ...list,
               { pillarId: pId, topicId: tId, sectionId: secId, createdAt: new Date().toISOString() },
             ]
-      })
+      }
+      setLocalDogears(flip)
       void Promise.resolve(guideContentApi?.toggleDogear?.(pId, tId, secId))
         .then(() => window.dispatchEvent(new Event('guide-dogears-updated')))
-        .catch(() => null)
+        .catch(() => setLocalDogears(flip))
     },
-    [controlledToggleDogear],
+    [contextKey, controlledToggleDogear],
   )
 
   const handleAddHighlight = useCallback(
@@ -426,6 +435,7 @@ export default function BlueprintShell({
   )
 
   const toggleSection = (sectionId: string) => {
+    userInteractedContextRef.current = contextKey
     setExpandedSections((prev) => {
       const nextOpen = !prev[sectionId]
       if (nextOpen) recordSectionResume(sectionId)

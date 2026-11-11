@@ -344,9 +344,25 @@ export default function ChatPage() {
                       variant="primary"
                       size="sm"
                       className="w-full"
-                      disabled={!resolvedTopic || aiMessageCount === 0}
+                      disabled={
+                        !resolvedTopic ||
+                        aiMessageCount === 0 ||
+                        !sessionState.session ||
+                        Boolean(
+                          sessionState.session.topicId &&
+                            (sessionState.session.pillarId !== resolvedTopic.pillar.id ||
+                              sessionState.session.topicId !== resolvedTopic.topic.id),
+                        )
+                      }
                       onClick={() => {
-                        if (!resolvedTopic) return
+                        if (!resolvedTopic || !sessionState.session) return
+                        if (
+                          sessionState.session.topicId &&
+                          (sessionState.session.pillarId !== resolvedTopic.pillar.id ||
+                            sessionState.session.topicId !== resolvedTopic.topic.id)
+                        ) {
+                          return
+                        }
                         startAnalysis(sessionState.messages, {
                           pillarId: resolvedTopic.pillar.id,
                           topicId: resolvedTopic.topic.id,

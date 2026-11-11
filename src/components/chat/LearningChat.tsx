@@ -246,7 +246,7 @@ export default function LearningChat({
     sessionsRef.current = sessions
   }, [sessions])
 
-  const activeTopicIdRef = useRef<string | undefined>(activeTopic?.topic?.id)
+  const activeTopicIdRef = useRef<string | undefined>(undefined)
 
   useEffect(() => {
     onSessionStateChange?.({ session: currentSession, messages })
@@ -302,19 +302,20 @@ export default function LearningChat({
           if (cancelled) return
         }
 
-        setSessions(finalSessions)
-
         const saved = loadCurrentId(storageScope)
-        if (saved && finalSessions[saved]) {
-          setCurrentId(saved)
-        } else {
-          const ids = Object.keys(finalSessions).sort(
-            (a, b) =>
-              new Date(finalSessions[b]?.createdAt ?? 0).getTime() -
-              new Date(finalSessions[a]?.createdAt ?? 0).getTime(),
-          )
-          setCurrentId(ids[0] ?? null)
-        }
+        const initialId =
+          saved && finalSessions[saved]
+            ? saved
+            : (Object.keys(finalSessions).sort(
+                (a, b) =>
+                  new Date(finalSessions[b]?.createdAt ?? 0).getTime() -
+                  new Date(finalSessions[a]?.createdAt ?? 0).getTime(),
+              )[0] ?? null)
+
+        sessionsRef.current = finalSessions
+        currentIdRef.current = initialId
+        setSessions(finalSessions)
+        setCurrentId(initialId)
         setLoadedScope(storageScope)
       } catch (err) {
         if (cancelled) return
@@ -704,15 +705,13 @@ export default function LearningChat({
     ],
   )
 
-  // Handle activeTopic changes (from curriculum spine clicks)
+  // Bind or create a topic-scoped session once sessions have finished loading
   useEffect(() => {
-    if (!activeTopic) {
-      setTimeout(() => setStarters(defaultStarters), 0)
-      return
-    }
+    if (!isLoaded || !activeTopic) return
 
-    const currId = currentIdRef.current
-    const session = currId ? sessionsRef.current[currId] : undefined
+    const targetKey = `${activeTopic.pillar.id}:${activeTopic.topic.id}`
+    if (activeTopicIdRef.current === targetKey) return
+    activeTopicIdRef.current = targetKey
 
     const topicCtx: CommitTopicContext = {
       pillarId: activeTopic.pillar.id,
@@ -720,26 +719,48 @@ export default function LearningChat({
       topicName: activeTopic.topic.name,
     }
 
-    if (activeTopicIdRef.current !== activeTopic.topic.id) {
-      activeTopicIdRef.current = activeTopic.topic.id
-      setTimeout(() => {
-        if (session && session.messages.length > 0) {
-          const s = makeSession(`Study: ${activeTopic.topic.name}`, topicCtx)
-          setSessions((prev) => ({ ...prev, [s.id]: s }))
-          setCurrentId(s.id)
-        } else if (session && currId) {
-          setSessions((prev) => ({
-            ...prev,
-            [currId]: {
-              ...session,
-              name: `Study: ${activeTopic.topic.name}`,
-              pillarId: topicCtx.pillarId,
-              topicId: topicCtx.topicId,
-              topicName: topicCtx.topicName,
-            },
-          }))
-        }
-      }, 0)
+    const currId = currentIdRef.current
+    const session = currId ? sessionsRef.current[currId] : undefined
+
+    if (
+      session &&
+      session.pillarId === topicCtx.pillarId &&
+      session.topicId === topicCtx.topicId
+    ) {
+      return
+    }
+
+    if (session && currId && session.messages.length === 0 && !session.topicId) {
+      const tagged: ChatSession = {
+        ...session,
+        name: `Study: ${activeTopic.topic.name}`,
+        pillarId: topicCtx.pillarId,
+        topicId: topicCtx.topicId,
+        topicName: topicCtx.topicName,
+      }
+      sessionsRef.current = { ...sessionsRef.current, [currId]: tagged }
+      setSessions((prev) => ({ ...prev, [currId]: tagged }))
+      void Promise.resolve(chatApi.saveSession(tagged)).catch(() => null)
+      return
+    }
+
+    let s = makeSession(`Study: ${activeTopic.topic.name}`, topicCtx)
+    if (sessionsRef.current[s.id]) {
+      s = { ...s, id: `${s.id}-${Object.keys(sessionsRef.current).length + 1}` }
+    }
+    sessionsRef.current = { ...sessionsRef.current, [s.id]: s }
+    currentIdRef.current = s.id
+    setSessions((prev) => ({ ...prev, [s.id]: s }))
+    setCurrentId(s.id)
+    saveCurrentId(storageScope, s.id)
+    void Promise.resolve(chatApi.saveSession(s)).catch(() => null)
+  }, [isLoaded, activeTopic, storageScope])
+
+  // Handle activeTopic starters and section completion status
+  useEffect(() => {
+    if (!activeTopic) {
+      setTimeout(() => setStarters(defaultStarters), 0)
+      return
     }
 
     const pillarSections = sectionsByPillar[activeTopic.pillar.id] || []

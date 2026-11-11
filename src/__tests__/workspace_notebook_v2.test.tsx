@@ -406,4 +406,166 @@ describe('v2 3-Pane Study Workspace, Navigation Chrome & Living Notebook', () =>
     })
     await waitFor(() => expect(useKitStore.getState().activeKitSlug).toBeNull())
   })
+
+  it('binds ?pillar=&topic= deep links after sessions load, diffs >60-line commits in full, and rolls back single dogear toggles without re-scrolling', async () => {
+    const sysKit = makeTestKit({ slug: 'system-design', name: 'System Design' })
+    resetKitStore(sysKit)
+    useKitStore.setState({ kits: [sysKit], activeKitSlug: 'system-design' })
+
+    // #8: Delayed getSessions returns an older session about a DIFFERENT topic with AI messages
+    let resolveSessions!: (val: Record<string, unknown>) => void
+    apiMocks.sessionsList.mockImplementation(
+      () =>
+        new Promise((res) => {
+          resolveSessions = res
+        }),
+    )
+
+    const { unmount: unmountChat } = render(
+      <MemoryRouter
+        initialEntries={['/k/system-design/chat?pillar=compute&topic=traffic-gateways']}
+      >
+        <Routes>
+          <Route
+            path="/k/:slug/chat"
+            element={
+              <>
+                <ChatPage />
+                <CommitModal />
+              </>
+            }
+          />
+        </Routes>
+      </MemoryRouter>,
+    )
+
+    await act(async () => {
+      resolveSessions({
+        'session-unrelated': {
+          id: 'session-unrelated',
+          name: 'Study: Consensus',
+          createdAt: '2026-11-10T09:00:00Z',
+          pillarId: 'storage',
+          topicId: 'consensus',
+          topicName: 'Consensus',
+          messages: [
+            { role: 'user', content: 'Explain Raft' },
+            { role: 'ai', content: 'Raft elects a single leader.' },
+          ],
+        },
+      })
+    })
+
+    // A dedicated session for Traffic Gateways is created & persisted; unrelated Raft reply is NOT active
+    await waitFor(() =>
+      expect(apiMocks.sessionsCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          pillarId: 'compute',
+          topicId: 'traffic-gateways',
+          messages: [],
+        }),
+      ),
+    )
+    expect(screen.queryByText('Raft elects a single leader.')).toBeNull()
+
+    const inspector = screen.getByTestId('chat-notebook-inspector')
+    fireEvent.click(
+      within(within(inspector).getByRole('tablist', { name: 'Notebook inspector tabs' })).getByRole(
+        'tab',
+        { name: /Updates/i },
+      ),
+    )
+    const commitBtn = within(inspector).getByRole('button', { name: /Commit Session to Guide/i })
+    expect(commitBtn).toBeDisabled()
+
+    // #6: CommitModal diffs >60 lines without silently hiding dropped notes past line 60
+    const old75 = Array.from({ length: 75 }, (_, i) => `Invariant line ${i + 1}`).join('\n')
+    const new75 = Array.from({ length: 75 }, (_, i) =>
+      i === 71 ? 'Updated invariant line 72' : `Invariant line ${i + 1}`,
+    )
+      .filter((_, i) => i !== 73) // drops line 74!
+      .join('\n')
+    apiMocks.commitAnalyze.mockResolvedValueOnce({
+      updates: [
+        {
+          sectionId: 'description',
+          sectionName: 'Description & Internal Workings',
+          isNew: false,
+          reason: 'Refined tail invariants.',
+          existingContent: old75,
+          newContent: new75,
+        },
+      ],
+    })
+
+    await act(async () => {
+      useCommitStore.getState().startAnalysis(
+        [
+          { role: 'user', content: 'Check tail invariants' },
+          { role: 'ai', content: 'Updated line 72.' },
+        ],
+        {
+          pillarId: 'compute',
+          topicId: 'traffic-gateways',
+          topicName: 'Traffic Gateways & Proxies',
+        },
+      )
+    })
+
+    expect(await screen.findByText('Refined tail invariants.')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Show diff/i }))
+    expect(screen.getByText('Updated invariant line 72')).toBeInTheDocument()
+    expect(screen.getByText('Invariant line 74')).toBeInTheDocument()
+    unmountChat()
+
+    // #7 & #9: GuidePage dogear toggle updates count synchronously, rolls back ONLY the failed toggle, and does not re-scroll hash
+    const scrollSpy = vi.fn()
+    const origScroll = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = scrollSpy
+    try {
+      let rejectToggle!: (err: Error) => void
+      apiMocks.toggleDogear.mockImplementationOnce(
+        () =>
+          new Promise((_, rej) => {
+            rejectToggle = rej
+          }),
+      )
+
+      await act(async () => {
+        render(
+          <MemoryRouter
+            initialEntries={[
+              '/k/system-design/guide/compute/traffic-gateways#blueprint-description',
+            ]}
+          >
+            <Routes>
+              <Route path="/k/:slug/guide/:pillarId/:topicId" element={<GuidePage />} />
+            </Routes>
+          </MemoryRouter>,
+        )
+      })
+
+      await waitFor(() =>
+        expect(useKitStore.getState().kits[0]?.dogearCount).toBe(1),
+      )
+      const callsAfterHashMount = scrollSpy.mock.calls.length
+
+      // Click section dogear -> optimistic count immediately becomes 2, zero extra hash scroll
+      const secDogear = screen.getByTestId('dogear-description')
+      fireEvent.click(secDogear)
+      expect(useKitStore.getState().kits[0]?.dogearCount).toBe(2)
+      expect(scrollSpy.mock.calls.length).toBe(callsAfterHashMount)
+
+      // Reject API call -> rolls back back to 1 (preserving the original page dogear, NOT wiping to 0!)
+      await act(async () => {
+        rejectToggle(new Error('network error'))
+      })
+      await waitFor(() =>
+        expect(useKitStore.getState().kits[0]?.dogearCount).toBe(1),
+      )
+      expect(scrollSpy.mock.calls.length).toBe(callsAfterHashMount)
+    } finally {
+      Element.prototype.scrollIntoView = origScroll
+    }
+  })
 })
