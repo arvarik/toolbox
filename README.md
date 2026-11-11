@@ -108,7 +108,7 @@ To run from source without Docker, use `npm ci && npm run build && npm start`. S
 | [SRS & Pedagogy Spec](docs/srs-algorithm.md) | FSRS-6 21-weight DSR math, FIRe-Lite graph credit, remediation, anti-sycophancy |
 | [Deployment Guide](docs/deployment.md) | Docker (`node:26-trixie-slim`), reverse proxies, OIDC/Passkeys, SearXNG, airgapped ONNX |
 | [Architecture](docs/architecture.md) | TypeScript stack, `platform/` boundary, tenant-scoped SQLite + `sqlite-vec`, worker isolation |
-| [Design Reference](docs/design.md) | Tailwind v4 semantic `@theme` tokens (WCAG AA), legacy CSS classes, SVG sanitizer rules |
+| [Design System](DESIGN.md) | Warm Charcoal & Warm Paper tokens (WCAG AA), `src/components/ui/` primitives, Laws of UX (`docs/design.md`) |
 | [Brand Guide](docs/brand/README.md) | Kit the box turtle, the "Tools for Thought" tagline, logo versions, app icon, colors |
 | [Agent Instructions](docs/AGENTS.md) | Invariants, `Scope` / `tenant-lint` rules, and codebase gotchas for coding agents |
 | [Contributing](CONTRIBUTING.md) | Dev setup, `oxlint` / `tsc` / `tenant-lint` gates, Vitest & Playwright suites |

@@ -1,50 +1,59 @@
 @import "tailwindcss";
 
 /**
- * Toolbox v2 Semantic @theme Tokens (Contrack-compatible token names,
- * tuned to Toolbox's dark-first indigo/violet + warm-paper light study palette).
+ * Toolbox v2 — Warm Charcoal & Warm Paper Living Notebook Design System.
  *
- * Every ink/status/accent token clears WCAG 2.1 AA (>= 4.5:1) against every
- * surface and 10%/15%/20% pill wash in both dark and light modes, enforced by
- * `src/__tests__/theme_contrast.test.ts`.
+ * 1. Zero-Halation Surfaces: Warm charcoal desk-lamp slate (#191816 canvas,
+ *    #22211e raised notebook sheet, #ebe7e0 parchment ink) in dark mode and
+ *    warm textbook paper (#f5f2ea canvas, #fcfaf5 raised sheet, #1e1c19 ink)
+ *    in light mode — zero #000000 OLED bloom and zero #ffffff glare.
+ * 2. Strict 4-Purpose Color Law (Von Restorff Effect):
+ *    - Kit's Warm Amber Signature & Primary CTA (`--color-primary` / `--color-brand`)
+ *    - +/- Note Diffs (`--color-success` / `--color-error`)
+ *    - Overdue / Failing Memory (`--color-error` / `--color-danger`)
+ *    - User 3-Ink Textbook Highlights (`amber`, `sage`, `coral`)
+ * 3. Every foreground/status/accent token clears WCAG 2.1 AA (>= 4.5:1)
+ *    against all 6 surface tiers and 10%/15%/20% washes in both modes,
+ *    enforced by `scripts/contrast-audit.mjs` and `src/__tests__/theme_contrast.test.ts`.
  */
 @theme {
   --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+  --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Charter, Georgia, serif;
 
-  /* Default (@theme) = Toolbox Dark Study Palette */
-  --color-primary: #93a0ff;
-  --color-primary-dim: #acb6ff;
-  --color-primary-container: #2e3678;
-  --color-on-primary: #0a1026;
-  --color-on-primary-wash: #a5b4fc;
+  /* Default (@theme) = Warm Charcoal Study Palette */
+  --color-primary: #f0a429;
+  --color-primary-dim: #f5b84c;
+  --color-primary-container: #5c3d09;
+  --color-on-primary: #191816;
+  --color-on-primary-wash: #f7be59;
 
-  --color-ai: #c4a8ff;
-  --color-on-ai-wash: #cfb8ff;
+  --color-ai: #e8b468;
+  --color-on-ai-wash: #f2c684;
 
-  --color-secondary: #b4b4c0;
-  --color-highlight: #523c12;
+  --color-secondary: #bdb7ac;
+  --color-highlight: #4d3812;
 
-  --color-success: #34d399;
-  --color-warning: #fbbf24;
-  --color-info: #60a5fa;
-  --color-error: #ff8a8a;
-  --color-danger: #ff8a8a;
-  --color-on-error: #3b0808;
+  --color-success: #6fbf94;
+  --color-warning: #f0a429;
+  --color-info: #7db4d8;
+  --color-error: #f08c82;
+  --color-danger: #f08c82;
+  --color-on-error: #2b0906;
 
-  --color-surface: #09090b;
-  --color-on-surface: #f4f4f5;
-  --color-surface-variant: #272732;
-  --color-on-surface-variant: #b0b0bc;
+  --color-surface: #191816;
+  --color-on-surface: #ebe7e0;
+  --color-surface-variant: #34312b;
+  --color-on-surface-variant: #b5afa4;
 
-  --color-surface-container-lowest: #0d0d12;
-  --color-surface-container-low: #121218;
-  --color-surface-container: #16161e;
-  --color-surface-container-high: #1c1c26;
-  --color-surface-container-highest: #232330;
+  --color-surface-container-lowest: #141311;
+  --color-surface-container-low: #1d1c19;
+  --color-surface-container: #22211e;
+  --color-surface-container-high: #272521;
+  --color-surface-container-highest: #2c2a25;
 
-  --color-outline: #767686;
-  --color-outline-variant: #2e2e3d;
+  --color-outline: #857f74;
+  --color-outline-variant: #38352f;
 
   --radius-sm: 6px;
   --radius-md: 8px;
@@ -57,65 +66,388 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-primary: #93a0ff;
-  --color-primary-dim: #acb6ff;
-  --color-primary-container: #2e3678;
-  --color-on-primary: #0a1026;
-  --color-on-primary-wash: #a5b4fc;
-  --color-ai: #c4a8ff;
-  --color-on-ai-wash: #cfb8ff;
-  --color-secondary: #b4b4c0;
-  --color-highlight: #523c12;
-  --color-success: #34d399;
-  --color-warning: #fbbf24;
-  --color-info: #60a5fa;
-  --color-error: #ff8a8a;
-  --color-danger: #ff8a8a;
-  --color-on-error: #3b0808;
-  --color-surface: #09090b;
-  --color-on-surface: #f4f4f5;
-  --color-surface-variant: #272732;
-  --color-on-surface-variant: #b0b0bc;
-  --color-surface-container-lowest: #0d0d12;
-  --color-surface-container-low: #121218;
-  --color-surface-container: #16161e;
-  --color-surface-container-high: #1c1c26;
-  --color-surface-container-highest: #232330;
-  --color-outline: #767686;
-  --color-outline-variant: #2e2e3d;
+  --color-primary: #f0a429;
+  --color-primary-dim: #f5b84c;
+  --color-primary-container: #5c3d09;
+  --color-on-primary: #191816;
+  --color-on-primary-wash: #f7be59;
+  --color-ai: #e8b468;
+  --color-on-ai-wash: #f2c684;
+  --color-secondary: #bdb7ac;
+  --color-highlight: #4d3812;
+  --color-success: #6fbf94;
+  --color-warning: #f0a429;
+  --color-info: #7db4d8;
+  --color-error: #f08c82;
+  --color-danger: #f08c82;
+  --color-on-error: #2b0906;
+  --color-surface: #191816;
+  --color-on-surface: #ebe7e0;
+  --color-surface-variant: #34312b;
+  --color-on-surface-variant: #b5afa4;
+  --color-surface-container-lowest: #141311;
+  --color-surface-container-low: #1d1c19;
+  --color-surface-container: #22211e;
+  --color-surface-container-high: #272521;
+  --color-surface-container-highest: #2c2a25;
+  --color-outline: #857f74;
+  --color-outline-variant: #38352f;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --color-primary: #4338ca;
-  --color-primary-dim: #3730a3;
-  --color-primary-container: #e0e7ff;
+  --color-primary: #944905;
+  --color-primary-dim: #783a04;
+  --color-primary-container: #f7e3c6;
   --color-on-primary: #ffffff;
-  --color-on-primary-wash: #3730a3;
-  --color-ai: #6d28d9;
-  --color-on-ai-wash: #5b21b6;
-  --color-secondary: #475569;
-  --color-highlight: #fce7a6;
-  --color-success: #046b4e;
-  --color-warning: #944807;
-  --color-info: #036796;
-  --color-error: #bf1b1b;
-  --color-danger: #bf1b1b;
+  --color-on-primary-wash: #7c3c04;
+  --color-ai: #7a4412;
+  --color-on-ai-wash: #66380d;
+  --color-secondary: #524d44;
+  --color-highlight: #f7dfa8;
+  --color-success: #166241;
+  --color-warning: #8c4605;
+  --color-info: #18587a;
+  --color-error: #a82419;
+  --color-danger: #a82419;
   --color-on-error: #ffffff;
-  --color-surface: #f8f6f2;
-  --color-on-surface: #18181b;
-  --color-surface-variant: #e5e2db;
-  --color-on-surface-variant: #4f5259;
-  --color-surface-container-lowest: #ffffff;
-  --color-surface-container-low: #f2f1ed;
-  --color-surface-container: #eceae4;
-  --color-surface-container-high: #e7e5e0;
-  --color-surface-container-highest: #e5e2db;
-  --color-outline: #6e717a;
-  --color-outline-variant: #d4d1cb;
+  --color-surface: #f5f2ea;
+  --color-on-surface: #1e1c19;
+  --color-surface-variant: #dad3c4;
+  --color-on-surface-variant: #4f4a42;
+  --color-surface-container-lowest: #fcfaf5;
+  --color-surface-container-low: #efeae0;
+  --color-surface-container: #e9e3d7;
+  --color-surface-container-high: #e4ded1;
+  --color-surface-container-highest: #dfd8ca;
+  --color-outline: #6e685e;
+  --color-outline-variant: #cfc8b9;
 }
 
 :root[data-theme="light"] .bg-error\/15.text-danger,
 :root[data-theme="light"] .bg-error\/15.text-error {
-  color: #991b1b;
+  color: #8f1d14;
+}
+
+/* ---------------------------------------------------------------------------
+   Living Notebook & Precision Hardware Tokens (`src/components/ui/*`)
+   --------------------------------------------------------------------------- */
+:root,
+:root[data-theme="dark"] {
+  --color-surface-low: #141311;
+  --color-surface-card: #22211e;
+  --color-surface-elevated: #292723;
+  --color-surface-hover: #33302b;
+
+  --color-ink: #ebe7e0;
+  --color-ink-muted: #b5afa4;
+  --color-ink-faint: #a39d92;
+
+  --color-line: rgba(235, 231, 224, 0.085);
+  --color-line-strong: rgba(235, 231, 224, 0.16);
+
+  --color-brand: #f0a429;
+  --color-brand-strong: #d97706;
+  --color-accent-fill: #e59a24;
+  --color-accent-fill-hover: #f0a836;
+  --color-accent-ink: #191816;
+
+  --color-ok: #6fbf94;
+  --color-warn: #f0a429;
+  --color-err: #f08c82;
+
+  --color-diff-add-bg: rgba(111, 191, 148, 0.11);
+  --color-diff-add-bar: #6fbf94;
+  --color-diff-add-ink: #c2ebd4;
+  --color-diff-del-bg: rgba(240, 140, 130, 0.11);
+  --color-diff-del-bar: #f08c82;
+  --color-diff-del-ink: #f8cbc6;
+
+  --color-hl-amber-bg: rgba(240, 164, 41, 0.20);
+  --color-hl-amber-line: rgba(240, 164, 41, 0.52);
+  --color-hl-sage-bg: rgba(111, 191, 148, 0.18);
+  --color-hl-sage-line: rgba(111, 191, 148, 0.48);
+  --color-hl-coral-bg: rgba(240, 140, 130, 0.18);
+  --color-hl-coral-line: rgba(240, 140, 130, 0.48);
+
+  --shadow-hairline: inset 0 1px 0 0 rgba(255, 252, 245, 0.055);
+  --shadow-sheet:
+    0 1px 2px rgba(0, 0, 0, 0.34),
+    0 14px 32px -14px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 0 rgba(255, 252, 245, 0.05);
+  --shadow-float:
+    0 18px 42px -12px rgba(0, 0, 0, 0.68),
+    0 0 0 1px rgba(235, 231, 224, 0.11);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: linear(
+    0, 0.012, 0.048 2.4%, 0.192 5.4%, 0.531 11%, 0.812 16.5%,
+    0.967 21.2%, 1.031 25.6%, 1.048 29.8%, 1.035 36.2%, 1.008 46.5%,
+    0.998 58%, 1
+  );
+}
+
+:root[data-theme="light"] {
+  --color-surface-low: #ece7dc;
+  --color-surface-card: #fcfaf5;
+  --color-surface-elevated: #e4dfd2;
+  --color-surface-hover: #dad4c4;
+
+  --color-ink: #1e1c19;
+  --color-ink-muted: #4f4a42;
+  --color-ink-faint: #59534a;
+
+  --color-line: rgba(30, 28, 25, 0.09);
+  --color-line-strong: rgba(30, 28, 25, 0.17);
+
+  --color-brand: #944905;
+  --color-brand-strong: #783a04;
+  --color-accent-fill: #944905;
+  --color-accent-fill-hover: #783a04;
+  --color-accent-ink: #ffffff;
+
+  --color-ok: #166241;
+  --color-warn: #8c4605;
+  --color-err: #a82419;
+
+  --color-diff-add-bg: rgba(22, 98, 65, 0.09);
+  --color-diff-add-bar: #166241;
+  --color-diff-add-ink: #114c32;
+  --color-diff-del-bg: rgba(168, 36, 25, 0.085);
+  --color-diff-del-bar: #a82419;
+  --color-diff-del-ink: #7a1911;
+
+  --color-hl-amber-bg: rgba(234, 158, 34, 0.27);
+  --color-hl-amber-line: rgba(148, 73, 5, 0.48);
+  --color-hl-sage-bg: rgba(45, 148, 100, 0.20);
+  --color-hl-sage-line: rgba(22, 98, 65, 0.45);
+  --color-hl-coral-bg: rgba(214, 84, 70, 0.19);
+  --color-hl-coral-line: rgba(168, 36, 25, 0.45);
+
+  --shadow-hairline: inset 0 1px 0 0 rgba(255, 255, 255, 0.82);
+  --shadow-sheet:
+    0 1px 2px rgba(30, 28, 25, 0.07),
+    0 12px 28px -14px rgba(30, 28, 25, 0.14),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.85);
+  --shadow-float:
+    0 18px 38px -12px rgba(30, 28, 25, 0.16),
+    0 0 0 1px rgba(30, 28, 25, 0.11);
+}
+
+/* Physical Notebook Sheet — reserved strictly for Guide pages & Flashcards */
+.notebook-sheet {
+  background-color: var(--color-surface-card);
+  border: 1px solid var(--color-line-strong);
+  box-shadow: var(--shadow-sheet);
+}
+
+/* Organic Analog Textbook Highlighter Inks */
+.hl-mark {
+  padding: 0.05em 0.22em;
+  margin: 0 -0.05em;
+  border-radius: 4px 6px 3px 5px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition: filter 140ms ease;
+}
+
+.hl-mark:hover {
+  filter: brightness(1.09);
+}
+
+.hl-amber {
+  background-color: var(--color-hl-amber-bg);
+  border-bottom: 1.5px solid var(--color-hl-amber-line);
+}
+
+.hl-sage {
+  background-color: var(--color-hl-sage-bg);
+  border-bottom: 1.5px solid var(--color-hl-sage-line);
+}
+
+.hl-coral {
+  background-color: var(--color-hl-coral-bg);
+  border-bottom: 1.5px solid var(--color-hl-coral-line);
+}
+
+.scroll-fade-y {
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0px,
+    #000 12px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
+}
+
+.accordion-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition:
+    grid-template-rows 190ms var(--ease-out-expo),
+    opacity 150ms ease;
+}
+
+.accordion-grid[data-open="true"] {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.accordion-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@keyframes stage-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.985) translate3d(0, 5px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+  }
+}
+
+@keyframes popover-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translate3d(0, -3px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+  }
+}
+
+@keyframes sheet-turn-next {
+  from {
+    opacity: 0.55;
+    transform: perspective(900px) translate3d(14px, 2px, 0) rotateY(-2.2deg) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(900px) translate3d(0, 0, 0) rotateY(0deg) scale(1);
+  }
+}
+
+@keyframes sheet-turn-prev {
+  from {
+    opacity: 0.55;
+    transform: perspective(900px) translate3d(-14px, 2px, 0) rotateY(2.2deg) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(900px) translate3d(0, 0, 0) rotateY(0deg) scale(1);
+  }
+}
+
+@keyframes card-flip-reveal {
+  from {
+    opacity: 0.65;
+    transform: perspective(1000px) rotateX(6deg) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(1000px) rotateX(0deg) scale(1);
+  }
+}
+
+@keyframes kit-shell-breathe {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(1.2px) scale(0.95, 0.93);
+  }
+}
+
+@keyframes kit-eye-blink {
+  0%,
+  86%,
+  100% {
+    transform: scaleY(1);
+  }
+  92% {
+    transform: scaleY(0.12);
+  }
+}
+
+@keyframes wave-bar {
+  0%,
+  100% {
+    transform: scaleY(0.28);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+.animate-stage-enter {
+  animation: stage-enter 190ms var(--ease-out-expo) both;
+}
+
+.animate-popover-enter {
+  animation: popover-enter 150ms var(--ease-out-expo) both;
+}
+
+.animate-sheet-next {
+  animation: sheet-turn-next 210ms var(--ease-out-expo) both;
+}
+
+.animate-sheet-prev {
+  animation: sheet-turn-prev 210ms var(--ease-out-expo) both;
+}
+
+.animate-card-flip {
+  animation: card-flip-reveal 190ms var(--ease-out-expo) both;
+}
+
+.animate-kit-thinking {
+  animation: kit-shell-breathe 1.35s ease-in-out infinite;
+  transform-origin: center 55%;
+}
+
+.animate-kit-blink {
+  animation: kit-eye-blink 3.6s ease-in-out infinite;
+  transform-origin: 85.5px 43px;
+}
+
+.animate-wave-bar {
+  animation: wave-bar 760ms ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-soft,
+  .animate-stage-enter,
+  .animate-popover-enter,
+  .animate-sheet-next,
+  .animate-sheet-prev,
+  .animate-card-flip,
+  .animate-kit-thinking,
+  .animate-kit-blink,
+  .animate-wave-bar {
+    animation: none !important;
+  }
+
+  .accordion-grid,
+  .flashcard-inner {
+    transition: none !important;
+  }
 }

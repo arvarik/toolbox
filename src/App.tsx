@@ -24,6 +24,7 @@ const InterleavedPage = lazy(() => import('./pages/InterleavedPage'))
 const CalculatorPage = lazy(() => import('./pages/CalculatorPage'))
 const GraphPage = lazy(() => import('./pages/GraphPage'))
 const NewKitStudioPage = lazy(() => import('./pages/NewKitStudioPage'))
+const DesignSystemPage = lazy(() => import('./pages/DesignSystemPage'))
 
 export default function App() {
   const calcModalOpen = useAppStore((s) => s.calcModalOpen)
@@ -69,6 +70,7 @@ export default function App() {
             <Route path="/graph" element={<GraphPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/new" element={<NewKitStudioPage />} />
+            <Route path="/design-system" element={<DesignSystemPage />} />
           </Route>
         </Routes>
       </Suspense>

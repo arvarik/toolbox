@@ -10,6 +10,7 @@ import ChatPanel from '../components/shared/ChatPanel'
 import useAppStore from '../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
 import useIsMobile from '../hooks/useIsMobile'
+import '../components/graph/graph-flow.css'
 import { boardsApi } from '../utils/api'
 import { auditArchitecture, type AuditReport } from '../utils/architectureLinter'
 import {

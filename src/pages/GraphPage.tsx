@@ -7,6 +7,7 @@ import NodePanel, { type StudySessionCard } from '../components/graph/NodePanel'
 import FlashcardView from '../components/study/FlashcardView'
 import { HEALTH_COLORS, HEALTH_LABELS, type HealthBucket } from '../components/graph/graphLayout'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
+import '../components/graph/graph-flow.css'
 
 type ReadinessFilterId = 'all' | 'ready' | 'needs-review' | 'mastered'
 
