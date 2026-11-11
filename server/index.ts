@@ -15,16 +15,23 @@ import logger from "./utils/logger.ts";
 
 export const KEEP_ALIVE_TIMEOUT_MS = 65_000;
 export const HEADERS_TIMEOUT_MS = 66_000;
+export const REQUEST_TIMEOUT_MS = 120_000;
 export const SHUTDOWN_TIMEOUT_MS = 10_000;
 
 export function isLoopbackHost(host: string): boolean {
-  return host === "127.0.0.1" || host === "localhost" || host === "::1";
+  return (
+    host === "127.0.0.1" ||
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
 }
 
 export function createHttpServer(app: Express): http.Server {
   const server = http.createServer(app);
   server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
   server.headersTimeout = HEADERS_TIMEOUT_MS;
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
   return server;
 }
 

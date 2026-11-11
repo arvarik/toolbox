@@ -29,9 +29,19 @@ export function trimTrailingSlashes(value: string): string {
   return value.slice(0, end) || "/";
 }
 
-const SENSITIVE_QUERY = /([?&](?:token|code|state|key|secret)=)[^&]*/gi;
+const SENSITIVE_QUERY =
+  /([?&](?:token|access_token|code|state|key|api_key|apikey|secret|password)=)[^&]*/gi;
 export function redactUrlForLog(url: string): string {
   return url.replace(SENSITIVE_QUERY, "$1[redacted]");
+}
+
+export function isApiSurface(pathname: string): boolean {
+  const lower = pathname.toLowerCase();
+  return (
+    lower === "/api" ||
+    lower.startsWith("/api/") ||
+    lower.startsWith("/.well-known/")
+  );
 }
 
 export class AppError extends Error {
@@ -165,9 +175,47 @@ export const CONTENT_SECURITY_POLICY =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'";
 
 export const PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=()";
+export const HSTS_HEADER = "max-age=63072000; includeSubDomains";
+export const MAX_JSON_DEPTH = 64;
+
+export function assertJsonDepth(buf: Buffer, maxDepth = MAX_JSON_DEPTH): void {
+  let depth = 0;
+  let inString = false;
+  for (let i = 0; i < buf.length; i++) {
+    const b = buf[i];
+    if (inString) {
+      if (b === 0x5c) i++;
+      else if (b === 0x22) inString = false;
+      continue;
+    }
+    if (b === 0x22) inString = true;
+    else if (b === 0x7b || b === 0x5b) {
+      if (++depth > maxDepth) {
+        throw new ValidationError(
+          `JSON nesting depth exceeds maximum of ${maxDepth}`,
+        );
+      }
+    } else if (b === 0x7d || b === 0x5d) {
+      if (depth > 0) depth--;
+    }
+  }
+}
+
+export function safeJsonReviver(key: string, value: unknown): unknown {
+  if (
+    key === "__proto__" ||
+    (key === "constructor" &&
+      value !== null &&
+      typeof value === "object" &&
+      "prototype" in value)
+  ) {
+    return undefined;
+  }
+  return value;
+}
 
 export function securityHeaders(
-  _req: Request,
+  req: Request,
   res: Response,
   next: NextFunction,
 ): void {
@@ -176,7 +224,12 @@ export function securityHeaders(
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   res.setHeader("Permissions-Policy", PERMISSIONS_POLICY);
   res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  res.setHeader("X-Permitted-Cross-Domain-Policies", "none");
   res.setHeader("Content-Security-Policy", CONTENT_SECURITY_POLICY);
+  if (req.secure) {
+    res.setHeader("Strict-Transport-Security", HSTS_HEADER);
+  }
   next();
 }
 
@@ -353,11 +406,7 @@ export function notFoundHandler(
   _res: Response,
   next: NextFunction,
 ): void {
-  if (
-    req.path === "/api" ||
-    req.path.startsWith("/api/") ||
-    req.path.startsWith("/.well-known/")
-  ) {
+  if (isApiSurface(req.path)) {
     return next(
       new AppError(`Unknown API endpoint: ${req.method} ${req.path}`, 404, {
         code: "ROUTE_NOT_FOUND",

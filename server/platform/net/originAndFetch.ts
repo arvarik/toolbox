@@ -76,17 +76,19 @@ export function oidcCallbackUrl(req: Request): string {
 }
 
 export function isOwnOrigin(req: Request, origin: string): boolean {
-  let host: string;
+  let parsed: URL;
   try {
-    host = new URL(origin).host;
+    parsed = new URL(origin);
   } catch {
     return false;
   }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false;
+  }
   const configured = process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN;
-  return (
-    host === (req.host ?? "").toLowerCase() ||
-    origin === validatePublicUrl(configured)
-  );
+  if (origin === validatePublicUrl(configured)) return true;
+  if (req.secure && parsed.protocol !== "https:") return false;
+  return parsed.host === (req.host ?? "").toLowerCase();
 }
 
 export function mailLinkOrigin(): string | null {

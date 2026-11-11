@@ -21,7 +21,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    host: true,
+    host: "127.0.0.1",
     proxy: {
       "/api": {
         target: "http://localhost:3100",
@@ -44,6 +44,9 @@ export default defineConfig({
         "**/uploads/**",
       ],
     },
+  },
+  preview: {
+    host: "127.0.0.1",
   },
   build: {
     outDir: "dist",
