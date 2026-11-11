@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, type ReactNode } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { ArrowUpRight, GitCommit, MessageSquare, X } from 'lucide-react'
 import type { Pillar } from '../../shared/kits/kitSkeleton'
 import LearningChat, { type ActiveStudyTopic } from '../components/chat/LearningChat'
@@ -12,7 +12,7 @@ import useCommitStore from '../stores/useCommitStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
 import { guideContentApi } from '../utils/api'
 
-interface MobileDrawerProps {
+interface BottomSheetDrawerProps {
   open: boolean
   onClose: () => void
   children: ReactNode
@@ -22,26 +22,37 @@ interface MobileDrawerProps {
  * Bottom-sheet drawer for mobile — slides up from the bottom edge.
  * Exposes the curriculum spine on small screens.
  */
-function MobileDrawer({ open, onClose, children }: MobileDrawerProps) {
+function BottomSheetDrawer({ open, onClose, children }: BottomSheetDrawerProps) {
   useEffect(() => {
-    document.body.style.overflow = open ? 'hidden' : ''
+    if (!open) return
+    document.body.style.overflow = 'hidden'
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
     return () => {
       document.body.style.overflow = ''
+      window.removeEventListener('keydown', onKey)
     }
-  }, [open])
+  }, [open, onClose])
+
+  if (!open) return null
 
   return (
     <>
       <div
         onClick={onClose}
-        className={`fixed inset-0 z-[400] bg-black/55 backdrop-blur-[2px] transition-opacity duration-200 ${
-          open ? 'pointer-events-auto opacity-100' : 'pointer-events-none opacity-0'
-        }`}
+        className="fixed inset-0 z-[400] bg-black/55 backdrop-blur-[2px]"
       />
       <div
-        className={`fixed right-0 bottom-0 left-0 z-[401] flex h-[75vh] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-[var(--color-line-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-float)] transition-transform duration-250 ${
-          open ? 'translate-y-0' : 'translate-y-full'
-        }`}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Curriculum spine"
+        className="fixed right-0 bottom-0 left-0 z-[401] flex h-[75vh] flex-col overflow-hidden rounded-t-2xl border border-b-0 border-[var(--color-line-strong)] bg-[var(--color-surface)] shadow-[var(--shadow-float)]"
       >
         <div className="relative flex shrink-0 items-center justify-between px-4 pt-3 pb-2">
           <div className="mx-auto h-1 w-10 rounded-full bg-[var(--color-line-strong)]" />
@@ -68,9 +79,12 @@ type InspectorTab = 'guide' | 'updates'
 export default function ChatPage() {
   const isMobile = useIsMobile()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const prefix = useKitRoutePrefix()
   const { kitSlug, pillars, sectionsByPillar } = useActiveKit()
   const routeKitSlug = prefix ? decodeURIComponent(prefix.slice(3)) : null
+  const queryPillarId = searchParams.get('pillar')
+  const queryTopicId = searchParams.get('topic')
 
   const [todoDrawerOpen, setTodoDrawerOpen] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(() =>
@@ -95,6 +109,16 @@ export default function ChatPage() {
     setTodoDrawerOpen(false)
     setTopicNotes({})
   }, [prefix, kitSlug])
+
+  // Deep-link topic initialization from Guide's "Study in Chat" (?pillar=&topic=)
+  useEffect(() => {
+    if (!queryPillarId || !queryTopicId) return
+    const p = pillars.find((item) => item.id === queryPillarId)
+    const t = p?.topics.find((item) => item.id === queryTopicId)
+    if (p && t) {
+      setActiveStudyTopic({ pillar: p, topic: t })
+    }
+  }, [queryPillarId, queryTopicId, pillars])
 
   useEffect(() => {
     const handler = () => setTodoDrawerOpen(true)
@@ -180,6 +204,7 @@ export default function ChatPage() {
       <div className="learning-hub-main min-w-0 flex-1">
         <LearningChat
           activeTopic={activeStudyTopic}
+          onClearTopicOverride={() => setActiveStudyTopic(null)}
           onCommitClick={startAnalysis}
           routeKitSlug={routeKitSlug}
           notebookOpen={!isMobile ? inspectorOpen : undefined}
@@ -390,12 +415,12 @@ export default function ChatPage() {
       )}
 
       {isMobile && (
-        <MobileDrawer open={todoDrawerOpen} onClose={() => setTodoDrawerOpen(false)}>
+        <BottomSheetDrawer open={todoDrawerOpen} onClose={() => setTodoDrawerOpen(false)}>
           <LearningTodo
             onStudyTopic={handleStudyTopic}
             activeTopicId={resolvedTopic?.topic.id ?? null}
           />
-        </MobileDrawer>
+        </BottomSheetDrawer>
       )}
     </div>
   )

@@ -1,6 +1,6 @@
 import { GitCommit, Maximize2 } from 'lucide-react'
 import useCommitStore from '../../stores/useCommitStore'
-import { KitLogo } from '../ui'
+import { KitLogo } from '../ui/KitLogo'
 
 export default function TaskWorkingBar() {
   const { isMinimized, phase, topicContext, setMinimized } = useCommitStore()

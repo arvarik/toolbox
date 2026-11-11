@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router'
+import { useParams, useNavigate, useLocation } from 'react-router'
 import {
   Cpu,
   Scale,
@@ -30,7 +30,6 @@ import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import Skeleton from '../shared/Skeleton'
 import PullToRefresh from '../shared/PullToRefresh'
 import { DomainGlyph, HighlightableProse, NotebookSheet, resolveKitGlyph } from '../ui'
-import * as apiModule from '../../utils/api'
 import {
   guideContentApi,
   chatApi,
@@ -40,7 +39,7 @@ import {
   type HighlightColor,
 } from '../../utils/api'
 import useAppStore from '../../stores/appStore'
-import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
+import useKitStore, { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 import useIsMobile from '../../hooks/useIsMobile'
 
 const EMPTY_SECTIONS: SectionLens[] = []
@@ -67,27 +66,6 @@ const iconMap: Record<string, LucideIcon> = {
 interface CommittedSection {
   content: string
   committedAt: string | null
-}
-
-interface OptionalDeckApis {
-  decksApi?: {
-    list?: () => Promise<Array<{ id: string; name: string }>>
-  }
-  flashcardsApi?: {
-    create?: (deckId: string, data: object) => Promise<unknown>
-  }
-}
-
-function safeGetDeckApis(): OptionalDeckApis {
-  const out: OptionalDeckApis = {}
-  try {
-    const mod = apiModule as unknown as OptionalDeckApis
-    if ('decksApi' in mod) out.decksApi = mod.decksApi
-    if ('flashcardsApi' in mod) out.flashcardsApi = mod.flashcardsApi
-  } catch {
-    // ignore partial mock errors
-  }
-  return out
 }
 
 function openGuideCompanionChat() {
@@ -120,6 +98,7 @@ export default function BlueprintShell({
 }: BlueprintShellProps = {}) {
   const { pillarId, topicId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const addToast = useAppStore((s) => s.addToast)
   const { kitSlug, skeleton, pillars, sectionsByPillar } = useActiveKit()
   const prefix = useKitRoutePrefix()
@@ -128,10 +107,16 @@ export default function BlueprintShell({
   const topic = pillar?.topics.find((t) => t.id === topicId)
   const sections = (pillarId && sectionsByPillar[pillarId]) || EMPTY_SECTIONS
 
+  const hashSectionId = location.hash.startsWith('#blueprint-')
+    ? decodeURIComponent(location.hash.slice('#blueprint-'.length))
+    : ''
+
   const contextKey = `${prefix}:${kitSlug ?? ''}:${pillarId ?? ''}:${topicId ?? ''}`
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() =>
-    sections.length > 0 ? { [sections[0].id]: true } : {},
-  )
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = sections.length > 0 ? { [sections[0].id]: true } : {}
+    if (hashSectionId) init[hashSectionId] = true
+    return init
+  })
   const [prevContextKey, setPrevContextKey] = useState(contextKey)
 
   // Progress data for library landing page: { 'pillarId__topicId__sectionId': true }
@@ -157,13 +142,43 @@ export default function BlueprintShell({
   const [showReviewModal, setShowReviewModal] = useState(false)
   const [generatedCards, setGeneratedCards] = useState<GeneratedFlashcardDraft[]>([])
   const [isGeneratingCards, setIsGeneratingCards] = useState(false)
+  const [pendingHighlightIdForCard, setPendingHighlightIdForCard] = useState<string | null>(null)
 
   // Reset expanded/edit state when Kit, pillar, or topic changes
   if (contextKey !== prevContextKey) {
     setPrevContextKey(contextKey)
-    setExpandedSections(sections.length > 0 ? { [sections[0].id]: true } : {})
+    const nextInit: Record<string, boolean> =
+      sections.length > 0 ? { [sections[0].id]: true } : {}
+    if (hashSectionId) nextInit[hashSectionId] = true
+    setExpandedSections(nextInit)
     setEditingSection(null)
   }
+
+  // Auto-expand any dogeared sections or deep-linked #blueprint-<section> hash target
+  useEffect(() => {
+    if (!pillarId || !topicId) return
+    const sectionIdsToOpen = effectiveDogears
+      .filter((d) => d.pillarId === pillarId && d.topicId === topicId && Boolean(d.sectionId))
+      .map((d) => d.sectionId)
+    if (hashSectionId) sectionIdsToOpen.push(hashSectionId)
+    if (sectionIdsToOpen.length > 0) {
+      setExpandedSections((prev) => {
+        let changed = false
+        const next = { ...prev }
+        for (const sId of sectionIdsToOpen) {
+          if (!next[sId]) {
+            next[sId] = true
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    }
+    if (hashSectionId) {
+      const el = document.getElementById(`blueprint-${hashSectionId}`)
+      el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+    }
+  }, [pillarId, topicId, effectiveDogears, hashSectionId])
 
   // Fetch committed content when pillar+topic+Kit are selected
   const fetchContent = useCallback(() => {
@@ -341,36 +356,43 @@ export default function BlueprintShell({
   )
 
   const handleMakeCardFromQuote = useCallback(
-    async (sectionId: string, sectionName: string, quote: string) => {
+    async (
+      sectionId: string,
+      sectionName: string,
+      quote: string,
+      ctx?: { prefix: string; suffix: string; highlightId?: string },
+    ) => {
       const clipped = quote.length > 88 ? `${quote.slice(0, 85)}…` : quote
       const frontPrompt = `Explain in ${topic?.name || 'this topic'} (${sectionName}): “${clipped}”`
 
-      const { decksApi, flashcardsApi } = safeGetDeckApis()
-      if (decksApi?.list && flashcardsApi?.create) {
+      let linkedHighlightId: string | null =
+        ctx?.highlightId && !ctx.highlightId.startsWith('temp-') ? ctx.highlightId : null
+
+      if (!linkedHighlightId && pillarId && topicId && guideContentApi?.createHighlight) {
         try {
-          const decks = await Promise.resolve(decksApi.list())
-          const firstDeck = Array.isArray(decks) ? decks[0] : undefined
-          if (firstDeck?.id) {
-            await Promise.resolve(
-              flashcardsApi.create(firstDeck.id, {
-                front: frontPrompt,
-                back: quote,
-                source_pillar_id: pillarId ?? null,
-                source_topic_id: topicId ?? null,
-                source_section_id: sectionId,
-              }),
+          const saved = await Promise.resolve(
+            guideContentApi.createHighlight({
+              pillarId,
+              topicId,
+              sectionId,
+              quote,
+              prefix: ctx?.prefix ?? '',
+              suffix: ctx?.suffix ?? '',
+              color: 'amber',
+            }),
+          )
+          if (saved?.id) {
+            linkedHighlightId = saved.id
+            setHighlights((prev) =>
+              prev.some((h) => h.id === saved.id) ? prev : [...prev, saved],
             )
-            addToast({
-              type: 'success',
-              message: `Added flashcard to "${firstDeck.name}"`,
-            })
-            return
           }
         } catch {
-          // fall through to review modal
+          // Proceed with review modal even if highlight persistence fails
         }
       }
 
+      setPendingHighlightIdForCard(linkedHighlightId)
       setGeneratedCards([
         {
           front: frontPrompt,
@@ -382,22 +404,40 @@ export default function BlueprintShell({
         },
       ])
       setShowReviewModal(true)
-      addToast({ type: 'info', message: 'Drafted flashcard from highlight' })
     },
-    [topic?.name, pillarId, topicId, addToast],
+    [topic?.name, pillarId, topicId],
+  )
+
+  const recordSectionResume = useCallback(
+    (sectionId: string) => {
+      if (!pillarId || !topicId) return
+      const nextRef = {
+        pillarId,
+        topicId,
+        sectionId,
+        updatedAt: new Date().toISOString(),
+      }
+      useKitStore.getState().updateActiveKitNotebookMeta({ lastGuideRef: nextRef })
+      void Promise.resolve(guideContentApi?.putResume?.(pillarId, topicId, sectionId)).catch(
+        () => null,
+      )
+    },
+    [pillarId, topicId],
   )
 
   const toggleSection = (sectionId: string) => {
-    setExpandedSections((prev) => ({
-      ...prev,
-      [sectionId]: !prev[sectionId],
-    }))
+    setExpandedSections((prev) => {
+      const nextOpen = !prev[sectionId]
+      if (nextOpen) recordSectionResume(sectionId)
+      return { ...prev, [sectionId]: nextOpen }
+    })
   }
 
   const startEdit = (sectionId: string) => {
     const existing = sectionContent[sectionId]?.content || ''
     setEditDraft(existing)
     setEditingSection(sectionId)
+    recordSectionResume(sectionId)
   }
 
   const cancelEdit = () => {
@@ -714,7 +754,11 @@ export default function BlueprintShell({
           <button
             type="button"
             className="btn btn-primary btn-sm whitespace-nowrap"
-            onClick={() => navigate(`${prefix}/chat`)}
+            onClick={() =>
+              navigate(
+                `${prefix}/chat?pillar=${encodeURIComponent(pillar.id)}&topic=${encodeURIComponent(topic.id)}`,
+              )
+            }
           >
             <Sparkles size={12} />
             Study in Chat
@@ -724,7 +768,22 @@ export default function BlueprintShell({
 
       <FlashcardReviewModal
         open={showReviewModal}
-        onClose={() => setShowReviewModal(false)}
+        onClose={() => {
+          setShowReviewModal(false)
+          setPendingHighlightIdForCard(null)
+        }}
+        onSaved={(createdIds) => {
+          const cardId = createdIds[0]
+          if (cardId && pendingHighlightIdForCard) {
+            setHighlights((prev) =>
+              prev.map((h) => (h.id === pendingHighlightIdForCard ? { ...h, cardId } : h)),
+            )
+            void Promise.resolve(
+              guideContentApi?.updateHighlight?.(pendingHighlightIdForCard, { cardId }),
+            ).catch(() => null)
+          }
+          setPendingHighlightIdForCard(null)
+        }}
         cards={generatedCards}
         topicName={topic.name}
         pillarId={pillarId}
@@ -904,11 +963,12 @@ export default function BlueprintShell({
                             }
                             onRemoveHighlight={handleRemoveHighlight}
                             onAskKit={handleAskKit}
-                            onMakeCard={(quote) => {
+                            onMakeCard={(quote, ctx) => {
                               void handleMakeCardFromQuote(
                                 section.id,
                                 section.name,
                                 quote,
+                                ctx,
                               )
                             }}
                           >

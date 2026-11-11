@@ -18,6 +18,7 @@ export interface FlashcardReviewModalProps {
   topicName?: string
   pillarId?: string | null
   topicId?: string | null
+  onSaved?: (createdCardIds: string[]) => void
 }
 
 interface SectionCardGroup {
@@ -232,6 +233,7 @@ export default function FlashcardReviewModal({
   topicName,
   pillarId,
   topicId,
+  onSaved,
 }: FlashcardReviewModalProps) {
   const addToast = useAppStore((s) => s.addToast)
   const selectedModel = useAppStore((s) => s.model)
@@ -512,6 +514,7 @@ export default function FlashcardReviewModal({
         deck = await decksApi.create({ name: topicName || 'Generated Cards' })
       }
 
+      const createdCardIds: string[] = []
       for (let i = 0; i < allCardsToSave.length; i++) {
         const card = allCardsToSave[i]
         const isReverse = i >= includedCards.length
@@ -523,7 +526,10 @@ export default function FlashcardReviewModal({
           source_section_id: card.sourceSectionId || null,
           is_reverse: isReverse ? 1 : 0,
         }
-        await flashcardsApi.create(deck.id, cardData)
+        const created = await flashcardsApi.create(deck.id, cardData)
+        if (created && typeof (created as { id?: unknown }).id === 'string') {
+          createdCardIds.push((created as { id: string }).id)
+        }
       }
 
       const originalCount = includedCards.length
@@ -533,6 +539,7 @@ export default function FlashcardReviewModal({
           ? `Saved ${originalCount} card(s) + ${reverseCount} reverse card(s) to "${deck.name}"`
           : `Saved ${originalCount} flashcard(s) to "${deck.name}" deck.`
       addToast({ type: 'success', message: msg })
+      onSaved?.(createdCardIds)
       onClose()
     } catch (err) {
       addToast({

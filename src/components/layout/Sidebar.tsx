@@ -39,7 +39,9 @@ import PomodoroWidget from './PomodoroWidget'
 import ModelPicker from '../shared/ModelPicker'
 import useIsMobile from '../../hooks/useIsMobile'
 import { useAuth } from '../auth/AuthGate'
-import { DomainGlyph, Kbd, KitLogo, resolveKitGlyph } from '../ui'
+import { Kbd } from '../ui/Controls'
+import { DomainGlyph, resolveKitGlyph } from '../ui/DomainGlyph'
+import { KitLogo } from '../ui/KitLogo'
 
 export interface StudyNavItem {
   to: string
@@ -65,6 +67,13 @@ export const bottomItems: readonly StudyNavItem[] = [
   },
   { to: '/settings', icon: Settings, label: 'Settings', shortcut: '⌘,', navId: 'nav-settings' },
 ]
+
+export function performWorkspaceSignOut(logout: () => Promise<void>): void {
+  useAppStore.getState().resetWorkspaceState()
+  useCommitStore.getState().closeCompletely()
+  useKitStore.setState({ kits: [], activeKitSlug: null, activeKit: null, kitCache: {} })
+  void logout()
+}
 
 const KIT_SUBROUTES = new Set([
   'chat',
@@ -361,12 +370,7 @@ export default function Sidebar() {
     [prefix, capabilities],
   )
 
-  const handleSignOut = () => {
-    useAppStore.getState().resetWorkspaceState()
-    useCommitStore.getState().closeCompletely()
-    useKitStore.setState({ kits: [], activeKitSlug: null, activeKit: null, kitCache: {} })
-    void logout()
-  }
+  const handleSignOut = () => performWorkspaceSignOut(logout)
 
   return (
     <aside

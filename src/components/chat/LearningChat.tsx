@@ -5,7 +5,6 @@ import {
   useCallback,
   useMemo,
   memo,
-  type KeyboardEvent,
 } from 'react'
 import {
   BookOpen,
@@ -17,15 +16,12 @@ import {
   Map as MapIcon,
   MoreHorizontal,
   RotateCcw,
-  Send,
-  Square,
-  X,
 } from 'lucide-react'
 import type { Pillar } from '../../../shared/kits/kitSkeleton'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import Skeleton from '../shared/Skeleton'
-import { KitAvatar } from '../ui'
+import { InvitingComposer, KitAvatar } from '../ui'
 import PersonaPicker from './PersonaPicker'
 import { buildPersonasForKit, getStarterPromptsForKit, type PersonaId } from './personas'
 import SessionPicker, { type ChatMessage, type ChatSession } from './SessionPicker'
@@ -40,24 +36,10 @@ const CURRENT_KEY = 'toolbox_learning_current'
 const QUOTE_STORAGE_KEY = 'toolbox_chat_quote'
 const MAX_MESSAGES = 120
 
-const REQUIRED_DEFAULT_STARTERS = [
-  'Explain consistent hashing with a concrete example and when I should use it',
-  'Walk me through the tradeoffs of SQL vs NoSQL for a social feed at scale',
-]
-
-function buildFallbackStarters(raw: string[], isCustomKit: boolean): string[] {
-  if (isCustomKit) return raw.slice(0, 3)
-  const third = raw.find((item) => !REQUIRED_DEFAULT_STARTERS.includes(item))
-  return third ? [...REQUIRED_DEFAULT_STARTERS, third] : [...REQUIRED_DEFAULT_STARTERS]
-}
-
-function consumeStoredQuote(): string | null {
+function peekStoredQuote(): string | null {
   try {
     const raw = localStorage.getItem(QUOTE_STORAGE_KEY)
-    if (raw && raw.trim()) {
-      localStorage.removeItem(QUOTE_STORAGE_KEY)
-      return raw.trim()
-    }
+    if (raw && raw.trim()) return raw.trim()
   } catch {
     // ignore storage errors
   }
@@ -179,6 +161,7 @@ interface SectionStatus {
 
 interface LearningChatProps {
   activeTopic?: ActiveStudyTopic | null
+  onClearTopicOverride?: () => void
   onCommitClick?: (messages: ChatMessage[], topicContext: CommitTopicContext | null) => void
   routeKitSlug?: string | null
   notebookOpen?: boolean
@@ -191,6 +174,7 @@ interface LearningChatProps {
  */
 export default function LearningChat({
   activeTopic,
+  onClearTopicOverride,
   onCommitClick,
   routeKitSlug,
   notebookOpen,
@@ -213,7 +197,7 @@ export default function LearningChat({
     [tutor, isCustomKit],
   )
   const defaultStarters = useMemo(
-    () => buildFallbackStarters(getStarterPromptsForKit(tutor, isCustomKit), isCustomKit),
+    () => getStarterPromptsForKit(tutor, isCustomKit).slice(0, 3),
     [tutor, isCustomKit],
   )
 
@@ -229,12 +213,12 @@ export default function LearningChat({
   const messages = currentSession?.messages || emptyMessages
 
   const [input, setInput] = useState('')
-  const [quotedSnippet, setQuotedSnippet] = useState<string | null>(() => consumeStoredQuote())
+  const [quotedSnippet, setQuotedSnippet] = useState<string | null>(() => peekStoredQuote())
   const [isLoading, setIsLoading] = useState(false)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
   const [starters, setStarters] = useState<string[]>(() =>
-    buildFallbackStarters(getStarterPromptsForKit(tutor, isCustomKit), isCustomKit),
+    getStarterPromptsForKit(tutor, isCustomKit).slice(0, 3),
   )
   const [loadingStarters, setLoadingStarters] = useState(false)
   const [generatingMap, setGeneratingMap] = useState(false)
@@ -271,6 +255,9 @@ export default function LearningChat({
   // Load from API & migrate legacy default-Kit local data if needed whenever active Kit changes
   useEffect(() => {
     let cancelled = false
+    abortControllerRef.current?.abort()
+    abortControllerRef.current = null
+    setIsLoading(false)
     setLoadedScope(null)
     setSessions({})
     setCurrentId(null)
@@ -340,6 +327,8 @@ export default function LearningChat({
     void initSessions()
     return () => {
       cancelled = true
+      abortControllerRef.current?.abort()
+      abortControllerRef.current = null
     }
   }, [storageScope, isCustomKit, addToast])
 
@@ -398,8 +387,13 @@ export default function LearningChat({
     return () => observer.disconnect()
   }, [])
 
-  // Focus input on mount
+  // Focus input and clear consumed initial quote from localStorage on mount
   useEffect(() => {
+    try {
+      localStorage.removeItem(QUOTE_STORAGE_KEY)
+    } catch {
+      /* ignore */
+    }
     inputRef.current?.focus()
   }, [])
 
@@ -407,7 +401,7 @@ export default function LearningChat({
   useEffect(() => {
     const onAskKit = (e: Event) => {
       const detailQuote = (e as CustomEvent<{ quote?: string }>).detail?.quote
-      const nextQuote = (detailQuote && detailQuote.trim()) || consumeStoredQuote()
+      const nextQuote = (detailQuote && detailQuote.trim()) || peekStoredQuote()
       if (nextQuote) {
         try {
           localStorage.removeItem(QUOTE_STORAGE_KEY)
@@ -807,13 +801,6 @@ export default function LearningChat({
     }
   }, [activeTopic, selectedModel, sectionsByPillar, defaultStarters, effectiveKitSlug])
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      void handleSend()
-    }
-  }
-
   const handleStop = () => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
@@ -861,6 +848,8 @@ export default function LearningChat({
   // ── Session management ──────────────────────────────────────────────────────
   const createSession = useCallback(
     (name?: string) => {
+      onClearTopicOverride?.()
+      activeTopicIdRef.current = undefined
       const s = makeSession(name)
       setSessions((prev) => ({ ...prev, [s.id]: s }))
       setCurrentId(s.id)
@@ -869,14 +858,19 @@ export default function LearningChat({
       chatApi.saveSession(s).catch(() => {})
       addToast({ type: 'info', message: `Started "${s.name}"` })
     },
-    [addToast],
+    [addToast, onClearTopicOverride],
   )
 
-  const switchSession = useCallback((id: string) => {
-    setCurrentId(id)
-    setInput('')
-    setErrorMsg(null)
-  }, [])
+  const switchSession = useCallback(
+    (id: string) => {
+      onClearTopicOverride?.()
+      activeTopicIdRef.current = undefined
+      setCurrentId(id)
+      setInput('')
+      setErrorMsg(null)
+    },
+    [onClearTopicOverride],
+  )
 
   const renameSession = useCallback((id: string, name: string) => {
     setSessions((prev) => {
@@ -890,6 +884,10 @@ export default function LearningChat({
 
   const deleteSession = useCallback(
     (id: string) => {
+      if (id === currentId) {
+        onClearTopicOverride?.()
+        activeTopicIdRef.current = undefined
+      }
       chatApi
         .deleteSession(id)
         .catch((err: unknown) => console.error('Failed to delete session', err))
@@ -914,7 +912,7 @@ export default function LearningChat({
         return next
       })
     },
-    [currentId],
+    [currentId, onClearTopicOverride],
   )
 
   const [showActionsMenu, setShowActionsMenu] = useState(false)
@@ -1261,67 +1259,24 @@ export default function LearningChat({
       {/* ── Spacious Inviting Composer ── */}
       <div className="learning-chat-input-area relative border-t border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-3 sm:px-8">
         <div className="mx-auto w-full max-w-3xl">
-          <div className="rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] p-3 shadow-[var(--shadow-sheet)] transition-[border-color,box-shadow] duration-150 focus-within:border-[var(--color-brand)]/75">
-            {quotedSnippet && (
-              <div
-                data-testid="learning-chat-quote"
-                className="mb-2.5 flex items-start justify-between gap-2 rounded-lg border-l-2 border-[var(--color-brand)] bg-[var(--color-surface-low)] px-3 py-2 text-[13px] text-[var(--color-ink-muted)]"
-              >
-                <span className="line-clamp-2">“{quotedSnippet}”</span>
-                <button
-                  type="button"
-                  aria-label="Remove quoted snippet"
-                  onClick={clearQuote}
-                  className="mt-0.5 shrink-0 cursor-pointer text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
-                >
-                  <X size={13} />
-                </button>
-              </div>
-            )}
-
-            <div className="flex items-end gap-2.5">
-              <textarea
-                ref={inputRef}
-                className="learning-chat-input min-h-[48px] flex-1 resize-none !border-0 !bg-transparent !p-0 text-[15px] leading-relaxed text-[var(--color-ink)] placeholder:text-[var(--color-ink-faint)] focus:outline-none"
-                placeholder="Ask Kit a question, test an idea, or request an example..."
-                value={input}
-                onChange={(e) => {
-                  setInput(e.target.value)
-                  const el = e.target
-                  el.style.height = 'auto'
-                  el.style.height = `${Math.min(el.scrollHeight, 320)}px`
-                }}
-                onKeyDown={handleKeyDown}
-                rows={2}
-                id="learning-chat-input"
-              />
-
-              {isLoading ? (
-                <button
-                  type="button"
-                  onClick={handleStop}
-                  aria-label="Stop generating"
-                  className="inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--color-err)]/30 bg-[var(--color-diff-del-bg)] px-3 text-[12.5px] font-medium text-[var(--color-err)] transition-opacity hover:opacity-90 active:scale-[0.97]"
-                >
-                  <Square fill="currentColor" size={10} />
-                  <span>Stop</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  className="chat-send-btn inline-flex h-8 shrink-0 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-3 text-[12.5px] font-semibold text-[var(--color-accent-ink)] transition-[transform,background-color,opacity] duration-120 hover:bg-[var(--color-accent-fill-hover)] active:scale-[0.97] disabled:pointer-events-none disabled:opacity-45"
-                  onClick={() => {
-                    void handleSend()
-                  }}
-                  disabled={(!input.trim() && !quotedSnippet) || isLoading}
-                  aria-label="Send message"
-                >
-                  <span className="hide-on-mobile">Ask Kit</span>
-                  <Send size={13} />
-                </button>
-              )}
-            </div>
-          </div>
+          <InvitingComposer
+            value={input}
+            onChange={setInput}
+            onSubmit={() => {
+              void handleSend()
+            }}
+            placeholder="Ask Kit a question, test an idea, or request an example..."
+            textareaId="learning-chat-input"
+            textareaRef={inputRef}
+            textareaClassName="learning-chat-input"
+            sendButtonClassName="chat-send-btn"
+            submitLabel="Ask Kit"
+            streaming={isLoading}
+            onStop={handleStop}
+            quotedHighlight={quotedSnippet}
+            quoteTestId="learning-chat-quote"
+            onClearQuote={clearQuote}
+          />
 
           <div className="mt-1.5 text-center text-[11px] text-[var(--color-ink-faint)]">
             Enter to send · Shift+Enter for new line

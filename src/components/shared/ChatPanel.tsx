@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import type { KeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
-import { Send, X, Copy, Check, RotateCcw, Square } from 'lucide-react'
+import type { MouseEvent as ReactMouseEvent } from 'react'
+import { X, Copy, Check, RotateCcw } from 'lucide-react'
 import MarkdownRenderer from './MarkdownRenderer'
-import { KitAvatar } from '../ui'
+import { InvitingComposer, KitAvatar } from '../ui'
 import useAppStore from '../../stores/appStore'
 import useKitStore, {
   extractKitSlugFromPathname,
@@ -216,20 +216,19 @@ function ChatPanelContent({
 
   useEffect(() => {
     const onAskKit = (e: Event) => {
+      if (!isOpen) return
       const detailQuote = (e as CustomEvent<{ quote?: string }>).detail?.quote
       const stored = safeStorage.getItem(QUOTE_STORAGE_KEY)
       const nextQuote = (detailQuote && detailQuote.trim()) || (stored && stored.trim()) || null
       if (nextQuote) {
-        if (isOpen || page === 'guide') {
-          safeStorage.removeItem(QUOTE_STORAGE_KEY)
-        }
+        safeStorage.removeItem(QUOTE_STORAGE_KEY)
         setQuotedSnippet(nextQuote)
         inputRef.current?.focus()
       }
     }
     window.addEventListener('toolbox:ask-kit', onAskKit)
     return () => window.removeEventListener('toolbox:ask-kit', onAskKit)
-  }, [isOpen, page])
+  }, [isOpen])
 
   const handleSend = async (
     customText?: string,
@@ -366,13 +365,6 @@ function ChatPanelContent({
       }
     }
   }, [isOpen, page, messages.length, apiKeyConfigured, canvasNodes])
-
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      void handleSend()
-    }
-  }
 
   const handleStop = () => {
     if (abortControllerRef.current) {
@@ -631,54 +623,23 @@ function ChatPanelContent({
       </div>
 
       <div className="chat-input-area border-t border-[var(--color-line)] bg-[var(--color-surface)] p-3">
-        {quotedSnippet && (
-          <div
-            data-testid="chat-quoted-snippet"
-            className="mb-2 flex items-start justify-between gap-2 rounded-lg border-l-2 border-[var(--color-brand)] bg-[var(--color-surface-low)] px-2.5 py-1.5 text-[12px] text-[var(--color-ink-muted)]"
-          >
-            <span className="line-clamp-2">“{quotedSnippet}”</span>
-            <button
-              type="button"
-              aria-label="Remove quoted snippet"
-              onClick={clearQuote}
-              className="mt-0.5 shrink-0 cursor-pointer text-[var(--color-ink-faint)] hover:text-[var(--color-ink)]"
-            >
-              <X size={12} />
-            </button>
-          </div>
-        )}
-
-        <div className="chat-input-wrapper relative rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)]">
-          {isLoading && (
-            <button
-              type="button"
-              onClick={handleStop}
-              aria-label="Stop generating"
-              className="absolute -top-9 left-1/2 z-10 flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-full border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-3 py-1 text-[11.5px] text-[var(--color-ink)] shadow-[var(--shadow-float)]"
-            >
-              <Square fill="currentColor" size={10} /> Stop generating
-            </button>
-          )}
-          <textarea
-            ref={inputRef}
-            className="chat-input"
-            placeholder={placeholder}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            rows={1}
-            id={`chat-input-${page}`}
-          />
-          <button
-            type="button"
-            className="chat-send-btn"
-            onClick={() => void handleSend()}
-            disabled={(!input.trim() && !quotedSnippet) || isLoading}
-            aria-label="Send message"
-          >
-            <Send size={14} />
-          </button>
-        </div>
+        <InvitingComposer
+          compact
+          value={input}
+          onChange={setInput}
+          onSubmit={() => void handleSend()}
+          placeholder={placeholder}
+          textareaId={`chat-input-${page}`}
+          textareaRef={inputRef}
+          textareaClassName="chat-input"
+          sendButtonClassName="chat-send-btn"
+          submitLabel=""
+          streaming={isLoading}
+          onStop={handleStop}
+          quotedHighlight={quotedSnippet}
+          quoteTestId="chat-quoted-snippet"
+          onClearQuote={clearQuote}
+        />
       </div>
     </div>
   )

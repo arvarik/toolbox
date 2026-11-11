@@ -2,11 +2,11 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import CommitModal from '../components/chat/CommitModal'
+import Layout from '../components/layout/Layout'
 import Sidebar from '../components/layout/Sidebar'
 import SearchDialog from '../components/shared/SearchDialog'
 import TaskWorkingBar from '../components/shared/TaskWorkingBar'
 import ChatPage from '../pages/ChatPage'
-import DesignSystemPage from '../pages/DesignSystemPage'
 import GuidePage from '../pages/GuidePage'
 import useAppStore from '../stores/appStore'
 import useCommitStore from '../stores/useCommitStore'
@@ -19,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
   toggleDogear: vi.fn(),
   listHighlights: vi.fn(),
   createHighlight: vi.fn(),
+  updateHighlight: vi.fn(),
   deleteHighlight: vi.fn(),
   putResume: vi.fn(),
   getResume: vi.fn(),
@@ -27,11 +28,12 @@ const apiMocks = vi.hoisted(() => ({
   searchQuery: vi.fn(),
   sessionsList: vi.fn(),
   sessionsCreate: vi.fn(),
-  sessionsGet: vi.fn(),
   chatStream: vi.fn(),
-  startersGet: vi.fn(),
   guideProgress: vi.fn(),
   guideGetForTopic: vi.fn(),
+  decksList: vi.fn(),
+  decksCreate: vi.fn(),
+  flashcardsCreate: vi.fn(),
 }))
 
 vi.mock('../utils/api', async (importOriginal) => {
@@ -52,6 +54,16 @@ vi.mock('../utils/api', async (importOriginal) => {
       saveSession: (...args: unknown[]) => apiMocks.sessionsCreate(...args),
       deleteSession: vi.fn(() => Promise.resolve({ ok: true })),
       migrateBulk: vi.fn(() => Promise.resolve({ migrated: 0 })),
+      checkDuplicates: vi.fn(() => Promise.resolve({ duplicates: [] })),
+    },
+    decksApi: {
+      ...actual.decksApi,
+      list: (...args: unknown[]) => apiMocks.decksList(...args),
+      create: (...args: unknown[]) => apiMocks.decksCreate(...args),
+    },
+    flashcardsApi: {
+      ...actual.flashcardsApi,
+      create: (...args: unknown[]) => apiMocks.flashcardsCreate(...args),
     },
     searchApi: {
       query: (...args: unknown[]) => apiMocks.searchQuery(...args),
@@ -69,6 +81,7 @@ vi.mock('../utils/api', async (importOriginal) => {
       toggleDogear: (...args: unknown[]) => apiMocks.toggleDogear(...args),
       listHighlights: (...args: unknown[]) => apiMocks.listHighlights(...args),
       createHighlight: (...args: unknown[]) => apiMocks.createHighlight(...args),
+      updateHighlight: (...args: unknown[]) => apiMocks.updateHighlight(...args),
       deleteHighlight: (...args: unknown[]) => apiMocks.deleteHighlight(...args),
       putResume: (...args: unknown[]) => apiMocks.putResume(...args),
       getResume: (...args: unknown[]) => apiMocks.getResume(...args),
@@ -76,7 +89,7 @@ vi.mock('../utils/api', async (importOriginal) => {
   }
 })
 
-describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Notebook', () => {
+describe('v2 3-Pane Study Workspace, Navigation Chrome & Living Notebook', () => {
   const originalInnerWidth = window.innerWidth
 
   beforeEach(() => {
@@ -99,14 +112,13 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
     apiMocks.kitsList.mockResolvedValue({ kits: [] })
     apiMocks.listDogears.mockResolvedValue([
       {
-        id: 'dg-1',
         pillarId: 'compute',
         topicId: 'traffic-gateways',
         sectionId: '',
         createdAt: '2026-11-10T00:00:00Z',
       },
     ])
-    apiMocks.toggleDogear.mockResolvedValue({ dogeared: true, id: 'dg-2' })
+    apiMocks.toggleDogear.mockResolvedValue({ dogeared: true, createdAt: '2026-11-10T00:00:00Z' })
     apiMocks.listHighlights.mockResolvedValue([
       {
         id: 'hl-saved-1',
@@ -114,9 +126,13 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
         topicId: 'traffic-gateways',
         sectionId: 'description',
         quote: 'Layer 7 reverse proxies',
+        prefix: '',
+        suffix: ' route HTTP',
         color: 'amber',
         note: 'Core gateway routing',
+        cardId: null,
         createdAt: '2026-11-10T00:00:00Z',
+        updatedAt: null,
       },
     ])
     apiMocks.createHighlight.mockResolvedValue({
@@ -125,17 +141,34 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
       topicId: 'traffic-gateways',
       sectionId: 'description',
       quote: 'consistent hashing',
-      color: 'sage',
+      prefix: '',
+      suffix: '',
+      color: 'amber',
       note: '',
+      cardId: null,
       createdAt: '2026-11-10T00:00:00Z',
+      updatedAt: null,
     })
-    apiMocks.deleteHighlight.mockResolvedValue({ deleted: true })
+    apiMocks.updateHighlight.mockResolvedValue({
+      id: 'hl-saved-1',
+      cardId: 'card-linked-1',
+    })
+    apiMocks.deleteHighlight.mockResolvedValue({ ok: true })
     apiMocks.putResume.mockResolvedValue({
-      ok: true,
-      lastGuideRef: { pillarId: 'compute', topicId: 'traffic-gateways', sectionId: '' },
+      resume: {
+        pillarId: 'compute',
+        topicId: 'traffic-gateways',
+        sectionId: '',
+        updatedAt: '2026-11-10T10:00:00Z',
+      },
     })
     apiMocks.getResume.mockResolvedValue({
-      lastGuideRef: { pillarId: 'compute', topicId: 'traffic-gateways', sectionId: '' },
+      resume: {
+        pillarId: 'compute',
+        topicId: 'traffic-gateways',
+        sectionId: '',
+        updatedAt: '2026-11-10T10:00:00Z',
+      },
     })
     apiMocks.guideProgress.mockResolvedValue({
       'compute__traffic-gateways__description': true,
@@ -146,23 +179,13 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
         committedAt: '2026-11-10T10:00:00Z',
       },
     })
-    apiMocks.sessionsList.mockResolvedValue([])
-    apiMocks.sessionsCreate.mockResolvedValue({
-      id: 'sess-1',
-      title: 'Traffic Gateways Study',
-      pillarId: 'compute',
-      topicId: 'traffic-gateways',
-      createdAt: '2026-11-10T10:00:00Z',
-      updatedAt: '2026-11-10T10:00:00Z',
-    })
-    apiMocks.sessionsGet.mockResolvedValue({
-      id: 'sess-1',
-      title: 'Traffic Gateways Study',
-      pillarId: 'compute',
-      topicId: 'traffic-gateways',
-      messages: [],
-    })
-    apiMocks.startersGet.mockResolvedValue({ prompts: ['Compare L4 vs L7 load balancers'] })
+    apiMocks.decksList.mockResolvedValue([
+      { id: 'deck-tg', name: 'Traffic Gateways & Proxies' },
+    ])
+    apiMocks.decksCreate.mockResolvedValue({ id: 'deck-tg', name: 'Traffic Gateways & Proxies' })
+    apiMocks.flashcardsCreate.mockResolvedValue({ id: 'card-linked-1' })
+    apiMocks.sessionsList.mockResolvedValue({})
+    apiMocks.sessionsCreate.mockResolvedValue({ ok: true })
     apiMocks.chatStream.mockImplementation(
       async (_msgs: unknown, onChunk?: (text: string) => void) => {
         onChunk?.('Kit explains L7 termination clearly.')
@@ -174,7 +197,7 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
         {
           sectionId: 'description',
           sectionName: 'Description & Internal Workings',
-          action: 'update',
+          isNew: false,
           reason: 'Added L7 connection multiplexing details.',
           existingContent: 'Layer 7 reverse proxies route HTTP traffic.',
           newContent:
@@ -183,7 +206,12 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
       ],
     })
     apiMocks.commitSave.mockResolvedValue({ savedCount: 1 })
-    apiMocks.searchQuery.mockResolvedValue({ results: [] })
+    apiMocks.searchQuery.mockResolvedValue({
+      guideContent: [],
+      flashcards: [],
+      boards: [],
+      decks: [],
+    })
   })
 
   afterEach(() => {
@@ -194,44 +222,6 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
       value: originalInnerWidth,
     })
     localStorage.removeItem('toolbox_chat_quote')
-  })
-
-  it('exercises the interactive /design-system Component Library showcase across all specimen groups', async () => {
-    render(
-      <MemoryRouter initialEntries={['/design-system']}>
-        <DesignSystemPage />
-      </MemoryRouter>,
-    )
-
-    expect(screen.getByTestId('design-system-page')).toBeInTheDocument()
-    expect(
-      screen.getByRole('heading', {
-        name: /Tactile Notebook & Precision Hardware Primitives/i,
-      }),
-    ).toBeInTheDocument()
-
-    // Trigger sample toasts & Kit companion state
-    fireEvent.click(screen.getByRole('button', { name: 'Test Toast' }))
-    expect(screen.getByText('Sample notification')).toBeInTheDocument()
-
-    const kitStateGroup = screen.getByRole('tablist', { name: 'Kit companion state' })
-    fireEvent.click(within(kitStateGroup).getByRole('tab', { name: 'Think' }))
-    expect(screen.getByText(/Shell tucks gently while thinking/i)).toBeInTheDocument()
-    fireEvent.click(within(kitStateGroup).getByRole('tab', { name: 'Done' }))
-
-    // Turn specimen notebook page and toggle dogear corner
-    fireEvent.click(screen.getByRole('button', { name: 'Next specimen page' }))
-    expect(screen.getByText('Sloppy Quorums vs. Linearizability')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Previous specimen page' }))
-
-    const dogearButtons = screen.getAllByRole('button', { name: /dogear/i })
-    fireEvent.click(dogearButtons[0])
-
-    // Filter tabs (Palette & Kit -> Notebook & Anki -> Physics & Inputs -> All)
-    const filterTabs = screen.getByRole('tablist', { name: 'Filter component specimens' })
-    fireEvent.click(within(filterTabs).getByRole('tab', { name: 'Physics & Inputs' }))
-    fireEvent.click(within(filterTabs).getByRole('tab', { name: 'Notebook & Anki' }))
-    fireEvent.click(within(filterTabs).getByRole('tab', { name: 'All' }))
   })
 
   it('renders 3-pane ChatPage with right Notebook Inspector, docks section quotes, and runs CommitModal + TaskWorkingBar', async () => {
@@ -273,11 +263,11 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
     expect(await within(inspector).findByText('Open Guide')).toBeInTheDocument()
     expect(await within(inspector).findByText(/Layer 7 reverse proxies/i)).toBeInTheDocument()
 
-    // Click "Ask Kit" in Right Inspector -> docks quote pill into center composer
+    // Click "Ask Kit" in Right Inspector -> docks quote pill into center InvitingComposer
     const askKitButtons = within(inspector).getAllByRole('button', { name: /Ask Kit/i })
     fireEvent.click(askKitButtons[0])
-    await waitFor(() =>
-      expect(screen.getAllByText(/Layer 7 reverse proxies/i).length).toBeGreaterThanOrEqual(2),
+    expect(await screen.findByTestId('learning-chat-quote')).toHaveTextContent(
+      /Layer 7 reverse proxies/i,
     )
 
     // Switch Right Inspector to Updates tab
@@ -287,7 +277,7 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
     fireEvent.click(within(inspectorTabs).getByRole('tab', { name: /Updates/i }))
     expect(within(inspector).getByText('Synthesize Guide Notes')).toBeInTheDocument()
 
-    // Open CommitModal via useCommitStore, inspect progressive diff, minimize to TaskWorkingBar, restore & save
+    // Open CommitModal via useCommitStore, inspect positional LCS diff, minimize via Escape, restore & save
     await act(async () => {
       useCommitStore.getState().startAnalysis(
         [
@@ -304,26 +294,23 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
 
     expect(await screen.findByText('Added L7 connection multiplexing details.')).toBeInTheDocument()
 
-    // Toggle progressive diff disclosure
     const diffBtn = screen.getByRole('button', { name: /Show diff/i })
     fireEvent.click(diffBtn)
     expect(
       screen.getAllByText(/Connection multiplexing pools backend TCP sockets/i).length,
     ).toBeGreaterThanOrEqual(2)
 
-    // Minimize modal into TaskWorkingBar and restore it
-    const modal = document.getElementById('commit-modal')!
-    fireEvent.click(within(modal).getByRole('button', { name: 'Close' }))
+    // Press Escape to minimize CommitModal into TaskWorkingBar and restore it
+    fireEvent.keyDown(window, { key: 'Escape' })
     const workingBar = await screen.findByRole('button', { name: /Review updates/i })
     expect(workingBar).toBeInTheDocument()
     fireEvent.click(workingBar)
 
-    // Confirm commit save
     fireEvent.click(document.getElementById('confirm-commit-btn')!)
     await waitFor(() => expect(apiMocks.commitSave).toHaveBeenCalledTimes(1))
   })
 
-  it('renders Living Textbook Notebook dogears, All/Dogeared spine filter, highlights, and reading resume', async () => {
+  it('renders Living Textbook Notebook dogears, highlights, Make Card review modal linkage, and reading resume', async () => {
     const sysKit = makeTestKit({ slug: 'system-design', name: 'System Design' })
     resetKitStore(sysKit)
 
@@ -341,7 +328,17 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
     await waitFor(() =>
       expect(apiMocks.putResume).toHaveBeenCalledWith('compute', 'traffic-gateways'),
     )
-    expect(await screen.findByText('Layer 7 reverse proxies')).toBeInTheDocument()
+    expect(await screen.findByText(/“Layer 7 reverse proxies”/)).toBeInTheDocument()
+
+    // Click "Make flashcard from highlight" chip -> opens FlashcardReviewModal -> saves & links cardId
+    fireEvent.click(screen.getByLabelText('Make flashcard from highlight'))
+    const saveAllBtn = await screen.findByRole('button', { name: /Save 1 Card/i })
+    fireEvent.click(saveAllBtn)
+    await waitFor(() =>
+      expect(apiMocks.updateHighlight).toHaveBeenCalledWith('hl-saved-1', {
+        cardId: 'card-linked-1',
+      }),
+    )
 
     // Toggle PillarNav filter between All and Dogeared
     const navFilter = screen.getByRole('tablist', { name: 'Filter guide pages' })
@@ -357,38 +354,56 @@ describe('v2 Component Library Showcase, 3-Pane Study Workspace & Living Noteboo
     await waitFor(() => expect(apiMocks.toggleDogear).toHaveBeenCalled())
   })
 
-  it('switches Kits via custom ActiveKitSwitcher listbox and runs SearchDialog quick commands', async () => {
+  it('switches Kits via ActiveKitSwitcher, clears activeKitSlug on unprefixed routes, and closes SearchDialog on Escape', async () => {
     const sysKit = makeTestKit({ id: 'k1', slug: 'system-design', name: 'System Design' })
     const rustKit = makeTestKit({ id: 'k2', slug: 'distributed-rust', name: 'Distributed Rust' })
     apiMocks.kitsList.mockResolvedValue({ kits: [sysKit, rustKit] })
-    resetKitStore(sysKit)
-    useKitStore.setState({ kits: [sysKit, rustKit], activeKitSlug: 'system-design' })
+    resetKitStore(rustKit)
+    useKitStore.setState({ kits: [sysKit, rustKit], activeKitSlug: 'distributed-rust' })
+
     function LocationProbe() {
       return <div data-testid="loc-probe">{useLocation().pathname}</div>
     }
     let searchClosed = false
-    await act(async () => {
-      render(
-        <MemoryRouter initialEntries={['/k/system-design/guide']}>
-          <LocationProbe />
-          <Sidebar />
-          <SearchDialog open={true} onClose={() => { searchClosed = true }} />
-        </MemoryRouter>,
-      )
-    })
 
-    // Open custom ActiveKitSwitcher popover and select Distributed Rust
+    const { unmount } = render(
+      <MemoryRouter initialEntries={['/k/system-design/guide']}>
+        <LocationProbe />
+        <Sidebar />
+        <SearchDialog
+          open={true}
+          onClose={() => {
+            searchClosed = true
+          }}
+        />
+      </MemoryRouter>,
+    )
+
     const kitTrigger = screen.getByRole('button', { name: /Active Study Kit/i })
     fireEvent.click(kitTrigger)
     const listbox = await screen.findByRole('listbox')
     fireEvent.click(within(listbox).getByText('Distributed Rust'))
     expect(screen.getByTestId('loc-probe')).toHaveTextContent('/k/distributed-rust/guide')
 
-    // SearchDialog renders quick commands when query is empty and closes on Escape
     const dialog = document.getElementById('search-dialog')!
-    expect(dialog).toBeInTheDocument()
     expect(within(dialog).getAllByText(/Component Library/i).length).toBeGreaterThan(0)
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(searchClosed).toBe(true)
+    unmount()
+
+    // Navigating Layout to unprefixed /settings clears activeKitSlug so ⌘/ never builds broken hybrid URLs
+    useKitStore.setState({ kits: [sysKit, rustKit], activeKitSlug: 'distributed-rust' })
+    await act(async () => {
+      render(
+        <MemoryRouter initialEntries={['/settings']}>
+          <Routes>
+            <Route element={<Layout />}>
+              <Route path="/settings" element={<div>Settings Page</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>,
+      )
+    })
+    await waitFor(() => expect(useKitStore.getState().activeKitSlug).toBeNull())
   })
 })

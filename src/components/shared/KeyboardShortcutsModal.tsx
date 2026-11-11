@@ -1,13 +1,13 @@
 import { useEffect } from 'react'
 import { X, Keyboard } from 'lucide-react'
-import { Kbd } from '../ui'
+import { Kbd } from '../ui/Controls'
 
 export interface KeyboardShortcutsModalProps {
   open: boolean
   onClose?: () => void
 }
 
-const SHORTCUT_SECTIONS = [
+export const SHORTCUT_SECTIONS = [
   {
     category: 'Global Navigation',
     items: [
@@ -19,23 +19,23 @@ const SHORTCUT_SECTIONS = [
       { label: 'Interleaved', keys: ['⌘', '6'] },
       { label: 'Knowledge Graph', keys: ['⌘', '7'] },
       { label: 'BotE Calculator', keys: ['⌘', '8'] },
-      { label: 'Quick Calculator', keys: ['⌘', 'E'] },
       { label: 'Toggle Pomodoro', keys: ['⌘', '9'] },
+      { label: 'Quick Calculator', keys: ['⌘', 'E'] },
+      { label: 'Save Active Board', keys: ['⌘', 'S'] },
       { label: 'Settings', keys: ['⌘', ','] },
-      { label: 'Command Palette / Search', keys: ['⌘', '/'] },
+      { label: 'Command Palette / Search', keys: ['⌘', 'K'] },
+      { label: 'Search Alias', keys: ['⌘', '/'] },
       { label: 'Show Shortcut Sheet', keys: ['⌘', '?'] },
       { label: 'Contextual Chat Panel', keys: ['⌘', 'J'] },
       { label: 'Toggle Sidebar', keys: ['⌘', 'B'] },
+      { label: 'Toggle Dark / Light Theme', keys: ['⌘', 'D'] },
     ],
   },
   {
     category: 'Study & Flashcards',
     items: [
-      { label: 'Flip Card / Reveal', keys: ['Space'] },
-      { label: 'Rate: Again', keys: ['1'] },
-      { label: 'Rate: Hard', keys: ['2'] },
-      { label: 'Rate: Good', keys: ['3'] },
-      { label: 'Rate: Easy', keys: ['4'] },
+      { label: 'Flip Card', keys: ['Space'] },
+      { label: 'Previous / Next Card', keys: ['←', '→'] },
     ],
   },
   {
@@ -53,6 +53,7 @@ export default function KeyboardShortcutsModal({ open, onClose }: KeyboardShortc
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
+        e.stopImmediatePropagation()
         onClose?.()
       }
     }

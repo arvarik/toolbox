@@ -26,7 +26,7 @@ import type { LucideIcon } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { searchApi } from '../../utils/api'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
-import { Kbd } from '../ui'
+import { Kbd } from '../ui/Controls'
 
 interface SearchResultItem {
   id: string
@@ -308,6 +308,7 @@ export default function SearchDialog({ open, onClose }: SearchDialogProps) {
     const onGlobalKeyDown = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault()
+        e.stopImmediatePropagation()
         onClose()
       }
     }

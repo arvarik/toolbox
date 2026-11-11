@@ -1,16 +1,22 @@
 import { useEffect, useMemo } from 'react'
-import { X, Settings, Sun, Moon, Blocks } from 'lucide-react'
+import { X, Sun, Moon, LogOut } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router'
 import PomodoroWidget from './PomodoroWidget'
-import { ActiveKitSwitcher, buildStudyNavItems, workspaceItems } from './Sidebar'
-import ModelPicker from '../shared/ModelPicker'
+import {
+  ActiveKitSwitcher,
+  bottomItems,
+  buildStudyNavItems,
+  performWorkspaceSignOut,
+  workspaceItems,
+} from './Sidebar'
+import { useAuth } from '../auth/AuthGate'
 import useAppStore from '../../stores/appStore'
 import useKitStore, {
   extractKitSlugFromPathname,
   useActiveKit,
   useKitRoutePrefix,
 } from '../../stores/useKitStore'
-import { KitLogo } from '../ui'
+import { KitLogo } from '../ui/KitLogo'
 
 export interface MobileDrawerProps {
   open: boolean
@@ -26,9 +32,9 @@ const activeLinkStyle = {
 export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
   const theme = useAppStore((s) => s.theme)
   const toggleTheme = useAppStore((s) => s.toggleTheme)
-  const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
   const kits = useKitStore((s) => s.kits)
   const fetchKits = useKitStore((s) => s.fetchKits)
+  const { authRequired, user, logout } = useAuth()
   const { skeleton, capabilities } = useActiveKit()
   const prefix = useKitRoutePrefix()
   const location = useLocation()
@@ -41,15 +47,31 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
 
   useEffect(() => {
     if (!open) return
-    void fetchAvailableModels()
     void fetchKits()
-  }, [open, fetchAvailableModels, fetchKits])
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, fetchKits, onClose])
+
+  const handleSignOut = () => {
+    onClose()
+    performWorkspaceSignOut(logout)
+  }
 
   if (!open) return null
 
   return (
     <div className="mobile-drawer-overlay mobile-overlay" onClick={onClose} id="mobile-nav-overlay">
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation menu"
         className="mobile-drawer"
         onClick={(e) => e.stopPropagation()}
         id="mobile-drawer"
@@ -93,9 +115,7 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
                 to={item.to}
                 end={Boolean(item.exact)}
                 onClick={onClose}
-                className={({ isActive }) =>
-                  `mobile-drawer-link${isActive ? ' active' : ''}`
-                }
+                className={({ isActive }) => `mobile-drawer-link${isActive ? ' active' : ''}`}
                 style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
                 id={`drawer-${item.navId}`}
               >
@@ -123,9 +143,7 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
                 to={item.to}
                 end={Boolean(item.exact)}
                 onClick={onClose}
-                className={({ isActive }) =>
-                  `mobile-drawer-link${isActive ? ' active' : ''}`
-                }
+                className={({ isActive }) => `mobile-drawer-link${isActive ? ' active' : ''}`}
                 style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
                 id={`drawer-${item.navId}`}
               >
@@ -135,14 +153,7 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
             )
           })}
 
-          <div className="mt-auto flex flex-col gap-3 border-t border-[var(--color-line)] pt-4">
-            <div className="px-3">
-              <div className="mb-1.5 text-[11px] font-semibold tracking-wider text-[var(--color-ink-faint)] uppercase">
-                Model
-              </div>
-              <ModelPicker variant="sidebar" triggerId="drawer-model-picker-trigger" />
-            </div>
-
+          <div className="mt-auto flex flex-col gap-2 border-t border-[var(--color-line)] pt-4">
             <PomodoroWidget />
 
             <button
@@ -155,31 +166,34 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
               <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
             </button>
 
-            <NavLink
-              to="/design-system"
-              onClick={onClose}
-              className={({ isActive }) =>
-                `mobile-drawer-link${isActive ? ' active' : ''}`
-              }
-              style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
-              id="drawer-nav-design-system"
-            >
-              <Blocks size={18} />
-              <span>Component Library</span>
-            </NavLink>
+            {bottomItems.map((item) => {
+              const Icon = item.icon
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  onClick={onClose}
+                  className={({ isActive }) => `mobile-drawer-link${isActive ? ' active' : ''}`}
+                  style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
+                  id={`drawer-${item.navId}`}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </NavLink>
+              )
+            })}
 
-            <NavLink
-              to="/settings"
-              onClick={onClose}
-              className={({ isActive }) =>
-                `mobile-drawer-link${isActive ? ' active' : ''}`
-              }
-              style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
-              id="drawer-nav-settings"
-            >
-              <Settings size={18} />
-              <span>Settings</span>
-            </NavLink>
+            {authRequired && user && (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="mobile-drawer-link w-full cursor-pointer border-0 bg-transparent text-left"
+                id="drawer-nav-signout"
+              >
+                <LogOut size={18} />
+                <span>@{user.username} · Sign out</span>
+              </button>
+            )}
           </div>
         </nav>
       </div>

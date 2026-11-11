@@ -1,7 +1,7 @@
-import { useEffect, useCallback, useState } from 'react'
+import { useEffect, useCallback } from 'react'
 import { GitCommit, Check, Loader2, X, Sparkles, AlertCircle } from 'lucide-react'
 import { chatApi, type CommitSectionUpdate } from '../../utils/api'
-import { FluidAccordion, KitAvatar } from '../ui'
+import { KitAvatar, NoteUpdateCard } from '../ui'
 import useAppStore from '../../stores/appStore'
 import useCommitStore from '../../stores/useCommitStore'
 import { useActiveKit } from '../../stores/useKitStore'
@@ -36,36 +36,53 @@ function extractSummaryBullets(update: CommitSectionUpdate): string[] {
 }
 
 function buildLineDiff(existingRaw: string | undefined, nextRaw: string): DiffHunk[] {
+  // ponytail: O(M*N) positional LCS capped at 60 non-empty lines per section; upgrade to Myers diff if sections exceed ~500 lines
   const oldLines = (existingRaw || '')
     .split('\n')
     .map((l) => l.trimEnd())
     .filter((l) => l.trim().length > 0)
+    .slice(0, 60)
   const newLines = nextRaw
     .split('\n')
     .map((l) => l.trimEnd())
     .filter((l) => l.trim().length > 0)
+    .slice(0, 60)
 
   if (oldLines.length === 0) {
-    return newLines.slice(0, 50).map((line) => ({ type: 'add', line }))
+    return newLines.map((line) => ({ type: 'add', line }))
   }
 
-  const oldSet = new Set(oldLines.map((l) => l.trim()))
-  const newSet = new Set(newLines.map((l) => l.trim()))
+  const m = oldLines.length
+  const n = newLines.length
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] =
+        oldLines[i].trim() === newLines[j].trim()
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+
   const hunks: DiffHunk[] = []
-
-  for (const line of oldLines) {
-    if (!newSet.has(line.trim())) {
-      hunks.push({ type: 'del', line })
-    }
-  }
-  for (const line of newLines) {
-    if (oldSet.has(line.trim())) {
-      hunks.push({ type: 'ctx', line })
+  let i = 0
+  let j = 0
+  while (i < m && j < n) {
+    if (oldLines[i].trim() === newLines[j].trim()) {
+      hunks.push({ type: 'ctx', line: newLines[j] })
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      hunks.push({ type: 'del', line: oldLines[i] })
+      i++
     } else {
-      hunks.push({ type: 'add', line })
+      hunks.push({ type: 'add', line: newLines[j] })
+      j++
     }
   }
-  return hunks.slice(0, 60)
+  while (i < m) hunks.push({ type: 'del', line: oldLines[i++] })
+  while (j < n) hunks.push({ type: 'add', line: newLines[j++] })
+  return hunks.slice(0, 80)
 }
 
 /**
@@ -78,7 +95,6 @@ export default function CommitModal() {
   const selectedModel = useAppStore((s) => s.model)
   const addToast = useAppStore((s) => s.addToast)
   const { sectionsByPillar } = useActiveKit()
-  const [diffOpenIds, setDiffOpenIds] = useState<Record<string, boolean>>({})
 
   const {
     isOpen,
@@ -133,7 +149,7 @@ export default function CommitModal() {
 
         if (!result.updates || result.updates.length === 0) {
           if (targetSectionIds.length === 0) {
-            setUpdatesResult([], new Set(), new Set())
+            setUpdatesResult([], new Set())
           } else {
             setError('Failed to generate content for the selected sections.')
           }
@@ -144,11 +160,7 @@ export default function CommitModal() {
           mergeUpdatesResult(result.updates, targetSectionIds)
         } else {
           const initialEnabled = new Set(result.updates.map((u) => u.sectionId))
-          const initialExpanded =
-            result.updates.length > 0
-              ? new Set([result.updates[0].sectionId])
-              : new Set<string>()
-          setUpdatesResult(result.updates, initialEnabled, initialExpanded)
+          setUpdatesResult(result.updates, initialEnabled)
         }
       } catch (err) {
         if (callId !== useCommitStore.getState().currentCallId) return
@@ -166,10 +178,16 @@ export default function CommitModal() {
     ],
   )
 
-  // Auto-analyze when opened and in 'idle' phase
+  const handleCloseOrMinimize = useCallback(() => {
+    if (phase === 'analyzing' || phase === 'saving' || phase === 'preview') {
+      setMinimized(true)
+    } else {
+      closeCompletely()
+    }
+  }, [phase, setMinimized, closeCompletely])
+
   useEffect(() => {
     if (isOpen && phase === 'idle' && topicContext?.pillarId) {
-      setDiffOpenIds({})
       const timer = setTimeout(() => {
         void analyze()
       }, 0)
@@ -180,6 +198,19 @@ export default function CommitModal() {
     }
   }, [isOpen, phase, topicContext?.pillarId, topicContext?.topicId, analyze])
 
+  useEffect(() => {
+    if (!isOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && phase !== 'saving') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        handleCloseOrMinimize()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isOpen, phase, handleCloseOrMinimize])
+
   if (!isOpen) return null
 
   const toggleSection = (sectionId: string) => {
@@ -189,10 +220,6 @@ export default function CommitModal() {
       else next.add(sectionId)
       return next
     })
-  }
-
-  const toggleDiff = (sectionId: string) => {
-    setDiffOpenIds((prev) => ({ ...prev, [sectionId]: !prev[sectionId] }))
   }
 
   const handleSave = async () => {
@@ -233,14 +260,6 @@ export default function CommitModal() {
   const identifiedIds = new Set(updates.map((u) => u.sectionId))
   const requiresReanalysis = Array.from(enabledSections).some((id) => !identifiedIds.has(id))
 
-  const handleCloseOrMinimize = () => {
-    if (phase === 'analyzing' || phase === 'saving' || phase === 'preview') {
-      setMinimized(true)
-    } else {
-      closeCompletely()
-    }
-  }
-
   const headerKitState =
     phase === 'analyzing' || phase === 'saving'
       ? 'thinking'
@@ -257,6 +276,9 @@ export default function CommitModal() {
     >
       <div
         id="commit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="commit-modal-title"
         className="flex max-h-[90vh] w-full max-w-[740px] flex-col overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] shadow-[var(--shadow-float)]"
       >
         {/* ── Header ── */}
@@ -264,7 +286,10 @@ export default function CommitModal() {
           <div className="flex items-center gap-3">
             <KitAvatar size={20} state={headerKitState} />
             <div>
-              <h2 className="font-serif text-[17px] leading-tight font-normal text-[var(--color-ink)]">
+              <h2
+                id="commit-modal-title"
+                className="font-serif text-[17px] leading-tight font-normal text-[var(--color-ink)]"
+              >
                 Commit to Guide
               </h2>
               <div className="text-[12px] text-[var(--color-ink-muted)]">
@@ -372,126 +397,66 @@ export default function CommitModal() {
               </button>
             </div>
 
-            {/* Section cards */}
+            {/* Section cards using shared NoteUpdateCard primitive */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              <div className="divide-y divide-[var(--color-line)]">
-                {allSections.map((sec) => {
-                  const update = updateMap.get(sec.id)
-                  const isEnabled = enabledSections.has(sec.id)
-                  const isIdentified = Boolean(update)
-                  const diffOpen = Boolean(diffOpenIds[sec.id])
-                  const bullets = update ? extractSummaryBullets(update) : []
-                  const hunks = update
-                    ? buildLineDiff(update.existingContent, update.newContent)
-                    : []
+              {allSections.map((sec) => {
+                const update = updateMap.get(sec.id)
+                const isEnabled = enabledSections.has(sec.id)
+                const isIdentified = Boolean(update)
+                const bullets = update ? extractSummaryBullets(update) : []
+                const hunks = update
+                  ? buildLineDiff(update.existingContent, update.newContent)
+                  : []
 
-                  return (
-                    <div
-                      key={sec.id}
-                      className={`py-4 first:pt-1 last:pb-1 transition-opacity ${
-                        isEnabled ? 'opacity-100' : 'opacity-60'
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex min-w-0 flex-1 items-start gap-3">
-                          <button
-                            type="button"
-                            role="checkbox"
-                            aria-checked={isEnabled}
-                            aria-label={`Include ${sec.name}`}
-                            onClick={() => toggleSection(sec.id)}
-                            className={`mt-0.5 flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded border transition-colors ${
-                              isEnabled
-                                ? 'border-[var(--color-accent-fill)] bg-[var(--color-accent-fill)] text-[var(--color-accent-ink)]'
-                                : 'border-[var(--color-line-strong)] bg-[var(--color-surface-low)]'
-                            }`}
-                          >
-                            {isEnabled && <Check size={12} strokeWidth={2.5} />}
-                          </button>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <h4 className="font-serif text-[15px] font-medium text-[var(--color-ink)]">
-                                {sec.name}
-                              </h4>
-                              {update ? (
-                                <span
-                                  className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${
-                                    update.isNew
-                                      ? 'bg-[var(--color-diff-add-bg)] text-[var(--color-diff-add-ink)]'
-                                      : 'border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink-muted)]'
-                                  }`}
-                                >
-                                  {update.isNew ? 'NEW' : 'MERGE'}
-                                </span>
-                              ) : (
-                                <span className="rounded border border-[var(--color-line)] bg-[var(--color-surface-low)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-ink-faint)] uppercase">
-                                  MISSING
-                                </span>
-                              )}
-                            </div>
-
-                            {isIdentified && bullets.length > 0 ? (
-                              <ul className="mt-2 space-y-1.5 text-[13px] leading-snug text-[var(--color-ink-muted)]">
-                                {bullets.map((b, idx) => (
-                                  <li key={idx} className="flex gap-2">
-                                    <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-[var(--color-ink-faint)]" />
-                                    <span>{b}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="mt-1 text-[12px] text-[var(--color-ink-faint)]">
-                                Select to force analysis of this section.
-                              </p>
-                            )}
-
-                            {isIdentified && hunks.length > 0 && (
-                              <div className="mt-2.5">
-                                <button
-                                  type="button"
-                                  onClick={() => toggleDiff(sec.id)}
-                                  className="cursor-pointer text-[12px] font-medium text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-ink)]"
-                                >
-                                  {diffOpen ? 'Hide exact changes' : 'Show diff'}
-                                </button>
-
-                                <FluidAccordion open={diffOpen}>
-                                  <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-low)] text-[12px]">
-                                    {hunks.map((h, idx) => {
-                                      const rowClass =
-                                        h.type === 'add'
-                                          ? 'border-l-2 border-[var(--color-diff-add-bar)] bg-[var(--color-diff-add-bg)] text-[var(--color-diff-add-ink)]'
-                                          : h.type === 'del'
-                                            ? 'border-l-2 border-[var(--color-diff-del-bar)] bg-[var(--color-diff-del-bg)] text-[var(--color-diff-del-ink)] line-through opacity-85'
-                                            : 'border-l-2 border-transparent text-[var(--color-ink-muted)]'
-                                      return (
-                                        <div
-                                          key={idx}
-                                          className={`flex gap-2 px-3 py-1 leading-snug ${rowClass}`}
-                                        >
-                                          <span className="w-3 shrink-0 font-mono select-none">
-                                            {h.type === 'add'
-                                              ? '+'
-                                              : h.type === 'del'
-                                                ? '−'
-                                                : ' '}
-                                          </span>
-                                          <span className="break-words">{h.line}</span>
-                                        </div>
-                                      )
-                                    })}
-                                  </div>
-                                </FluidAccordion>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+                return (
+                  <NoteUpdateCard
+                    key={sec.id}
+                    sectionName={sec.name}
+                    summaryBullets={isIdentified ? bullets : undefined}
+                    hunks={isIdentified ? hunks : []}
+                    className={`transition-opacity ${isEnabled ? 'opacity-100' : 'opacity-60'}`}
+                    headerLeft={
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={isEnabled}
+                        aria-label={`Include ${sec.name}`}
+                        onClick={() => toggleSection(sec.id)}
+                        className={`flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded border transition-colors ${
+                          isEnabled
+                            ? 'border-[var(--color-accent-fill)] bg-[var(--color-accent-fill)] text-[var(--color-accent-ink)]'
+                            : 'border-[var(--color-line-strong)] bg-[var(--color-surface-low)]'
+                        }`}
+                      >
+                        {isEnabled && <Check size={12} strokeWidth={2.5} />}
+                      </button>
+                    }
+                    badge={
+                      update ? (
+                        <span
+                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${
+                            update.isNew
+                              ? 'bg-[var(--color-diff-add-bg)] text-[var(--color-diff-add-ink)]'
+                              : 'border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink-muted)]'
+                          }`}
+                        >
+                          {update.isNew ? 'NEW' : 'MERGE'}
+                        </span>
+                      ) : (
+                        <span className="rounded border border-[var(--color-line)] bg-[var(--color-surface-low)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-ink-faint)] uppercase">
+                          MISSING
+                        </span>
+                      )
+                    }
+                  >
+                    {!isIdentified && (
+                      <p className="mt-1 text-[12px] text-[var(--color-ink-faint)]">
+                        Select to force analysis of this section.
+                      </p>
+                    )}
+                  </NoteUpdateCard>
+                )
+              })}
             </div>
 
             {/* Footer */}

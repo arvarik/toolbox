@@ -2,7 +2,8 @@ import { Menu, BookOpen } from 'lucide-react'
 import { useLocation } from 'react-router'
 import ModelPicker from '../shared/ModelPicker'
 import { extractKitSlugFromPathname } from '../../stores/useKitStore'
-import { Button, KitLogo } from '../ui'
+import { Button } from '../ui/Controls'
+import { KitLogo } from '../ui/KitLogo'
 
 export interface MobileHeaderProps {
   onToggleMenu: () => void

@@ -41,7 +41,7 @@ export default function LearningTodo({ onStudyTopic, activeTopicId }: LearningTo
 
   const kitResumeRef =
     (activeKit as { lastGuideRef?: GuideResumeRef | null } | null)?.lastGuideRef ?? null
-  const lastGuideRef = kitResumeRef ?? fetchedResume
+  const lastGuideRef = fetchedResume ?? kitResumeRef
 
   const fetchSpineMeta = useCallback(() => {
     Promise.resolve(guideContentApi?.progress?.())
@@ -53,12 +53,10 @@ export default function LearningTodo({ onStudyTopic, activeTopicId }: LearningTo
       .then((items) => setDogears(Array.isArray(items) ? items : []))
       .catch(() => setDogears([]))
 
-    if (!kitResumeRef) {
-      Promise.resolve(guideContentApi?.getResume?.())
-        .then((res) => setFetchedResume(res?.resume ?? null))
-        .catch(() => setFetchedResume(null))
-    }
-  }, [kitResumeRef])
+    Promise.resolve(guideContentApi?.getResume?.())
+      .then((res) => setFetchedResume(res?.resume ?? null))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     setIsLoading(true)

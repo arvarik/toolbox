@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router'
 import {
   Calculator,
@@ -12,69 +12,17 @@ import {
 import PillarNav from '../components/guide/PillarNav'
 import BlueprintShell from '../components/guide/BlueprintShell'
 import ChatPanel from '../components/shared/ChatPanel'
-import { KitAvatar } from '../components/ui'
+import { KitAvatar, SelectPopover } from '../components/ui'
 import useAppStore from '../stores/appStore'
-import { useActiveKit } from '../stores/useKitStore'
+import useKitStore, { useActiveKit } from '../stores/useKitStore'
 import useIsMobile from '../hooks/useIsMobile'
-import * as apiModule from '../utils/api'
-import type { GuideDogearItem } from '../utils/api'
+import { guideContentApi, kitsApi, type GuideDogearItem } from '../utils/api'
 
 interface ArchivedNote {
   pillarId: string
   topicId: string
   sectionId: string
   content: string
-}
-
-interface KitsArchiveApi {
-  getArchivedNotes?: (kitId: string) => Promise<{ notes?: ArchivedNote[] } | null>
-  refileArchivedNote?: (
-    kitId: string,
-    payload: {
-      fromPillarId: string
-      fromTopicId: string
-      fromSectionId: string
-      toPillarId: string
-      toTopicId: string
-      toSectionId: string
-    },
-  ) => Promise<unknown>
-  deleteArchivedNote?: (
-    kitId: string,
-    payload: { pillarId: string; topicId: string; sectionId: string },
-  ) => Promise<unknown>
-}
-
-interface OptionalGuideNotebookApi {
-  listDogears?: () => Promise<GuideDogearItem[]>
-  toggleDogear?: (
-    pillarId: string,
-    topicId: string,
-    sectionId?: string,
-  ) => Promise<{ dogeared: boolean; createdAt: string | null }>
-  putResume?: (
-    pillarId: string,
-    topicId: string,
-    sectionId?: string,
-  ) => Promise<unknown>
-}
-
-function safeGetKitsApi(): KitsArchiveApi | null {
-  try {
-    const mod = apiModule as unknown as { kitsApi?: KitsArchiveApi }
-    return 'kitsApi' in mod ? (mod.kitsApi ?? null) : null
-  } catch {
-    return null
-  }
-}
-
-function safeGetGuideNotebookApi(): OptionalGuideNotebookApi | null {
-  try {
-    const mod = apiModule as unknown as { guideContentApi?: OptionalGuideNotebookApi }
-    return 'guideContentApi' in mod ? (mod.guideContentApi ?? null) : null
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -88,6 +36,14 @@ export default function GuidePage() {
   const setCalcModalOpen = useAppStore((s) => s.setCalcModalOpen)
   const addToast = useAppStore((s) => s.addToast)
   const { kitId, kitSlug, skeleton, pillars, capabilities } = useActiveKit()
+  const kits = useKitStore((s) => s.kits)
+  const effectiveKitId = useMemo(
+    () =>
+      kitId ||
+      kits.find((k) => k.slug === (kitSlug || 'system-design'))?.id ||
+      null,
+    [kitId, kitSlug, kits],
+  )
 
   const isMobile = useIsMobile()
 
@@ -102,19 +58,34 @@ export default function GuidePage() {
   // Automatic reading resume when viewing a specific topic page
   useEffect(() => {
     if (!pillarId || !topicId) return
-    const guideApi = safeGetGuideNotebookApi()
-    void Promise.resolve(guideApi?.putResume?.(pillarId, topicId)).catch(() => null)
+    const nextRef = {
+      pillarId,
+      topicId,
+      sectionId: '',
+      updatedAt: new Date().toISOString(),
+    }
+    useKitStore.getState().updateActiveKitNotebookMeta({ lastGuideRef: nextRef })
+    void Promise.resolve(guideContentApi?.putResume?.(pillarId, topicId))
+      .then((res) => {
+        if (res?.resume) {
+          useKitStore.getState().updateActiveKitNotebookMeta({ lastGuideRef: res.resume })
+        }
+      })
+      .catch(() => null)
   }, [pillarId, topicId, kitId, kitSlug])
 
   // Load folded page dogears for active Kit
   const loadDogears = useCallback(() => {
-    const guideApi = safeGetGuideNotebookApi()
-    if (!guideApi?.listDogears) {
+    if (!guideContentApi?.listDogears) {
       setDogears([])
       return
     }
-    Promise.resolve(guideApi.listDogears())
-      .then((items) => setDogears(Array.isArray(items) ? items : []))
+    Promise.resolve(guideContentApi.listDogears())
+      .then((items) => {
+        const list = Array.isArray(items) ? items : []
+        setDogears(list)
+        useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: list.length })
+      })
       .catch(() => setDogears([]))
   }, [])
 
@@ -122,81 +93,77 @@ export default function GuidePage() {
     loadDogears()
   }, [kitId, kitSlug, loadDogears])
 
-  const handleToggleDogear = useCallback(
-    (pId: string, tId: string, secId = '') => {
-      let previous: GuideDogearItem[] = []
-      setDogears((prev) => {
-        previous = prev
-        const exists = prev.some(
-          (d) =>
-            d.pillarId === pId &&
-            d.topicId === tId &&
-            (d.sectionId || '') === secId,
-        )
-        return exists
-          ? prev.filter(
-              (d) =>
-                !(
-                  d.pillarId === pId &&
-                  d.topicId === tId &&
-                  (d.sectionId || '') === secId
-                ),
-            )
-          : [
-              ...prev,
-              {
-                pillarId: pId,
-                topicId: tId,
-                sectionId: secId,
-                createdAt: new Date().toISOString(),
-              },
-            ]
-      })
+  const handleToggleDogear = useCallback((pId: string, tId: string, secId = '') => {
+    let previous: GuideDogearItem[] = []
+    let nextCount = 0
+    setDogears((prev) => {
+      previous = prev
+      const exists = prev.some(
+        (d) =>
+          d.pillarId === pId &&
+          d.topicId === tId &&
+          (d.sectionId || '') === secId,
+      )
+      const next = exists
+        ? prev.filter(
+            (d) =>
+              !(
+                d.pillarId === pId &&
+                d.topicId === tId &&
+                (d.sectionId || '') === secId
+              ),
+          )
+        : [
+            ...prev,
+            {
+              pillarId: pId,
+              topicId: tId,
+              sectionId: secId,
+              createdAt: new Date().toISOString(),
+            },
+          ]
+      nextCount = next.length
+      return next
+    })
+    useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: nextCount })
 
-      const guideApi = safeGetGuideNotebookApi()
-      Promise.resolve(guideApi?.toggleDogear?.(pId, tId, secId))
-        .then(() => {
-          window.dispatchEvent(new Event('guide-dogears-updated'))
-        })
-        .catch(() => {
-          setDogears(previous)
-        })
-    },
-    [],
-  )
+    Promise.resolve(guideContentApi?.toggleDogear?.(pId, tId, secId))
+      .then(() => {
+        window.dispatchEvent(new Event('guide-dogears-updated'))
+      })
+      .catch(() => {
+        setDogears(previous)
+        useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: previous.length })
+      })
+  }, [])
 
   const openGuideChat = useCallback(() => {
-    const state = useAppStore.getState() as unknown as {
-      chatOpen?: Record<string, boolean>
-      toggleChat?: (page: string) => void
-      setChatOpen?: (page: string, open: boolean) => void
-    }
-    if (typeof state.setChatOpen === 'function') {
-      state.setChatOpen('guide', true)
-    } else if (!state.chatOpen?.guide && typeof state.toggleChat === 'function') {
+    const state = useAppStore.getState()
+    if (!state.chatOpen.guide) {
       state.toggleChat('guide')
     }
   }, [])
 
   const loadArchived = useCallback(async () => {
-    const kitsApi = safeGetKitsApi()
-    if (!kitId || !kitsApi?.getArchivedNotes) {
+    if (!effectiveKitId || !kitsApi?.getArchivedNotes) {
       setArchivedNotes([])
       return
     }
     try {
-      const res = await kitsApi.getArchivedNotes(kitId)
+      const res = (await kitsApi.getArchivedNotes(effectiveKitId)) as {
+        notes?: ArchivedNote[]
+      } | null
       setArchivedNotes(Array.isArray(res?.notes) ? res.notes : [])
     } catch {
       setArchivedNotes([])
     }
-  }, [kitId])
+  }, [effectiveKitId])
 
   useEffect(() => {
     setRefilingKey(null)
     setDrawerOpen(false)
     void loadArchived()
-  }, [kitId, loadArchived])
+  }, [effectiveKitId, loadArchived])
 
   const openRefilePicker = (key: string) => {
     if (refilingKey === key) {
@@ -220,10 +187,9 @@ export default function GuidePage() {
   }
 
   const handleRefileNote = async (note: ArchivedNote) => {
-    const kitsApi = safeGetKitsApi()
-    if (!kitId || !kitsApi?.refileArchivedNote) return
+    if (!effectiveKitId || !kitsApi?.refileArchivedNote) return
     try {
-      await kitsApi.refileArchivedNote(kitId, {
+      await kitsApi.refileArchivedNote(effectiveKitId, {
         fromPillarId: note.pillarId,
         fromTopicId: note.topicId,
         fromSectionId: note.sectionId,
@@ -244,10 +210,9 @@ export default function GuidePage() {
   }
 
   const handleDeleteArchived = async (note: ArchivedNote) => {
-    const kitsApi = safeGetKitsApi()
-    if (!kitId || !kitsApi?.deleteArchivedNote) return
+    if (!effectiveKitId || !kitsApi?.deleteArchivedNote) return
     try {
-      await kitsApi.deleteArchivedNote(kitId, {
+      await kitsApi.deleteArchivedNote(effectiveKitId, {
         pillarId: note.pillarId,
         topicId: note.topicId,
         sectionId: note.sectionId,
@@ -272,6 +237,18 @@ export default function GuidePage() {
   }
 
   const selectedRefilePillar = pillars.find((p) => p.id === targetPillarId)
+  const pillarOptions = useMemo(
+    () => pillars.map((p) => ({ value: p.id, label: p.shortName })),
+    [pillars],
+  )
+  const topicOptions = useMemo(
+    () => (selectedRefilePillar?.topics || []).map((t) => ({ value: t.id, label: t.name })),
+    [selectedRefilePillar],
+  )
+  const sectionOptions = useMemo(
+    () => (selectedRefilePillar?.sections || []).map((s) => ({ value: s.id, label: s.name })),
+    [selectedRefilePillar],
+  )
 
   return (
     <div className="guide-layout" id="guide-page">
@@ -366,42 +343,30 @@ export default function GuidePage() {
 
                       {refilingKey === key && (
                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                          <select
-                            aria-label="Target pillar"
+                          <SelectPopover
+                            size="xs"
+                            ariaLabel="Target pillar"
                             value={targetPillarId}
-                            onChange={(e) => handlePillarTargetChange(e.target.value)}
-                            className="input py-1 text-xs"
-                          >
-                            {pillars.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.shortName}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            aria-label="Target topic"
+                            onChange={handlePillarTargetChange}
+                            options={pillarOptions}
+                            menuWidthClass="w-52"
+                          />
+                          <SelectPopover
+                            size="xs"
+                            ariaLabel="Target topic"
                             value={targetTopicId}
-                            onChange={(e) => setTargetTopicId(e.target.value)}
-                            className="input py-1 text-xs"
-                          >
-                            {(selectedRefilePillar?.topics || []).map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            aria-label="Target section"
+                            onChange={setTargetTopicId}
+                            options={topicOptions}
+                            menuWidthClass="w-60"
+                          />
+                          <SelectPopover
+                            size="xs"
+                            ariaLabel="Target section"
                             value={targetSectionId}
-                            onChange={(e) => setTargetSectionId(e.target.value)}
-                            className="input py-1 text-xs"
-                          >
-                            {(selectedRefilePillar?.sections || []).map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                          </select>
+                            onChange={setTargetSectionId}
+                            options={sectionOptions}
+                            menuWidthClass="w-60"
+                          />
                           <button
                             type="button"
                             className="btn btn-primary btn-sm"
@@ -429,7 +394,8 @@ export default function GuidePage() {
         />
       </div>
 
-      {pillarId && (!isMobile || chatOpen) && (
+      {/* Desktop companion drawer only; Layout mounts the mobile drawer when isMobile */}
+      {!isMobile && pillarId && (
         <ChatPanel
           page="guide"
           title={`Ask about ${skeleton.identity.name}`}

@@ -12,7 +12,7 @@ import { useNavigate } from 'react-router'
 import { Search, Check, RefreshCw, ChevronsUpDown, Settings2, Boxes } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import type { ModelCatalogItem, ModelGroup } from '../../utils/api'
-import { Button, Kbd } from '../ui'
+import { Button, Kbd } from '../ui/Controls'
 
 export type ModelPickerVariant = 'sidebar' | 'header' | 'settings'
 
@@ -42,11 +42,13 @@ export default function ModelPicker({
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const searchRef = useRef<HTMLInputElement | null>(null)
 
   const openPicker = () => {
     setQuery('')
+    setActiveIndex(0)
     setOpen(true)
   }
 
@@ -60,7 +62,10 @@ export default function ModelPicker({
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') {
+        e.stopImmediatePropagation()
+        setOpen(false)
+      }
     }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
@@ -90,6 +95,11 @@ export default function ModelPicker({
       }))
       .filter((group) => group.models.length > 0)
   }, [availableModels, query])
+
+  const flatFilteredModels = useMemo(
+    () => filteredGroups.flatMap((g) => g.models),
+    [filteredGroups],
+  )
 
   const hasAnyModels = availableModels.some((g) => g.models.length > 0)
 
@@ -202,7 +212,26 @@ export default function ModelPicker({
                 id="model-picker-search"
                 placeholder="Search models…"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setActiveIndex(0)
+                }}
+                onKeyDown={(e) => {
+                  if (flatFilteredModels.length === 0) return
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setActiveIndex((i) => (i + 1) % flatFilteredModels.length)
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setActiveIndex(
+                      (i) => (i - 1 + flatFilteredModels.length) % flatFilteredModels.length,
+                    )
+                  } else if (e.key === 'Enter') {
+                    e.preventDefault()
+                    const picked = flatFilteredModels[activeIndex]
+                    if (picked) handleSelect(picked)
+                  }
+                }}
               />
               <Kbd>Esc</Kbd>
             </div>
@@ -237,18 +266,25 @@ export default function ModelPicker({
                     </div>
                     {group.models.map((m) => {
                       const isSelected = m.id === model
+                      const isKeyboardActive = flatFilteredModels[activeIndex]?.id === m.id
                       return (
                         <button
                           type="button"
                           key={m.id}
                           className={`model-picker-option${isSelected ? ' active' : ''}`}
                           onClick={() => handleSelect(m)}
+                          onMouseEnter={() => {
+                            const idx = flatFilteredModels.findIndex((item) => item.id === m.id)
+                            if (idx >= 0) setActiveIndex(idx)
+                          }}
                           aria-pressed={isSelected}
                           style={
-                            isSelected
+                            isSelected || isKeyboardActive
                               ? {
-                                  background: 'var(--color-surface-elevated)',
-                                  boxShadow: 'var(--shadow-hairline)',
+                                  background: isSelected
+                                    ? 'var(--color-surface-elevated)'
+                                    : 'var(--color-surface-hover)',
+                                  boxShadow: isSelected ? 'var(--shadow-hairline)' : undefined,
                                 }
                               : undefined
                           }
