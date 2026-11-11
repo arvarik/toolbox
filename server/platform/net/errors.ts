@@ -2,10 +2,10 @@ import crypto from "node:crypto";
 import type { Request, Response, NextFunction, RequestHandler } from "express";
 import { ZodError, type ZodType } from "zod";
 
-const isTest = process.env.NODE_ENV === "test";
+const isTest = () => process.env.NODE_ENV === "test";
 
 const logAt =
-  (level: "info" | "warn" | "error" | "debug", skip = () => isTest) =>
+  (level: "info" | "warn" | "error" | "debug", skip = isTest) =>
   (scope: string, message: string, meta?: Record<string, unknown>): void => {
     if (!skip()) console[level]("[%s] %s", scope, message, ...(meta ? [meta] : []));
   };
@@ -14,7 +14,7 @@ export const log = {
   info: logAt("info"),
   warn: logAt("warn"),
   error: logAt("error"),
-  debug: logAt("debug", () => isTest || process.env.NODE_ENV === "production"),
+  debug: logAt("debug", () => isTest() || process.env.NODE_ENV === "production"),
 };
 
 export function getErrorMessage(err: unknown): string {

@@ -50,15 +50,32 @@ self-hosted multi-tenant deployments:
 
 - **Authentication & session boundaries**:
   - **Local-owner mode (`AUTH_REQUIRED=false`)**: Intended strictly for
-    loopback (`127.0.0.1`). Protected against browser DNS-rebinding attacks via
-    case-insensitive `hostGuard` and cross-site write checks (`Origin` /
-    `Sec-Fetch-Site`). Creating the first password account automatically locks
-    the instance into authenticated mode.
+    loopback (`127.0.0.1`) or trusted local development. Protected against
+    browser DNS-rebinding attacks via case-insensitive `hostGuard` and
+    cross-site write checks (`Origin` / `Sec-Fetch-Site`). In local development,
+    Vite allows LAN mobile testing (`VITE_DEV_HOST=127.0.0.1` restricts it to
+    loopback on shared networks) while locking `server.allowedHosts` to
+    `localhost`, IP literals, and `.local` mDNS names, and setting
+    `proxy["/api"].changeOrigin: false` so the client's real `Host` header flows
+    intact to Express `hostGuard` and `isOwnOrigin` (`Origin === Host`).
+    Creating the first password account automatically locks the instance into
+    authenticated mode.
   - **Multi-tenant mode (`AUTH_REQUIRED=true`)**: Supports NFKC-normalized
     `scrypt` passwords, WebAuthn Passkeys, and OIDC SSO (PKCE `S256` + state
     cookie binding). Session cookies use `HttpOnly; SameSite=Lax` (plus
     `Secure` and `Strict-Transport-Security` when `req.secure` is true via TLS
     or trusted `TRUST_PROXY_HOPS`).
+  - **Reverse-proxy TLS trust (`TRUST_PROXY_HOPS`)**: Toolbox never trusts raw
+    `X-Forwarded-Proto` headers when `TRUST_PROXY_HOPS=0` (the default), blocking
+    untrusted HTTP clients from spoofing `X-Forwarded-Proto: https` to force
+    browser-rejected `; Secure` cookies or sticky HSTS. Operators running behind
+    a TLS terminator (Caddy, Nginx, Traefik, Cloudflare Tunnel, etc.) **must**
+    set `TRUST_PROXY_HOPS=1` (or their exact proxy hop count) so `req.secure`,
+    `; Secure` session/OIDC cookies, and `Strict-Transport-Security` activate.
+    Toolbox emits a `[security]` warning at startup when `PUBLIC_URL` /
+    `PUBLIC_ORIGIN` uses `https://` with `TRUST_PROXY_HOPS=0`, and once per app
+    instance at runtime if `X-Forwarded-Proto: https` arrives while
+    `TRUST_PROXY_HOPS=0`.
   - **Personal API & MCP tokens (`tbk_`)**: Hashed with SHA-256 at rest.
     `/api/mcp` always requires an explicit `Bearer tbk_` token (never cookies or
     implicit local auth) and enforces two-layer `readOnly` token restrictions.

@@ -9,6 +9,7 @@ import {
   attachRequestId,
   errorHandler,
   isApiSurface,
+  log,
   notFoundHandler,
   safeJsonReviver,
   securityHeaders,
@@ -18,7 +19,11 @@ import {
   createCostRateLimiters,
   createRateLimiter,
 } from "./platform/net/rateLimit.ts";
-import { trustProxyHops } from "./platform/net/originAndFetch.ts";
+import {
+  hasHttpsForwardedProto,
+  trustProxyHops,
+  warnIfTlsProxyUntrusted,
+} from "./platform/net/originAndFetch.ts";
 import { hostGuard, mcpCorsPreflight } from "./platform/net/hostGuard.ts";
 import { attachRequestContext } from "./platform/tenancy/scope.ts";
 import { countPasswordAccounts } from "./platform/auth/authService.ts";
@@ -78,9 +83,12 @@ const aiCostLimiters = createCostRateLimiters([
   /^\/api\/calculator\/audit$/,
 ]);
 
+let proxyWarnEpoch = 0;
+
 export function __resetAppRateLimits(): void {
   apiRateLimit.reset();
   aiCostLimiters.reset();
+  proxyWarnEpoch++;
 }
 
 export function createApp(): Express {
@@ -96,7 +104,26 @@ export function createApp(): Express {
   app.disable("x-powered-by");
   const isProduction = process.env.NODE_ENV === "production";
 
-  app.set("trust proxy", trustProxyHops());
+  const proxyHops = trustProxyHops();
+  app.set("trust proxy", proxyHops);
+  warnIfTlsProxyUntrusted(proxyHops);
+  let warnedUntrustedProxyEpoch = -1;
+  app.use((req, _res, next) => {
+    if (
+      warnedUntrustedProxyEpoch !== proxyWarnEpoch &&
+      !req.secure &&
+      proxyHops === 0 &&
+      trustProxyHops() === 0 &&
+      hasHttpsForwardedProto(req)
+    ) {
+      warnedUntrustedProxyEpoch = proxyWarnEpoch;
+      log.warn(
+        "security",
+        "Received X-Forwarded-Proto: https while TRUST_PROXY_HOPS is 0; ignoring untrusted header. Set TRUST_PROXY_HOPS=1 (or your proxy hop count) if Toolbox runs behind a trusted TLS reverse proxy so session cookies receive '; Secure' and Strict-Transport-Security.",
+      );
+    }
+    next();
+  });
   app.use(attachRequestId);
   app.use(securityHeaders);
   app.use(hostGuard);

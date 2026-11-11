@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import express from "express";
 import request from "supertest";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { createServer as createViteServer } from "vite";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp, __resetAppRateLimits } from "../app.ts";
 import {
   HEADERS_TIMEOUT_MS,
@@ -27,6 +28,7 @@ import {
   safeJsonReviver,
 } from "../platform/net/errors.ts";
 import { __resetHostGuard, isHostAllowed } from "../platform/net/hostGuard.ts";
+import { warnIfTlsProxyUntrusted } from "../platform/net/originAndFetch.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
@@ -125,6 +127,99 @@ describe("2026 Open-Source Security Hardening Suite", () => {
     expect(trustedRes.body.secure).toBe(true);
     const trustedCookie = String(trustedRes.headers["set-cookie"]?.[0] ?? "");
     expect(trustedCookie).toContain("; Secure");
+
+    // Operator guardrails: startup https:// PUBLIC_URL/PUBLIC_ORIGIN warning + one-time runtime X-Forwarded-Proto warning
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await withEnv(
+        {
+          NODE_ENV: "production",
+          PUBLIC_URL: "https://study.example.com",
+          TRUST_PROXY_HOPS: undefined,
+        },
+        () => {
+          warnSpy.mockClear();
+          createApp();
+          expect(warnSpy).toHaveBeenCalledTimes(1);
+          expect(warnSpy).toHaveBeenCalledWith(
+            "[%s] %s",
+            "security",
+            expect.stringMatching(/PUBLIC_URL uses https:\/\/.*TRUST_PROXY_HOPS is 0/),
+          );
+        },
+      );
+
+      await withEnv(
+        {
+          NODE_ENV: "production",
+          PUBLIC_URL: undefined,
+          PUBLIC_ORIGIN: "https://study.example.com",
+          TRUST_PROXY_HOPS: undefined,
+        },
+        () => {
+          warnSpy.mockClear();
+          expect(warnIfTlsProxyUntrusted()).toBe(true);
+          expect(warnSpy).toHaveBeenCalledTimes(1);
+          expect(warnSpy).toHaveBeenCalledWith(
+            "[%s] %s",
+            "security",
+            expect.stringMatching(/PUBLIC_ORIGIN uses https:\/\/.*TRUST_PROXY_HOPS is 0/),
+          );
+        },
+      );
+
+      // No startup warning when TRUST_PROXY_HOPS >= 1 or PUBLIC_URL is http://
+      await withEnv(
+        {
+          NODE_ENV: "production",
+          PUBLIC_URL: "https://study.example.com",
+          TRUST_PROXY_HOPS: "1",
+        },
+        () => {
+          warnSpy.mockClear();
+          expect(warnIfTlsProxyUntrusted()).toBe(false);
+          createApp();
+          expect(warnSpy).not.toHaveBeenCalled();
+        },
+      );
+
+      // Runtime X-Forwarded-Proto: https with TRUST_PROXY_HOPS=0 warns at most once per app instance (and resets cleanly)
+      await withEnv(
+        {
+          NODE_ENV: "production",
+          PUBLIC_URL: undefined,
+          PUBLIC_ORIGIN: undefined,
+          TRUST_PROXY_HOPS: undefined,
+        },
+        async () => {
+          warnSpy.mockClear();
+          const app = createApp();
+          expect(warnSpy).not.toHaveBeenCalled();
+
+          for (const protoHeader of ["https", "http, HTTPS", "https"]) {
+            await request(app)
+              .get("/api/health")
+              .set("X-Forwarded-Proto", protoHeader)
+              .expect(200);
+          }
+          expect(warnSpy).toHaveBeenCalledTimes(1);
+          expect(warnSpy).toHaveBeenCalledWith(
+            "[%s] %s",
+            "security",
+            expect.stringMatching(/X-Forwarded-Proto: https.*TRUST_PROXY_HOPS is 0/),
+          );
+
+          __resetAppRateLimits();
+          await request(app)
+            .get("/api/health")
+            .set("X-Forwarded-Proto", "https")
+            .expect(200);
+          expect(warnSpy).toHaveBeenCalledTimes(2);
+        },
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("3. closes case-variant DNS-rebinding Host bypasses (/API/*) and rejects malformed Host headers", async () => {
@@ -172,6 +267,27 @@ describe("2026 Open-Source Security Hardening Suite", () => {
     expect(isHostAllowed("localhost:3100")).toBe(true);
     expect(isHostAllowed("[::1]:3100")).toBe(true);
     expect(isHostAllowed("[::1]")).toBe(true);
+    expect(isHostAllowed("192.168.1.42:5173")).toBe(true);
+    expect(isHostAllowed("macbook.local:5173")).toBe(true);
+
+    // LAN mobile testing (changeOrigin: false preserves Host===Origin for LAN IP & .local mDNS)
+    for (const lanHost of ["192.168.1.42:5173", "macbook.local:5173"]) {
+      await request(app)
+        .post("/api/decks")
+        .set("Host", lanHost)
+        .set("Origin", `http://${lanHost}`)
+        .send({ name: `LAN Mobile Deck (${lanHost})` })
+        .expect(201);
+    }
+
+    // Rewriting Host to localhost:3100 (what changeOrigin: true did) breaks LAN phone writes via CROSS_SITE_REQUEST
+    const brokenProxyWrite = await request(app)
+      .post("/api/decks")
+      .set("Host", "localhost:3100")
+      .set("Origin", "http://192.168.1.42:5173")
+      .send({ name: "Rewritten Host Mismatch" })
+      .expect(403);
+    expect(brokenProxyWrite.body.error.code).toBe("CROSS_SITE_REQUEST");
   });
 
   it("4. blocks HTTP->HTTPS cross-scheme Origin downgrade and rejects wildcard/malformed CORS_ORIGIN on MCP", async () => {
@@ -408,28 +524,67 @@ describe("2026 Open-Source Security Hardening Suite", () => {
     expect(cleanRes.body.body.nested).toEqual({ constructor: "Builder", ok: true });
   });
 
-  it("6. prevents production static path traversal & dotfile leaks and keeps Vite dev/preview loopback-bound", async () => {
-    await withEnv({ NODE_ENV: "production" }, async () => {
-      const prodApp = createApp();
-      for (const attempt of [
-        "/../package.json",
-        "/%2e%2e/package.json",
-        "/assets/..%2f..%2fpackage.json",
-        "/.env",
-      ]) {
-        const res = await request(prodApp).get(attempt);
-        expect(res.text ?? "").not.toContain('"allowScripts"');
-        expect(res.text ?? "").not.toContain("TOOLBOX_SECRET_KEY");
-      }
-      const apiUpper404 = await request(prodApp).get("/API/missing").expect(404);
-      expect(apiUpper404.body.error.code).toBe("ROUTE_NOT_FOUND");
-    });
+  it("6. prevents production static path traversal & dotfile leaks and hardens Vite LAN dev proxy against DNS rebinding", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await withEnv({ NODE_ENV: "production" }, async () => {
+        const prodApp = createApp();
+        for (const attempt of [
+          "/../package.json",
+          "/%2e%2e/package.json",
+          "/assets/..%2f..%2fpackage.json",
+          "/.env",
+        ]) {
+          const res = await request(prodApp).get(attempt);
+          expect(res.text ?? "").not.toContain('"allowScripts"');
+          expect(res.text ?? "").not.toContain("TOOLBOX_SECRET_KEY");
+        }
+        const apiUpper404 = await request(prodApp).get("/API/missing").expect(404);
+        expect(apiUpper404.body.error.code).toBe("ROUTE_NOT_FOUND");
+      });
+    } finally {
+      warnSpy.mockRestore();
+    }
 
     const viteConfig = fs.readFileSync(path.join(REPO_ROOT, "vite.config.ts"), "utf8");
-    expect(viteConfig).not.toMatch(/\bhost:\s*true\b/);
-    expect(viteConfig).toContain('host: "127.0.0.1"');
+    expect(viteConfig).toContain("host: process.env.VITE_DEV_HOST || true");
+    expect(viteConfig).toContain('allowedHosts: [".local"]');
+    expect(viteConfig).toContain("changeOrigin: false");
+    expect(viteConfig).not.toContain("changeOrigin: true");
+    expect(viteConfig).toContain('host: process.env.VITE_DEV_HOST || "127.0.0.1"');
     for (const denied of [".env", "secret.key", "*.db", "**/backups/**", "**/uploads/**"]) {
       expect(viteConfig).toContain(denied);
+    }
+
+    // Live Vite 8 hostValidationMiddleware check: allows localhost, LAN IP, and .local mDNS; blocks DNS-rebinding hosts
+    const viteServer = await createViteServer({
+      configFile: path.join(REPO_ROOT, "vite.config.ts"),
+      server: { middlewareMode: true, ws: false },
+      appType: "custom",
+      logLevel: "silent",
+    });
+    try {
+      for (const allowedHost of [
+        "localhost:5173",
+        "192.168.1.42:5173",
+        "[::1]:5173",
+        "macbook.local:5173",
+      ]) {
+        await request(viteServer.middlewares)
+          .get("/")
+          .set("Host", allowedHost)
+          .set("Accept", "text/x-vite-ping")
+          .expect(204);
+      }
+
+      const rebindVite = await request(viteServer.middlewares)
+        .get("/")
+        .set("Host", "evil.rebind.example:5173")
+        .set("Accept", "text/x-vite-ping")
+        .expect(403);
+      expect(rebindVite.text).toContain("Blocked request");
+    } finally {
+      await viteServer.close();
     }
   });
 

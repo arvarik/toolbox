@@ -69,6 +69,8 @@ function cookieAttributes(
   maxAgeSeconds: number | null,
   path = "/",
 ): string {
+  // Relies on req.secure (honoring TRUST_PROXY_HOPS) rather than raw X-Forwarded-Proto;
+  // createApp() warns at startup and once at runtime if TLS proxy headers arrive with TRUST_PROXY_HOPS=0.
   const secure = req.secure ? "; Secure" : "";
   const maxAge = maxAgeSeconds !== null ? `; Max-Age=${maxAgeSeconds}` : "";
   return `HttpOnly; SameSite=Lax; Path=${path}${secure}${maxAge}`;
