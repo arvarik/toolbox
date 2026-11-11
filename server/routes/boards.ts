@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Router } from "express";
 import db from "../db.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
-import { asyncHandler, NotFoundError } from "../platform/net/errors.ts";
+import { asyncHandler, NotFoundError, ValidationError } from "../platform/net/errors.ts";
 import { resolveActiveKit, resolveKitById } from "../kits/kitContext.ts";
 import { runStructured } from "../ai/engine.ts";
 import {
@@ -25,6 +25,10 @@ interface BoardRow {
   updated_at: string;
 }
 
+const MAX_BOARD_NAME_LEN = 200;
+const MAX_BOARD_DATA_CHARS = 2_000_000;
+const MAX_REORDER_IDS = 500;
+
 function getOwnedBoard(scope: Scope, id: string): BoardRow | undefined {
   return db
     .prepare("SELECT * FROM boards WHERE ownerId = ? AND id = ?")
@@ -32,10 +36,32 @@ function getOwnedBoard(scope: Scope, id: string): BoardRow | undefined {
 }
 
 function serializeBoard(board: BoardRow) {
+  let parsedData: unknown = {};
+  try {
+    parsedData = JSON.parse(board.data || "{}");
+    if (!parsedData || typeof parsedData !== "object" || Array.isArray(parsedData)) {
+      parsedData = {};
+    }
+  } catch {
+    parsedData = {};
+  }
   return {
     ...board,
-    data: JSON.parse(board.data || "{}"),
+    data: parsedData,
   };
+}
+
+function serializeValidatedBoardData(raw: unknown): string {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ValidationError("Board data must be a JSON object");
+  }
+  const serialized = JSON.stringify(raw);
+  if (serialized.length > MAX_BOARD_DATA_CHARS) {
+    throw new ValidationError(
+      `Board data exceeds maximum size of ${MAX_BOARD_DATA_CHARS} characters`,
+    );
+  }
+  return serialized;
 }
 
 router.get("/", (req, res) => {
@@ -61,32 +87,55 @@ router.get("/:id", (req, res) => {
 router.post("/", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { name, data } = req.body as { name?: string; data?: unknown };
+  const { name, data } = (req.body ?? {}) as { name?: unknown; data?: unknown };
+  if (name !== undefined && typeof name !== "string") {
+    throw new ValidationError("Board name must be a string");
+  }
+  const cleanName = typeof name === "string" && name.trim() ? name.trim() : "Untitled Board";
+  if (cleanName.length > MAX_BOARD_NAME_LEN) {
+    throw new ValidationError(`Board name cannot exceed ${MAX_BOARD_NAME_LEN} characters`);
+  }
+  const serializedData =
+    data !== undefined ? serializeValidatedBoardData(data) : "{}";
+
   const id = randomUUID();
+  db.transaction(() => {
+    const maxPos = db
+      .prepare(
+        "SELECT COALESCE(MAX(position), -1) as maxPos FROM boards WHERE ownerId = ? AND kit_id = ?",
+      )
+      .get(scope.ownerId, kit.id) as { maxPos: number } | undefined;
 
-  const maxPos = db
-    .prepare(
-      "SELECT COALESCE(MAX(position), -1) as maxPos FROM boards WHERE ownerId = ? AND kit_id = ?",
-    )
-    .get(scope.ownerId, kit.id) as { maxPos: number } | undefined;
-
-  db.prepare(
-    "INSERT INTO boards (id, ownerId, kit_id, name, data, position) VALUES (?, ?, ?, ?, ?, ?)",
-  ).run(
-    id,
-    scope.ownerId,
-    kit.id,
-    name || "Untitled Board",
-    JSON.stringify(data || {}),
-    (maxPos?.maxPos ?? -1) + 1,
-  );
+    db.prepare(
+      "INSERT INTO boards (id, ownerId, kit_id, name, data, position) VALUES (?, ?, ?, ?, ?, ?)",
+    ).run(
+      id,
+      scope.ownerId,
+      kit.id,
+      cleanName,
+      serializedData,
+      (maxPos?.maxPos ?? -1) + 1,
+    );
+  })();
 
   res.status(201).json(serializeBoard(getOwnedBoard(scope, id)!));
 });
 
 router.put("/:id", (req, res) => {
   const scope = scopeOf(req);
-  const { name, data } = req.body as { name?: string; data?: unknown };
+  const { name, data } = (req.body ?? {}) as { name?: unknown; data?: unknown };
+  let nextName: string | null = null;
+  if (name !== undefined) {
+    if (typeof name !== "string" || !name.trim()) {
+      throw new ValidationError("Board name cannot be empty");
+    }
+    if (name.trim().length > MAX_BOARD_NAME_LEN) {
+      throw new ValidationError(`Board name cannot exceed ${MAX_BOARD_NAME_LEN} characters`);
+    }
+    nextName = name.trim();
+  }
+  const nextData = data !== undefined ? serializeValidatedBoardData(data) : null;
+
   if (!getOwnedBoard(scope, req.params.id)) {
     res.status(404).json({ message: "Board not found" });
     return;
@@ -99,8 +148,8 @@ router.put("/:id", (req, res) => {
        updated_at = datetime('now')
      WHERE ownerId = ? AND id = ?`,
   ).run(
-    name ?? null,
-    data !== undefined ? JSON.stringify(data) : null,
+    nextName,
+    nextData,
     scope.ownerId,
     req.params.id,
   );
@@ -111,20 +160,28 @@ router.put("/:id", (req, res) => {
 router.patch("/reorder", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { ids } = req.body as { ids?: unknown };
+  const { ids } = (req.body ?? {}) as { ids?: unknown };
   if (!Array.isArray(ids)) {
-    res.status(400).json({ message: "ids must be an array" });
-    return;
+    throw new ValidationError("ids must be an array");
   }
+  if (ids.length > MAX_REORDER_IDS) {
+    throw new ValidationError(`Cannot reorder more than ${MAX_REORDER_IDS} boards at once`);
+  }
+  const orderedIds = ids.map((item) => {
+    if (typeof item !== "string" || !item.trim() || item.length > 120) {
+      throw new ValidationError("Each board id must be a non-empty string");
+    }
+    return item.trim();
+  });
 
   const updateStmt = db.prepare(
     "UPDATE boards SET position = ? WHERE ownerId = ? AND kit_id = ? AND id = ?",
   );
-  db.transaction((orderedIds: string[]) => {
-    orderedIds.forEach((id, index) => {
+  db.transaction((cleanIds: string[]) => {
+    cleanIds.forEach((id, index) => {
       updateStmt.run(index, scope.ownerId, kit.id, id);
     });
-  })(ids.map(String));
+  })(orderedIds);
 
   const boards = db
     .prepare(
@@ -136,10 +193,12 @@ router.patch("/reorder", (req, res) => {
 
 router.patch("/:id/rename", (req, res) => {
   const scope = scopeOf(req);
-  const { name } = req.body as { name?: string };
-  if (!name || !name.trim()) {
-    res.status(400).json({ message: "Name is required" });
-    return;
+  const { name } = (req.body ?? {}) as { name?: unknown };
+  if (typeof name !== "string" || !name.trim()) {
+    throw new ValidationError("Name is required");
+  }
+  if (name.trim().length > MAX_BOARD_NAME_LEN) {
+    throw new ValidationError(`Board name cannot exceed ${MAX_BOARD_NAME_LEN} characters`);
   }
   if (!getOwnedBoard(scope, req.params.id)) {
     res.status(404).json({ message: "Board not found" });

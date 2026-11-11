@@ -71,6 +71,47 @@ function clamp(min: number, max: number, value: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+export function parseUtcTimestampMs(raw: string | null | undefined): number {
+  if (!raw || typeof raw !== "string") return NaN;
+  const trimmed = raw.trim();
+  if (!trimmed) return NaN;
+  if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(trimmed)) {
+    return Date.parse(`${trimmed.replace(" ", "T")}Z`);
+  }
+  return Date.parse(trimmed);
+}
+
+function toFiniteOrUndefined(val: unknown): number | undefined {
+  if (typeof val === "number") return Number.isFinite(val) ? val : undefined;
+  if (typeof val === "string" && val.trim() !== "") {
+    const n = Number(val.trim());
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+function sanitizeFiniteInt(
+  val: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const n = toFiniteOrUndefined(val);
+  if (n === undefined) return fallback;
+  return clamp(min, max, Math.trunc(n));
+}
+
+function sanitizeFiniteFloat(
+  val: unknown,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  const n = toFiniteOrUndefined(val);
+  if (n === undefined) return fallback;
+  return clamp(min, max, n);
+}
+
 export function clampDesiredRetention(value: number | undefined | null): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0.9;
   return clamp(0.75, 0.97, value);
@@ -79,25 +120,88 @@ export function clampDesiredRetention(value: number | undefined | null): number 
 export function parseDeckSettings(
   settingsJson: string | null | undefined,
 ): DeckSettings {
-  let settings: DeckSettings = { ...DEFAULT_DECK_SETTINGS };
+  let raw: Record<string, unknown> = {};
   if (settingsJson) {
     try {
-      const parsed = JSON.parse(settingsJson) as Partial<DeckSettings>;
-      settings = { ...settings, ...parsed };
+      const parsed = JSON.parse(settingsJson) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        raw = parsed as Record<string, unknown>;
+      }
     } catch {
       // Malformed settings — fall back to defaults
     }
   }
-  settings.desired_retention = clampDesiredRetention(
-    settings.desired_retention,
-  );
-  if (!settings.steps && settings.learning_steps) {
-    settings.steps = settings.learning_steps;
-  }
-  if (!settings.lapse_steps && settings.relearning_steps) {
-    settings.lapse_steps = settings.relearning_steps;
-  }
-  return settings;
+  const stepsRaw =
+    typeof raw.steps === "string" && raw.steps.trim()
+      ? raw.steps.trim()
+      : typeof raw.learning_steps === "string" && raw.learning_steps.trim()
+        ? raw.learning_steps.trim()
+        : DEFAULT_DECK_SETTINGS.steps;
+  const lapseStepsRaw =
+    typeof raw.lapse_steps === "string" && raw.lapse_steps.trim()
+      ? raw.lapse_steps.trim()
+      : typeof raw.relearning_steps === "string" && raw.relearning_steps.trim()
+        ? raw.relearning_steps.trim()
+        : DEFAULT_DECK_SETTINGS.lapse_steps;
+
+  return {
+    ...DEFAULT_DECK_SETTINGS,
+    new_limit: sanitizeFiniteInt(
+      raw.new_limit,
+      DEFAULT_DECK_SETTINGS.new_limit,
+      0,
+      10_000,
+    ),
+    review_limit: sanitizeFiniteInt(
+      raw.review_limit,
+      DEFAULT_DECK_SETTINGS.review_limit,
+      0,
+      10_000,
+    ),
+    steps: stepsRaw,
+    lapse_steps: lapseStepsRaw,
+    learning_steps: stepsRaw,
+    relearning_steps: lapseStepsRaw,
+    easy_bonus: sanitizeFiniteFloat(
+      raw.easy_bonus,
+      DEFAULT_DECK_SETTINGS.easy_bonus,
+      1.0,
+      10.0,
+    ),
+    desired_retention: clampDesiredRetention(
+      toFiniteOrUndefined(raw.desired_retention),
+    ),
+    graduating_interval: sanitizeFiniteInt(
+      raw.graduating_interval,
+      DEFAULT_DECK_SETTINGS.graduating_interval!,
+      1,
+      365,
+    ),
+    easy_interval: sanitizeFiniteInt(
+      raw.easy_interval,
+      DEFAULT_DECK_SETTINGS.easy_interval!,
+      1,
+      365,
+    ),
+    starting_ease: sanitizeFiniteFloat(
+      raw.starting_ease,
+      DEFAULT_DECK_SETTINGS.starting_ease!,
+      1.3,
+      5.0,
+    ),
+    interval_modifier: sanitizeFiniteFloat(
+      raw.interval_modifier,
+      DEFAULT_DECK_SETTINGS.interval_modifier!,
+      0.1,
+      10.0,
+    ),
+    hard_interval: sanitizeFiniteFloat(
+      raw.hard_interval,
+      DEFAULT_DECK_SETTINGS.hard_interval!,
+      1.0,
+      10.0,
+    ),
+  };
 }
 
 export function retrievability(
@@ -229,6 +333,7 @@ export function qualityToFsrsGrade(
   quality: number,
   confidence?: string | null,
 ): FsrsGrade {
+  if (!Number.isFinite(quality)) return 1;
   // "low" is what the web app and the MCP tool send for a guess.
   const guessed = confidence === "guessed" || confidence === "low";
   const effective = guessed && quality > 3 ? 3 : quality;
@@ -239,7 +344,7 @@ export function qualityToFsrsGrade(
 }
 
 function parseStepsMinutes(raw: string | undefined, fallback: number[]): number[] {
-  if (!raw || !raw.trim()) return fallback;
+  if (typeof raw !== "string" || !raw.trim()) return fallback;
   const parsed = raw
     .trim()
     .split(/\s+/)
@@ -260,13 +365,13 @@ function deriveReviewElapsedDays(
   nowMs: number,
 ): number {
   if (card.last_reviewed) {
-    const lastMs = Date.parse(card.last_reviewed);
+    const lastMs = parseUtcTimestampMs(card.last_reviewed);
     if (Number.isFinite(lastMs)) {
       return Math.max(0, (nowMs - lastMs) / DAY_MS);
     }
   }
   if (card.next_review) {
-    const nextMs = Date.parse(card.next_review);
+    const nextMs = parseUtcTimestampMs(card.next_review);
     if (Number.isFinite(nextMs)) {
       const daysUntilDue = (nextMs - nowMs) / DAY_MS;
       return Math.max(0.5, (card.interval || fallbackStability) - daysUntilDue);
@@ -289,8 +394,10 @@ export function calculateNextSrsState(
 
   const desiredRetention = clampDesiredRetention(settings?.desired_retention);
   const intervalModifier =
-    settings?.interval_modifier && settings.interval_modifier > 0
-      ? settings.interval_modifier
+    typeof settings?.interval_modifier === "number" &&
+    Number.isFinite(settings.interval_modifier) &&
+    settings.interval_modifier > 0
+      ? clamp(0.1, 10.0, settings.interval_modifier)
       : 1.0;
 
   const stepsMins = parseStepsMinutes(
@@ -547,10 +654,9 @@ export function getCardPreviews(
 }
 
 export function formatRelativeTime(dateStr: string | null | undefined): string {
-  if (!dateStr) return "Never studied";
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
+  const dateMs = parseUtcTimestampMs(dateStr);
+  if (!Number.isFinite(dateMs)) return "Never studied";
+  const diffMs = Date.now() - dateMs;
   const diffDays = Math.floor(diffMs / DAY_MS);
   if (diffDays <= 0) return "Today";
   if (diffDays === 1) return "Yesterday";

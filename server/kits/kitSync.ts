@@ -145,7 +145,7 @@ export function syncKitStructure(
       .prepare(
         `SELECT pillar_id, topic_id, section_id, content, committed_at, embedding
          FROM guide_content
-         WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND content != ''`,
+         WHERE ownerId = ? AND kit_id = ? AND content IS NOT NULL AND trim(content, ' ' || char(9) || char(10) || char(13)) != ''`,
       )
       .all(scope.ownerId, existing.id) as Array<{
       pillar_id: string;
@@ -169,7 +169,7 @@ export function syncKitStructure(
          content = excluded.content,
          committed_at = excluded.committed_at,
          embedding = excluded.embedding
-       WHERE guide_content.content IS NULL OR guide_content.content = ''`,
+       WHERE guide_content.content IS NULL OR trim(guide_content.content, ' ' || char(9) || char(10) || char(13)) = ''`,
     );
 
     for (const g of guideRows) {
@@ -196,7 +196,7 @@ export function syncKitStructure(
         g.section_id,
       ) as { content: string } | undefined;
 
-      if (!dest?.content) {
+      if (!dest?.content?.trim()) {
         upsertDestStmt.run(
           scope.ownerId,
           existing.id,

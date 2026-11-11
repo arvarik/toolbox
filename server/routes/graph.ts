@@ -14,6 +14,7 @@ import { computeGraphHealth, type HealthCardRow } from "../graph/health.ts";
 import {
   getCardPreviews,
   parseDeckSettings,
+  parseUtcTimestampMs,
   type DeckSettings,
 } from "../srs/scheduler.ts";
 import logger from "../utils/logger.ts";
@@ -81,7 +82,9 @@ function loadDeckIndex(
 function isStudyableNow(card: GraphCardRow, now: Date = new Date()): boolean {
   const state = card.state || 0;
   if (state === 0) return true;
-  return !card.next_review || new Date(card.next_review) <= now;
+  if (!card.next_review) return true;
+  const nextMs = parseUtcTimestampMs(card.next_review);
+  return !Number.isFinite(nextMs) || nextMs <= now.getTime();
 }
 
 function toSessionCard(

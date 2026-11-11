@@ -6,7 +6,7 @@ import {
 } from "express";
 import db from "../db.ts";
 import { openCredential, sealCredential } from "../platform/crypto/secretBox.ts";
-import { ForbiddenError } from "../platform/net/errors.ts";
+import { ForbiddenError, ValidationError } from "../platform/net/errors.ts";
 import {
   getAvailableModels,
   getApiKeyStatus,
@@ -67,14 +67,34 @@ router.put(
   "/",
   requireAdmin("Only administrators can modify instance configuration"),
   (req, res) => {
+    const rawBody = req.body;
+    if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+      throw new ValidationError("Configuration payload must be a JSON object");
+    }
     const apiKeyFields = getApiKeyFields();
-    const body = (req.body || {}) as Record<string, unknown>;
+    const body = rawBody as Record<string, unknown>;
+    const entries = Object.entries(body);
+    if (entries.length > 100) {
+      throw new ValidationError("Too many configuration keys in single update");
+    }
     const upsert = db.prepare(UPSERT_CONFIG_SQL);
 
     const removedProviders: string[] = [];
     db.transaction(() => {
-      for (const [key, value] of Object.entries(body)) {
+      for (const [key, value] of entries) {
+        if (!key.trim() || key.length > 100) {
+          throw new ValidationError("Invalid configuration key");
+        }
+        if (value !== null && value !== undefined && typeof value === "object") {
+          throw new ValidationError(`Configuration value for "${key}" must be a primitive`);
+        }
+        if (typeof value === "number" && !Number.isFinite(value)) {
+          throw new ValidationError(`Configuration value for "${key}" must be finite`);
+        }
         const strValue = String(value ?? "");
+        if (strValue.length > 10_000) {
+          throw new ValidationError(`Configuration value for "${key}" exceeds maximum length`);
+        }
         if (apiKeyFields.includes(key)) {
           if (isMaskedValue(strValue)) continue;
           if (strValue === "") {
@@ -101,12 +121,16 @@ router.post(
   "/test-key",
   requireAdmin("Only administrators can configure instance API keys"),
   async (req, res) => {
-    const { key, provider = "gemini" } = req.body as {
-      key?: string;
-      provider?: string;
+    const { key, provider = "gemini" } = (req.body ?? {}) as {
+      key?: unknown;
+      provider?: unknown;
     };
-    if (!key) {
+    if (typeof key !== "string" || !key.trim() || key.length > 2000) {
       res.status(400).json({ message: "API key is required" });
+      return;
+    }
+    if (typeof provider !== "string" || !provider.trim() || provider.length > 64) {
+      res.status(400).json({ message: "Valid provider is required" });
       return;
     }
 

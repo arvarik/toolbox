@@ -143,9 +143,41 @@ export async function upsertRagChunksBatch(
   const cfg = getEmbeddingsConfig();
   const { dimension, embeddingGen } = ensureEmbeddingStore(db, cfg.dimension);
 
-  const selectExisting = db.prepare(
-    "SELECT content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ? AND chunk_id = ?",
-  );
+  let existingById: Map<string, { content_hash: string; embedding_gen: string | null }> | null =
+    null;
+  if (inputs.length > 1) {
+    const kitIds = new Set(inputs.map((item) => item.kitId));
+    const singleKitId = kitIds.size === 1 ? [...kitIds][0] : null;
+    const rows = (
+      singleKitId
+        ? db
+            .prepare(
+              "SELECT chunk_id, content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ? AND kit_id = ?",
+            )
+            .all(scope.ownerId, singleKitId)
+        : db
+            .prepare(
+              "SELECT chunk_id, content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ?",
+            )
+            .all(scope.ownerId)
+    ) as Array<{
+      chunk_id: string;
+      content_hash: string;
+      embedding_gen: string | null;
+    }>;
+    existingById = new Map(
+      rows.map((r) => [
+        r.chunk_id,
+        { content_hash: r.content_hash, embedding_gen: r.embedding_gen },
+      ]),
+    );
+  }
+  const selectSingleExisting =
+    inputs.length === 1
+      ? db.prepare(
+          "SELECT content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ? AND chunk_id = ?",
+        )
+      : null;
 
   const toProcess: Array<{
     chunkId: string;
@@ -167,9 +199,11 @@ export async function upsertRagChunksBatch(
     const contentHash = sha256Hex(`${title}\n${trimmedContent}`);
 
     if (!item.embedding) {
-      const prev = selectExisting.get(scope.ownerId, chunkId) as
-        | { content_hash: string; embedding_gen: string | null }
-        | undefined;
+      const prev = existingById
+        ? existingById.get(chunkId)
+        : (selectSingleExisting?.get(scope.ownerId, chunkId) as
+            | { content_hash: string; embedding_gen: string | null }
+            | undefined);
       if (
         prev &&
         prev.content_hash === contentHash &&
@@ -370,24 +404,27 @@ export function deleteRagChunksForKit(
   scope: Scope,
   kitId: string,
 ): number {
-  const existing = db
-    .prepare("SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND kit_id = ?")
-    .all(scope.ownerId, kitId) as Array<{ chunk_id: string }>;
-  const removed = deleteRagChunksByIds(
-    db,
-    scope,
-    existing.map((r) => r.chunk_id),
-  );
-  db.prepare(
-    "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND kitTok = ?",
-  ).run(ownerTokFor(scope.ownerId), kitTokFor(kitId));
-  if (readVecTableDimension(db) !== null) {
-    ensureVecExtensionLoaded(db);
+  const hasVec = readVecTableDimension(db) !== null;
+  if (hasVec) ensureVecExtensionLoaded(db);
+  return db.transaction(() => {
+    const existing = db
+      .prepare("SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND kit_id = ?")
+      .all(scope.ownerId, kitId) as Array<{ chunk_id: string }>;
+    const removed = deleteRagChunksByIds(
+      db,
+      scope,
+      existing.map((r) => r.chunk_id),
+    );
     db.prepare(
-      "DELETE FROM rag_chunks_vec WHERE ownerId = ? AND kit_id = ?",
-    ).run(scope.ownerId, kitId);
-  }
-  return removed;
+      "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND kitTok = ?",
+    ).run(ownerTokFor(scope.ownerId), kitTokFor(kitId));
+    if (hasVec) {
+      db.prepare(
+        "DELETE FROM rag_chunks_vec WHERE ownerId = ? AND kit_id = ?",
+      ).run(scope.ownerId, kitId);
+    }
+    return removed;
+  })();
 }
 
 export function deleteRagChunksForDeck(
@@ -674,10 +711,14 @@ export async function hybridSearch(
   query: string,
   options: HybridSearchOptions = {},
 ): Promise<HybridSearchHit[]> {
-  const trimmed = query.trim();
+  const trimmed = query.trim().slice(0, 1000);
   if (!trimmed) return [];
 
-  const limit = Math.max(1, Math.min(options.limit ?? 10, 50));
+  const rawLim = options.limit;
+  const limit =
+    typeof rawLim === "number" && Number.isFinite(rawLim)
+      ? Math.max(1, Math.min(Math.floor(rawLim), 50))
+      : 10;
   const candidatePool = Math.max(limit * 3, 30);
   const tokens = safeFtsTokens(trimmed);
 

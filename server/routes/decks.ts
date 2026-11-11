@@ -5,6 +5,7 @@ import {
   asyncHandler,
   getErrorMessage,
   NotFoundError,
+  ValidationError,
 } from "../platform/net/errors.ts";
 import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import { resolveActiveKit, resolveKitById } from "../kits/kitContext.ts";
@@ -19,6 +20,7 @@ import {
   getCardPreviews,
   formatRelativeTime,
   parseDeckSettings,
+  parseUtcTimestampMs,
   type DeckSettings,
   type SrsNextState,
 } from "../srs/scheduler.ts";
@@ -158,8 +160,8 @@ router.get("/", (req, res) => {
          COUNT(f.id) as card_count,
          SUM(CASE WHEN f.id IS NOT NULL AND (f.state = 0 OR f.state IS NULL) THEN 1 ELSE 0 END) as new_count,
          SUM(CASE WHEN f.state IN (1, 3) THEN 1 ELSE 0 END) as learn_count,
-         SUM(CASE WHEN f.state = 2 AND (f.next_review IS NULL OR f.next_review <= datetime('now')) THEN 1 ELSE 0 END) as due_count,
-         MAX(f.last_reviewed) as last_reviewed_raw,
+         SUM(CASE WHEN f.state = 2 AND (f.next_review IS NULL OR datetime(f.next_review) <= datetime('now')) THEN 1 ELSE 0 END) as due_count,
+         MAX(datetime(f.last_reviewed)) as last_reviewed_raw,
          SUM(CASE WHEN f.repetitions > 0 THEN 1 ELSE 0 END) as reviewed_count
        FROM decks d
        LEFT JOIN flashcards f ON f.ownerId = d.ownerId AND f.deck_id = d.id
@@ -266,6 +268,7 @@ export function collectDueReviewQueue(
        JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
        WHERE f.ownerId = ? ${resolvedKitId ? "AND d.kit_id = ?" : ""}
          AND f.last_reviewed IS NOT NULL
+         AND f.last_reviewed >= date('now', '-2 days')
          AND date(f.last_reviewed, 'localtime') = date('now', 'localtime')
        GROUP BY f.deck_id`,
     )
@@ -283,22 +286,23 @@ export function collectDueReviewQueue(
     });
   }
 
+  const nowIso = new Date().toISOString();
   const candidateCards = db
     .prepare(
       `SELECT * FROM flashcards
        WHERE ownerId = ?
          ${resolvedKitId ? "AND deck_id IN (SELECT id FROM decks WHERE ownerId = ? AND kit_id = ?)" : ""}
          AND (
-           (state IN (1, 3) AND (next_review IS NULL OR next_review <= datetime('now')))
-           OR (state = 2 AND (next_review IS NULL OR next_review <= datetime('now')))
+           (state IN (1, 3) AND (next_review IS NULL OR (next_review <= ? AND datetime(next_review) <= datetime(?))))
+           OR (state = 2 AND (next_review IS NULL OR (next_review <= ? AND datetime(next_review) <= datetime(?))))
            OR ((state = 0 OR state IS NULL) AND next_review IS NULL)
          )
          AND ${PREREQ_UNLOCKED_SQL}`,
     )
     .all(
       ...(resolvedKitId
-        ? [scope.ownerId, scope.ownerId, resolvedKitId]
-        : [scope.ownerId]),
+        ? [scope.ownerId, scope.ownerId, resolvedKitId, nowIso, nowIso, nowIso, nowIso]
+        : [scope.ownerId, nowIso, nowIso, nowIso, nowIso]),
     ) as FlashcardRow[];
 
   const cardsByDeck = Map.groupBy(candidateCards, (card) => card.deck_id);
@@ -311,8 +315,11 @@ export function collectDueReviewQueue(
   );
 
   const allDueCards: Array<FlashcardRow & Record<string, unknown>> = [];
-  const byNextReviewAsc = (a: FlashcardRow, b: FlashcardRow) =>
-    (a.next_review ?? "").localeCompare(b.next_review ?? "");
+  const byNextReviewAsc = (a: FlashcardRow, b: FlashcardRow) => {
+    const msA = parseUtcTimestampMs(a.next_review);
+    const msB = parseUtcTimestampMs(b.next_review);
+    return (Number.isFinite(msA) ? msA : 0) - (Number.isFinite(msB) ? msB : 0);
+  };
   const byPositionAsc = (a: FlashcardRow, b: FlashcardRow) =>
     (a.position ?? 0) - (b.position ?? 0) || a.id.localeCompare(b.id);
 
@@ -417,6 +424,7 @@ router.get("/stats", (req, res) => {
            THEN 1 ELSE 0 END), 0) AS masteredCount,
          COALESCE(SUM(CASE
            WHEN f.id IS NOT NULL AND f.last_reviewed IS NOT NULL
+             AND f.last_reviewed >= date('now', '-2 days')
              AND date(f.last_reviewed, 'localtime') = date('now', 'localtime')
            THEN 1 ELSE 0 END), 0) AS reviewedTodayCount
        FROM decks d
@@ -485,23 +493,28 @@ router.get("/:id", (req, res) => {
     srs_previews: getCardPreviews(c, settings),
   }));
 
+  const nowMs = Date.now();
   const newCount = cards.filter((c) => (c.state || 0) === 0).length;
   const learnCount = cards.filter((c) => c.state === 1 || c.state === 3).length;
-  const dueCount = cards.filter(
-    (c) =>
-      (c.state || 0) === 2 &&
-      (!c.next_review || new Date(c.next_review) <= new Date()),
-  ).length;
+  const dueCount = cards.filter((c) => {
+    if ((c.state || 0) !== 2) return false;
+    if (!c.next_review) return true;
+    const nextMs = parseUtcTimestampMs(c.next_review);
+    return !Number.isFinite(nextMs) || nextMs <= nowMs;
+  }).length;
 
   const reviewedCount = cards.filter((c) => c.repetitions > 0).length;
   const progress =
     cards.length > 0 ? Math.round((reviewedCount / cards.length) * 100) : 0;
-  const maxLastReviewed = cards.reduce<string | null>((max, c) => {
-    if (!c.last_reviewed) return max;
-    return !max || new Date(c.last_reviewed) > new Date(max)
-      ? c.last_reviewed
-      : max;
-  }, null);
+  let maxLastReviewed: string | null = null;
+  let maxLastReviewedMs = -Infinity;
+  for (const c of cards) {
+    const ms = parseUtcTimestampMs(c.last_reviewed);
+    if (Number.isFinite(ms) && ms > maxLastReviewedMs) {
+      maxLastReviewedMs = ms;
+      maxLastReviewed = c.last_reviewed;
+    }
+  }
 
   res.json({
     ...deck,
@@ -515,19 +528,47 @@ router.get("/:id", (req, res) => {
   });
 });
 
+function parseOptionalColorIndex(raw: unknown): number | undefined {
+  if (raw === undefined) return undefined;
+  if (
+    typeof raw !== "number" ||
+    !Number.isFinite(raw) ||
+    !Number.isInteger(raw) ||
+    raw < 0 ||
+    raw > 100
+  ) {
+    throw new ValidationError("color_index must be an integer between 0 and 100");
+  }
+  return raw;
+}
+
+function parseOptionalBoundedString(
+  raw: unknown,
+  field: string,
+  maxLen: number,
+): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || raw.length > maxLen) {
+    throw new ValidationError(`${field} must be a string up to ${maxLen} characters`);
+  }
+  return raw;
+}
+
 router.post("/", (req, res) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { name, description, color_index, tags } = req.body as {
-    name?: string;
-    description?: string;
-    color_index?: number;
-    tags?: string;
+  const { name, description, color_index, tags } = (req.body ?? {}) as {
+    name?: unknown;
+    description?: unknown;
+    color_index?: unknown;
+    tags?: unknown;
   };
-  if (!name) {
-    res.status(400).json({ message: "Name is required" });
-    return;
+  if (typeof name !== "string" || !name.trim() || name.trim().length > 200) {
+    throw new ValidationError("Valid deck name (1-200 characters) is required");
   }
+  const safeDesc = parseOptionalBoundedString(description, "description", 2000) ?? "";
+  const safeTags = parseOptionalBoundedString(tags, "tags", 500) ?? "";
+  const safeColor = parseOptionalColorIndex(color_index) ?? 0;
 
   const id = randomUUID();
   db.prepare(
@@ -536,10 +577,10 @@ router.post("/", (req, res) => {
     id,
     scope.ownerId,
     kit.id,
-    name,
-    description || "",
-    color_index || 0,
-    tags || "",
+    name.trim(),
+    safeDesc,
+    safeColor,
+    safeTags,
   );
 
   res.status(201).json(getOwnedDeck(scope, id));
@@ -547,16 +588,27 @@ router.post("/", (req, res) => {
 
 router.put("/:id", (req, res) => {
   const scope = scopeOf(req);
-  const { name, description, color_index, tags } = req.body as {
-    name?: string;
-    description?: string;
-    color_index?: number;
-    tags?: string;
+  const { name, description, color_index, tags } = (req.body ?? {}) as {
+    name?: unknown;
+    description?: unknown;
+    color_index?: unknown;
+    tags?: unknown;
   };
   if (!getOwnedDeck(scope, req.params.id)) {
     res.status(404).json({ message: "Deck not found" });
     return;
   }
+
+  let safeName: string | null = null;
+  if (name !== undefined) {
+    if (typeof name !== "string" || !name.trim() || name.trim().length > 200) {
+      throw new ValidationError("Valid deck name (1-200 characters) is required");
+    }
+    safeName = name.trim();
+  }
+  const safeDesc = parseOptionalBoundedString(description, "description", 2000) ?? null;
+  const safeTags = parseOptionalBoundedString(tags, "tags", 500) ?? null;
+  const safeColor = parseOptionalColorIndex(color_index) ?? null;
 
   db.prepare(
     `UPDATE decks SET
@@ -567,16 +619,54 @@ router.put("/:id", (req, res) => {
        updated_at = datetime('now')
      WHERE ownerId = ? AND id = ?`,
   ).run(
-    name ?? null,
-    description ?? null,
-    color_index ?? null,
-    tags ?? null,
+    safeName,
+    safeDesc,
+    safeColor,
+    safeTags,
     scope.ownerId,
     req.params.id,
   );
 
   res.json(getOwnedDeck(scope, req.params.id));
 });
+
+function parseStrictSettingNumber(
+  raw: unknown,
+  field: string,
+  opts: { integer?: boolean; min: number; max: number },
+): number {
+  if (typeof raw === "boolean" || raw === null || raw === "") {
+    throw new ValidationError(`${field} must be a finite number`);
+  }
+  const n = typeof raw === "number" ? raw : Number(String(raw).trim());
+  if (!Number.isFinite(n)) {
+    throw new ValidationError(`${field} must be a finite number`);
+  }
+  if (opts.integer && !Number.isInteger(n)) {
+    throw new ValidationError(`${field} must be an integer`);
+  }
+  if (n < opts.min || n > opts.max) {
+    throw new ValidationError(
+      `${field} must be between ${opts.min} and ${opts.max}`,
+    );
+  }
+  return n;
+}
+
+const STEP_TOKEN_RE = /^(?:[1-9]\d*(?:\.\d+)?|0\.\d+)[smhd]?$/i;
+
+function parseValidStepSpec(raw: unknown, field: string): string {
+  if (typeof raw !== "string" || !raw.trim() || raw.length > 100) {
+    throw new ValidationError(`${field} must be a non-empty string up to 100 characters`);
+  }
+  const tokens = raw.trim().split(/[\s,]+/).filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 12 || !tokens.every((t) => STEP_TOKEN_RE.test(t))) {
+    throw new ValidationError(
+      `${field} must contain 1-12 positive step durations (e.g. "1m 10m")`,
+    );
+  }
+  return tokens.join(" ");
+}
 
 router.put("/:deckId/settings", (req, res) => {
   const scope = scopeOf(req);
@@ -587,14 +677,7 @@ router.put("/:deckId/settings", (req, res) => {
     lapse_steps,
     easy_bonus,
     desired_retention,
-  } = req.body as {
-    new_limit?: number | string;
-    review_limit?: number | string;
-    steps?: string;
-    lapse_steps?: string;
-    easy_bonus?: number | string;
-    desired_retention?: number | string;
-  };
+  } = (req.body ?? {}) as Record<string, unknown>;
 
   const existing = getOwnedDeck(scope, req.params.deckId);
   if (!existing) {
@@ -602,30 +685,49 @@ router.put("/:deckId/settings", (req, res) => {
     return;
   }
 
+  const parsedSteps =
+    steps !== undefined ? parseValidStepSpec(steps, "steps") : undefined;
+  const parsedLapseSteps =
+    lapse_steps !== undefined
+      ? parseValidStepSpec(lapse_steps, "lapse_steps")
+      : undefined;
+
   const currentSettings = parseDeckSettings(existing.settings);
   const updatedSettings: DeckSettings = {
     ...currentSettings,
     new_limit:
       new_limit !== undefined
-        ? parseInt(String(new_limit), 10)
-        : currentSettings.new_limit || 20,
+        ? parseStrictSettingNumber(new_limit, "new_limit", {
+            integer: true,
+            min: 0,
+            max: 10_000,
+          })
+        : currentSettings.new_limit,
     review_limit:
       review_limit !== undefined
-        ? parseInt(String(review_limit), 10)
-        : currentSettings.review_limit || 200,
-    steps:
-      steps !== undefined ? steps.trim() : currentSettings.steps || "1m 10m",
-    lapse_steps:
-      lapse_steps !== undefined
-        ? lapse_steps.trim()
-        : currentSettings.lapse_steps || "10m",
+        ? parseStrictSettingNumber(review_limit, "review_limit", {
+            integer: true,
+            min: 0,
+            max: 10_000,
+          })
+        : currentSettings.review_limit,
+    steps: parsedSteps ?? (currentSettings.steps || "1m 10m"),
+    lapse_steps: parsedLapseSteps ?? (currentSettings.lapse_steps || "10m"),
     easy_bonus:
       easy_bonus !== undefined
-        ? parseFloat(String(easy_bonus))
-        : currentSettings.easy_bonus || 1.3,
+        ? parseStrictSettingNumber(easy_bonus, "easy_bonus", {
+            min: 1.0,
+            max: 10.0,
+          })
+        : currentSettings.easy_bonus,
     desired_retention:
       desired_retention !== undefined
-        ? clampDesiredRetention(parseFloat(String(desired_retention)))
+        ? clampDesiredRetention(
+            parseStrictSettingNumber(desired_retention, "desired_retention", {
+              min: 0.5,
+              max: 0.99,
+            }),
+          )
         : currentSettings.desired_retention,
   };
 
@@ -647,11 +749,13 @@ router.delete("/:id", (req, res) => {
     return;
   }
 
-  deleteRagChunksForDeck(db, scope, existing.kit_id, req.params.id);
-  db.prepare("DELETE FROM decks WHERE ownerId = ? AND id = ?").run(
-    scope.ownerId,
-    req.params.id,
-  );
+  db.transaction(() => {
+    deleteRagChunksForDeck(db, scope, existing.kit_id, req.params.id);
+    db.prepare("DELETE FROM decks WHERE ownerId = ? AND id = ?").run(
+      scope.ownerId,
+      req.params.id,
+    );
+  })();
   res.status(204).send();
 });
 
@@ -683,20 +787,22 @@ export function deckSessionCards(
        FROM flashcards
        WHERE ownerId = ? AND deck_id = ?
          AND last_reviewed IS NOT NULL
+         AND last_reviewed >= date('now', '-2 days')
          AND date(last_reviewed, 'localtime') = date('now', 'localtime')`,
     )
     .get(scope.ownerId, deckId) as { newToday: number; reviewsToday: number };
 
+  const nowIso = new Date().toISOString();
   const learningCards = db
     .prepare(
       `SELECT * FROM flashcards
        WHERE ownerId = ? AND deck_id = ?
          AND state IN (1, 3)
-         AND (next_review IS NULL OR next_review <= datetime('now'))
+         AND (next_review IS NULL OR (next_review <= ? AND datetime(next_review) <= datetime(?)))
          AND ${PREREQ_UNLOCKED_SQL}
-       ORDER BY next_review ASC`,
+       ORDER BY datetime(next_review) ASC`,
     )
-    .all(scope.ownerId, deckId) as FlashcardRow[];
+    .all(scope.ownerId, deckId, nowIso, nowIso) as FlashcardRow[];
 
   const remainingReviews = Math.max(
     0,
@@ -709,12 +815,12 @@ export function deckSessionCards(
             `SELECT * FROM flashcards
              WHERE ownerId = ? AND deck_id = ?
                AND state = 2
-               AND (next_review IS NULL OR next_review <= datetime('now'))
+               AND (next_review IS NULL OR (next_review <= ? AND datetime(next_review) <= datetime(?)))
                AND ${PREREQ_UNLOCKED_SQL}
-             ORDER BY next_review ASC
+             ORDER BY datetime(next_review) ASC
              LIMIT ?`,
           )
-          .all(scope.ownerId, deckId, remainingReviews) as FlashcardRow[])
+          .all(scope.ownerId, deckId, nowIso, nowIso, remainingReviews) as FlashcardRow[])
       : [];
 
   const remainingNew = Math.max(0, settings.new_limit - (todayRow.newToday || 0));
@@ -763,12 +869,14 @@ router.post("/:deckId/cards/check-duplicates", (req, res) => {
     res.status(404).json({ message: "Deck not found" });
     return;
   }
-  const { cards } = req.body as {
-    cards?: Array<{ front: string; back: string } & Record<string, unknown>>;
+  const { cards } = (req.body ?? {}) as {
+    cards?: unknown;
   };
   if (!cards || !Array.isArray(cards)) {
-    res.status(400).json({ message: "cards array is required" });
-    return;
+    throw new ValidationError("cards array is required");
+  }
+  if (cards.length > 500) {
+    throw new ValidationError("cards array must contain at most 500 items");
   }
 
   const existingCards = db
@@ -809,11 +917,17 @@ router.post("/:deckId/cards/check-duplicates", (req, res) => {
     combinedTri: trigrams(`${c.front} ${c.back}`),
   }));
 
-  const results = cards.map((incoming) => {
-    const incomingFrontTri = trigrams(incoming.front || "");
-    const incomingCombinedTri = trigrams(
-      `${incoming.front || ""} ${incoming.back || ""}`,
-    );
+  const results = cards.map((rawIncoming) => {
+    const incoming =
+      rawIncoming && typeof rawIncoming === "object" && !Array.isArray(rawIncoming)
+        ? (rawIncoming as Record<string, unknown>)
+        : {};
+    const frontStr =
+      typeof incoming.front === "string" ? incoming.front.slice(0, 10_000) : "";
+    const backStr =
+      typeof incoming.back === "string" ? incoming.back.slice(0, 10_000) : "";
+    const incomingFrontTri = trigrams(frontStr);
+    const incomingCombinedTri = trigrams(`${frontStr} ${backStr}`);
 
     let bestMatch: { front: string; back: string } | null = null;
     let bestSimilarity = 0;
@@ -886,53 +1000,62 @@ router.post(
       reverse_of_id,
     } = req.body as Record<string, unknown>;
 
-    if (!front || !back) {
-      res.status(400).json({ message: "Front and back are required" });
-      return;
+    if (
+      typeof front !== "string" ||
+      !front.trim() ||
+      front.length > 20_000 ||
+      typeof back !== "string" ||
+      !back.trim() ||
+      back.length > 40_000
+    ) {
+      throw new ValidationError("Valid non-empty front and back strings are required");
     }
 
     const id = randomUUID();
-    const maxPos = db
-      .prepare(
-        "SELECT MAX(position) as max FROM flashcards WHERE ownerId = ? AND deck_id = ?",
-      )
-      .get(scope.ownerId, deckId) as { max: number | null } | undefined;
+    const nodeId = typeof node_id === "string" && node_id.trim() ? node_id.trim().slice(0, 200) : null;
+    const frontText = front.trim();
+    const backText = back.trim();
 
-    const validPrereq = resolveValidPrereqId(
-      scope,
-      deck.kit_id,
-      prerequisite_id,
-      id,
-    );
-    const nodeId = (node_id as string | undefined) || null;
-    const frontText = String(front);
-    const backText = String(back);
+    db.transaction(() => {
+      const maxPos = db
+        .prepare(
+          "SELECT MAX(position) as max FROM flashcards WHERE ownerId = ? AND deck_id = ?",
+        )
+        .get(scope.ownerId, deckId) as { max: number | null } | undefined;
 
-    db.prepare(
-      `INSERT INTO flashcards (
-         id, ownerId, deck_id, node_id, front, back, position,
-         prerequisite_id, source_pillar_id, source_topic_id, source_section_id,
-         is_reverse, reverse_of_id
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      id,
-      scope.ownerId,
-      deckId,
-      nodeId,
-      frontText,
-      backText,
-      (maxPos?.max || 0) + 1,
-      validPrereq,
-      (source_pillar_id as string | undefined) || null,
-      (source_topic_id as string | undefined) || null,
-      (source_section_id as string | undefined) || null,
-      is_reverse ? 1 : 0,
-      (reverse_of_id as string | undefined) || null,
-    );
+      const validPrereq = resolveValidPrereqId(
+        scope,
+        deck.kit_id,
+        prerequisite_id,
+        id,
+      );
 
-    db.prepare(
-      "UPDATE decks SET updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
-    ).run(scope.ownerId, deckId);
+      db.prepare(
+        `INSERT INTO flashcards (
+           id, ownerId, deck_id, node_id, front, back, position,
+           prerequisite_id, source_pillar_id, source_topic_id, source_section_id,
+           is_reverse, reverse_of_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        id,
+        scope.ownerId,
+        deckId,
+        nodeId,
+        frontText,
+        backText,
+        (maxPos?.max ?? -1) + 1,
+        validPrereq,
+        typeof source_pillar_id === "string" && source_pillar_id.trim() ? source_pillar_id.trim().slice(0, 200) : null,
+        typeof source_topic_id === "string" && source_topic_id.trim() ? source_topic_id.trim().slice(0, 200) : null,
+        typeof source_section_id === "string" && source_section_id.trim() ? source_section_id.trim().slice(0, 200) : null,
+        is_reverse ? 1 : 0,
+        typeof reverse_of_id === "string" && reverse_of_id.trim() ? reverse_of_id.trim().slice(0, 200) : null,
+      );
+
+      db.prepare(
+        "UPDATE decks SET updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
+      ).run(scope.ownerId, deckId);
+    })();
 
     await upsertRagChunk(db, scope, {
       kitId: deck.kit_id,
@@ -959,12 +1082,40 @@ router.put(
       return;
     }
 
-    const { front, back, position, prerequisite_id } = req.body as {
-      front?: string;
-      back?: string;
-      position?: number;
-      prerequisite_id?: string | null;
+    const { front, back, position, prerequisite_id } = (req.body ?? {}) as {
+      front?: unknown;
+      back?: unknown;
+      position?: unknown;
+      prerequisite_id?: unknown;
     };
+
+    let safeFront: string | null = null;
+    if (front !== undefined) {
+      if (typeof front !== "string" || !front.trim() || front.length > 20_000) {
+        throw new ValidationError("front must be a non-empty string up to 20000 characters");
+      }
+      safeFront = front.trim();
+    }
+    let safeBack: string | null = null;
+    if (back !== undefined) {
+      if (typeof back !== "string" || !back.trim() || back.length > 40_000) {
+        throw new ValidationError("back must be a non-empty string up to 40000 characters");
+      }
+      safeBack = back.trim();
+    }
+    let safePos: number | null = null;
+    if (position !== undefined) {
+      if (
+        typeof position !== "number" ||
+        !Number.isFinite(position) ||
+        !Number.isInteger(position) ||
+        position < 0 ||
+        position > 1_000_000
+      ) {
+        throw new ValidationError("position must be a non-negative integer");
+      }
+      safePos = position;
+    }
 
     const current = db
       .prepare(
@@ -978,28 +1129,34 @@ router.put(
       return;
     }
 
-    const newPrereq =
-      prerequisite_id !== undefined
-        ? resolveValidPrereqId(scope, deck.kit_id, prerequisite_id, cardId)
-        : current.prerequisite_id;
+    db.transaction(() => {
+      const newPrereq =
+        prerequisite_id !== undefined
+          ? resolveValidPrereqId(scope, deck.kit_id, prerequisite_id, cardId)
+          : current.prerequisite_id;
 
-    db.prepare(
-      `UPDATE flashcards SET
-         front = COALESCE(?, front),
-         back = COALESCE(?, back),
-         position = COALESCE(?, position),
-         prerequisite_id = ?,
-         updated_at = datetime('now')
-       WHERE ownerId = ? AND id = ? AND deck_id = ?`,
-    ).run(
-      front ?? null,
-      back ?? null,
-      position ?? null,
-      newPrereq,
-      scope.ownerId,
-      cardId,
-      deckId,
-    );
+      db.prepare(
+        `UPDATE flashcards SET
+           front = COALESCE(?, front),
+           back = COALESCE(?, back),
+           position = COALESCE(?, position),
+           prerequisite_id = ?,
+           updated_at = datetime('now')
+         WHERE ownerId = ? AND id = ? AND deck_id = ?`,
+      ).run(
+        safeFront,
+        safeBack,
+        safePos,
+        newPrereq,
+        scope.ownerId,
+        cardId,
+        deckId,
+      );
+
+      db.prepare(
+        "UPDATE decks SET updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
+      ).run(scope.ownerId, deckId);
+    })();
 
     const card = getOwnedCard(scope, cardId)!;
 
@@ -1018,55 +1175,71 @@ router.put(
 
 /** Saves a review's SRS state, counts it in study_sessions, and resolves the card's open remediation rows. */
 export function saveReview(scope: Scope, cardId: string, updated: SrsNextState): void {
-  db.prepare(
-    `UPDATE flashcards SET
-       ease_factor = ?,
-       interval = ?,
-       repetitions = ?,
-       next_review = ?,
-       last_reviewed = ?,
-       state = ?,
-       learning_step = ?,
-       stability = ?,
-       difficulty = ?,
-       lapses = ?,
-       updated_at = datetime('now')
-     WHERE ownerId = ? AND id = ?`,
-  ).run(
-    updated.ease_factor,
-    updated.interval,
-    updated.repetitions,
-    updated.next_review,
-    updated.last_reviewed,
-    updated.state,
-    updated.learning_step,
-    updated.stability,
-    updated.difficulty,
-    updated.lapses,
-    scope.ownerId,
-    cardId,
-  );
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE flashcards SET
+         ease_factor = ?,
+         interval = ?,
+         repetitions = ?,
+         next_review = ?,
+         last_reviewed = ?,
+         state = ?,
+         learning_step = ?,
+         stability = ?,
+         difficulty = ?,
+         lapses = ?,
+         updated_at = datetime('now')
+       WHERE ownerId = ? AND id = ?`,
+    ).run(
+      updated.ease_factor,
+      updated.interval,
+      updated.repetitions,
+      updated.next_review,
+      updated.last_reviewed,
+      updated.state,
+      updated.learning_step,
+      updated.stability,
+      updated.difficulty,
+      updated.lapses,
+      scope.ownerId,
+      cardId,
+    );
 
-  db.prepare(
-    `INSERT INTO study_sessions (ownerId, date, count)
-     VALUES (?, date('now', 'localtime'), 1)
-     ON CONFLICT(ownerId, date) DO UPDATE SET count = count + 1`,
-  ).run(scope.ownerId);
+    db.prepare(
+      `INSERT INTO study_sessions (ownerId, date, count)
+       VALUES (?, date('now', 'localtime'), 1)
+       ON CONFLICT(ownerId, date) DO UPDATE SET count = count + 1`,
+    ).run(scope.ownerId);
 
-  db.prepare(
-    `UPDATE remediation_queue SET resolved_at = datetime('now')
-     WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL`,
-  ).run(scope.ownerId, cardId);
+    db.prepare(
+      `UPDATE remediation_queue SET resolved_at = datetime('now')
+       WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL`,
+    ).run(scope.ownerId, cardId);
+  })();
 }
 
 function handleReview(req: Request, res: Response): void {
   const scope = scopeOf(req);
-  const { quality, confidence } = req.body as {
-    quality?: number;
-    confidence?: string;
+  const { quality, confidence } = (req.body ?? {}) as {
+    quality?: unknown;
+    confidence?: unknown;
   };
-  if (quality === undefined || quality < 0 || quality > 5) {
+  if (
+    typeof quality !== "number" ||
+    !Number.isFinite(quality) ||
+    !Number.isInteger(quality) ||
+    quality < 0 ||
+    quality > 5
+  ) {
     res.status(400).json({ message: "Quality must be 0-5" });
+    return;
+  }
+  if (
+    confidence !== undefined &&
+    confidence !== null &&
+    (typeof confidence !== "string" || confidence.length > 32)
+  ) {
+    res.status(400).json({ message: "Invalid confidence value" });
     return;
   }
 
@@ -1093,7 +1266,12 @@ function handleReview(req: Request, res: Response): void {
   }
 
   const settings = parseDeckSettings(deck.settings);
-  const updated = calculateNextSrsState(card, quality, settings, confidence);
+  const updated = calculateNextSrsState(
+    card,
+    quality,
+    settings,
+    typeof confidence === "string" ? confidence : null,
+  );
   saveReview(scope, card.id, updated);
 
   let implicitCreditCount = 0;
@@ -1140,15 +1318,17 @@ router.delete("/:deckId/cards/:cardId", (req, res) => {
     res.status(404).json({ message: "Deck not found" });
     return;
   }
-  const info = db
-    .prepare("DELETE FROM flashcards WHERE ownerId = ? AND id = ? AND deck_id = ?")
-    .run(scope.ownerId, req.params.cardId, req.params.deckId);
-  if (info.changes > 0) {
-    deleteRagChunksBySource(db, scope, deck.kit_id, "flashcard", req.params.cardId);
-    db.prepare(
-      "UPDATE decks SET updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
-    ).run(scope.ownerId, req.params.deckId);
-  }
+  db.transaction(() => {
+    const info = db
+      .prepare("DELETE FROM flashcards WHERE ownerId = ? AND id = ? AND deck_id = ?")
+      .run(scope.ownerId, req.params.cardId, req.params.deckId);
+    if (info.changes > 0) {
+      deleteRagChunksBySource(db, scope, deck.kit_id, "flashcard", req.params.cardId);
+      db.prepare(
+        "UPDATE decks SET updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
+      ).run(scope.ownerId, req.params.deckId);
+    }
+  })();
   res.status(204).send();
 });
 
