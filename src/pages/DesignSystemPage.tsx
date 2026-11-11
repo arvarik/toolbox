@@ -327,15 +327,17 @@ export default function DesignSystemPage() {
 
                     <div className="mt-4">
                       <HighlightableProse
-                        paragraphs={samplePage.paragraphs}
+                        contentKey={samplePage.id}
                         highlights={highlights.filter((h) => h.pageId === samplePage.id)}
-                        onAddHighlight={(quote, color: HighlightColor) => {
+                        onAddHighlight={(quote, color: HighlightColor, prefix, suffix) => {
                           setHighlights((prev) => [
                             ...prev,
                             {
                               id: `hl-${Date.now()}`,
                               pageId: samplePage.id,
                               quote,
+                              prefix,
+                              suffix,
                               color,
                               note: '',
                             },
@@ -350,7 +352,13 @@ export default function DesignSystemPage() {
                           setQuoted(q)
                           pushToast('Docked quote into composer')
                         }}
-                      />
+                      >
+                        <div className="space-y-4">
+                          {samplePage.paragraphs.map((p, idx) => (
+                            <p key={idx}>{p}</p>
+                          ))}
+                        </div>
+                      </HighlightableProse>
                     </div>
                   </NotebookSheet>
                 </div>

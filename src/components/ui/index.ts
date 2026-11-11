@@ -1,3 +1,5 @@
 export * from './KitLogo'
 export * from './DomainGlyph'
-export * from './Primitives'
+export * from './Controls'
+export * from './NotebookPrimitives'
+export * from './StudyPrimitives'

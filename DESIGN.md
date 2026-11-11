@@ -76,9 +76,9 @@ Kit (canonical vector master in `scripts/brand/kit.ts` and `docs/brand/`) is the
 
 ## 5. Physical Notebook Mechanics
 
- persisted per user and Kit in SQLite (`guide_dogears`, `guide_highlights`, `kits.last_guide_ref`) and portable inside `.toolbox-backup.zip` archives:
+Persisted per user and Kit in SQLite (`guide_dogears`, `guide_highlights`, `kits.last_guide_ref`) and portable inside `.toolbox-backup.zip` archives:
 
-1. **`.notebook-sheet` (`<NotebookSheet />`)**: Warm card ground, `1px` hairline border, and subtle sheet shadow. Reserved exclusively for Guide topic pages and Flashcards.
+1. **`.notebook-sheet` (`<NotebookSheet />`)**: Warm card ground, `1px` hairline border, and subtle sheet shadow. Reserved strictly for active reading and recall sheets (Guide pages, Notebook Inspector previews, Flashcards, and Feynman recall prompts — never navigation chrome, modals, or dashboards).
 2. **Folded Corner Dogears (`<DogearCorner />`)**: Top-right corner peels slightly on hover and folds with a crisp `<180ms` spring on click (`POST /api/guide-content/dogears/toggle`), powering a 1-click **Dogeared** filter in the Guide spine.
 3. **3-Ink Highlighter (`<HighlightableProse />`)**: Selecting any phrase in a Guide section opens a compact floating **`Highlight (Amber · Sage · Coral) · Make Card · Ask Kit`** bar. Saved highlights render with organic analog marker edges (`.hl-mark`) without dimming surrounding text.
 4. **Automatic Reading Resume**: Opening a Guide topic records `last_guide_ref` (`PUT /api/guide-content/resume`), surfacing a 1-click resume link on **My Study Library** and the workspace spine.
@@ -118,7 +118,10 @@ Always reuse primitives from `src/components/ui` before writing custom controls:
 
 - [`KitLogo.tsx`](src/components/ui/KitLogo.tsx): `KitLogo`, `KitAvatar`
 - [`DomainGlyph.tsx`](src/components/ui/DomainGlyph.tsx): `DomainGlyph`, `resolveKitGlyph`
-- [`Primitives.tsx`](src/components/ui/Primitives.tsx): `Button`, `Kbd`, `HelpHint`, `SegmentedControl`, `SelectPopover`, `ScrubberSlider`, `FluidAccordion`, `StageTransition`, `RetrievabilityRing`, `ForgettingCurve`, `DogearCorner`, `NotebookSheet`, `HighlightableProse`, `NoteUpdateCard`, `AnkiCardStack`, `InvitingComposer`, `VoiceWaveform`, `ToastStack`
+- [`Controls.tsx`](src/components/ui/Controls.tsx): `Button`, `Kbd`, `HelpHint`, `SegmentedControl`, `SelectPopover`, `FluidAccordion`, `StageTransition`, `ToastStack`
+- [`NotebookPrimitives.tsx`](src/components/ui/NotebookPrimitives.tsx): `DogearCorner`, `NotebookSheet`, `HighlightableProse`, `NoteUpdateCard`, `InvitingComposer`, `VoiceWaveform`
+- [`StudyPrimitives.tsx`](src/components/ui/StudyPrimitives.tsx): `ScrubberSlider`, `RetrievabilityRing`, `ForgettingCurve`, `AnkiGradeBar`, `AnkiCardStack`
+- [`Primitives.tsx`](src/components/ui/Primitives.tsx) / [`index.ts`](src/components/ui/index.ts): Barrel re-exports
 - [`DesignSystemPage.tsx`](src/pages/DesignSystemPage.tsx): Interactive `/design-system` showcase
 
 ---

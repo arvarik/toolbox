@@ -15,7 +15,6 @@
   --color-bg-active: #36332d;
 
   /* Surface / Card */
-  --color-surface-hover: #2f2c27;
   --color-surface-border: rgba(235, 231, 224, 0.085);
   --color-surface-border-hover: rgba(235, 231, 224, 0.16);
 
@@ -36,6 +35,7 @@
   --color-info-subtle: rgba(125, 180, 216, 0.12);
 
   /* Text — Soft Parchment Ink */
+  --color-text: #ebe7e0;
   --color-text-primary: #ebe7e0;
   --color-text-secondary: #b5afa4;
   --color-text-tertiary: #a39d92;
@@ -44,13 +44,10 @@
   /* Borders */
   --color-border: rgba(235, 231, 224, 0.085);
   --color-border-strong: rgba(235, 231, 224, 0.16);
+  --color-border-hover: var(--color-border-strong);
   --color-border-accent: rgba(240, 164, 41, 0.34);
 
-  /* Typography */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
-  --font-serif: 'Iowan Old Style', 'Palatino Linotype', 'Book Antiqua', Charter, Georgia, serif;
-
+  /* Typography scale (--font-sans/--font-mono/--font-serif defined in theme.css) */
   --text-xs: 0.6875rem;    /* 11px */
   --text-sm: 0.8125rem;    /* 13px */
   --text-base: 0.875rem;   /* 14px */
@@ -80,12 +77,7 @@
   --space-12: 3rem;        /* 48px */
   --space-16: 4rem;        /* 64px */
 
-  /* Radii */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
-  --radius-2xl: 20px;
+  /* Radii (--radius-sm..3xl defined in theme.css) */
   --radius-full: 9999px;
 
   /* Shadows */
@@ -128,7 +120,6 @@
   --color-bg-hover: #e4ded1;
   --color-bg-active: #dad3c4;
 
-  --color-surface-hover: #efeae0;
   --color-surface-border: rgba(30, 28, 25, 0.09);
   --color-surface-border-hover: rgba(30, 28, 25, 0.17);
 
@@ -145,6 +136,7 @@
   --color-error-subtle: rgba(168, 36, 25, 0.09);
   --color-info-subtle: rgba(24, 88, 122, 0.09);
 
+  --color-text: #1e1c19;
   --color-text-primary: #1e1c19;
   --color-text-secondary: #4f4a42;
   --color-text-tertiary: #59534a;
@@ -152,6 +144,7 @@
 
   --color-border: rgba(30, 28, 25, 0.09);
   --color-border-strong: rgba(30, 28, 25, 0.17);
+  --color-border-hover: var(--color-border-strong);
   --color-border-accent: rgba(148, 73, 5, 0.28);
 
   --shadow-sm: 0 1px 2px rgba(30, 28, 25, 0.06);
@@ -1233,9 +1226,10 @@ textarea.input {
 
 .flashcard-inner {
   position: relative;
+  display: grid;
   width: 100%;
   min-height: 320px;
-  transition: transform 0.6s var(--ease-default);
+  transition: transform 0.5s var(--ease-default);
   transform-style: preserve-3d;
 }
 
@@ -1244,8 +1238,10 @@ textarea.input {
 }
 
 .flashcard-face {
-  position: absolute;
-  inset: 0;
+  grid-area: 1 / 1;
+  position: relative;
+  min-height: 320px;
+  min-width: 0;
   backface-visibility: hidden;
   border-radius: var(--radius-xl);
   padding: var(--space-8);
@@ -1254,6 +1250,18 @@ textarea.input {
   align-items: center;
   justify-content: center;
   text-align: center;
+}
+
+.flashcard:not(.flipped) .flashcard-back,
+.flashcard.flipped .flashcard-front {
+  height: 0;
+  min-height: 0 !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  border-width: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .flashcard-front {

@@ -429,3 +429,26 @@
   animation: kit-eye-blink 3.6s ease-in-out infinite;
   transform-origin: 85.5px 43px;
 }
+
+.animate-wave-bar {
+  animation: wave-bar 760ms ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse-soft,
+  .animate-stage-enter,
+  .animate-popover-enter,
+  .animate-sheet-next,
+  .animate-sheet-prev,
+  .animate-card-flip,
+  .animate-kit-thinking,
+  .animate-kit-blink,
+  .animate-wave-bar {
+    animation: none !important;
+  }
+
+  .accordion-grid,
+  .flashcard-inner {
+    transition: none !important;
+  }
+}

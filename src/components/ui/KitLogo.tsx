@@ -12,6 +12,49 @@ export interface KitLogoProps {
   ariaHidden?: boolean
 }
 
+function KitTurtlePaths({
+  showScutes,
+  showEye,
+  state,
+  eyeFill,
+  eyeRadius,
+}: {
+  showScutes: boolean
+  showEye: boolean
+  state: 'idle' | 'thinking' | 'done'
+  eyeFill: string
+  eyeRadius: number
+}) {
+  return (
+    <>
+      <path d="M 12 60 C 11 40 23 25 40 25 C 57 25 70 37 72 58" />
+      <path d="M 70.8 50 C 73.5 46.5 75.5 42 78.5 39 C 81.5 35.8 87.5 35 90.8 38 C 94 41 94.5 45.5 92.5 48.5 C 90.5 51.5 86.5 53.2 82.5 53.2 C 79 53.2 76 56.5 73.5 58.5 C 62 65 22 66.5 8 57" />
+      {showScutes && (
+        <>
+          <path d="M 29.5 27.1 L 34 35 L 46 35 L 50.5 26.7 M 34 35 L 28 45 L 34 55 L 46 55 L 52 45 L 46 35" />
+          <path d="M 28 45 L 13.9 45 M 52 45 L 69.2 45 M 34 55 L 31.5 63.4 M 46 55 L 48.5 63.6" />
+        </>
+      )}
+      {state !== 'thinking' && (
+        <>
+          <path d="M 57 63 C 57 68 58 72 60.5 75.5 C 62.5 78.3 67 78.6 70 77.6 C 72.5 76.8 72 74 70 72.5 C 67.5 70.6 66 67 65.5 62.5" />
+          <path d="M 23.5 63.5 C 23 68 21.5 72 18.5 75.5 C 16.5 78 12 78.6 9.5 77.4 C 7.2 76.3 7.8 74 9.8 72.5 C 12.5 70.5 14.2 66.5 14.8 61" />
+        </>
+      )}
+      {showEye && (
+        <circle
+          cx="85.5"
+          cy="43"
+          r={eyeRadius}
+          fill={eyeFill}
+          stroke="none"
+          className={state !== 'thinking' ? 'animate-kit-blink' : undefined}
+        />
+      )}
+    </>
+  )
+}
+
 export function KitLogo({
   size = 24,
   variant = 'auto',
@@ -49,23 +92,12 @@ export function KitLogo({
           strokeLinejoin="round"
           className={state === 'thinking' ? 'animate-kit-thinking' : undefined}
         >
-          <path d="M 12 60 C 11 40 23 25 40 25 C 57 25 70 37 72 58" />
-          <path d="M 70.8 50 C 73.5 46.5 75.5 42 78.5 39 C 81.5 35.8 87.5 35 90.8 38 C 94 41 94.5 45.5 92.5 48.5 C 90.5 51.5 86.5 53.2 82.5 53.2 C 79 53.2 76 56.5 73.5 58.5 C 62 65 22 66.5 8 57" />
-          <path d="M 29.5 27.1 L 34 35 L 46 35 L 50.5 26.7 M 34 35 L 28 45 L 34 55 L 46 55 L 52 45 L 46 35" />
-          <path d="M 28 45 L 13.9 45 M 52 45 L 69.2 45 M 34 55 L 31.5 63.4 M 46 55 L 48.5 63.6" />
-          {state !== 'thinking' && (
-            <>
-              <path d="M 57 63 C 57 68 58 72 60.5 75.5 C 62.5 78.3 67 78.6 70 77.6 C 72.5 76.8 72 74 70 72.5 C 67.5 70.6 66 67 65.5 62.5" />
-              <path d="M 23.5 63.5 C 23 68 21.5 72 18.5 75.5 C 16.5 78 12 78.6 9.5 77.4 C 7.2 76.3 7.8 74 9.8 72.5 C 12.5 70.5 14.2 66.5 14.8 61" />
-            </>
-          )}
-          <circle
-            cx="85.5"
-            cy="43"
-            r="3.4"
-            fill="var(--color-brand)"
-            stroke="none"
-            className="animate-kit-blink"
+          <KitTurtlePaths
+            showScutes
+            showEye
+            state={state}
+            eyeFill="var(--color-brand)"
+            eyeRadius={3.4}
           />
         </g>
       </svg>
@@ -102,30 +134,13 @@ export function KitLogo({
         strokeLinejoin="round"
         className={state === 'thinking' ? 'animate-kit-thinking' : undefined}
       >
-        <path d="M 12 60 C 11 40 23 25 40 25 C 57 25 70 37 72 58" />
-        <path d="M 70.8 50 C 73.5 46.5 75.5 42 78.5 39 C 81.5 35.8 87.5 35 90.8 38 C 94 41 94.5 45.5 92.5 48.5 C 90.5 51.5 86.5 53.2 82.5 53.2 C 79 53.2 76 56.5 73.5 58.5 C 62 65 22 66.5 8 57" />
-        {size >= 20 && (
-          <>
-            <path d="M 29.5 27.1 L 34 35 L 46 35 L 50.5 26.7 M 34 35 L 28 45 L 34 55 L 46 55 L 52 45 L 46 35" />
-            <path d="M 28 45 L 13.9 45 M 52 45 L 69.2 45 M 34 55 L 31.5 63.4 M 46 55 L 48.5 63.6" />
-          </>
-        )}
-        {state !== 'thinking' && (
-          <>
-            <path d="M 57 63 C 57 68 58 72 60.5 75.5 C 62.5 78.3 67 78.6 70 77.6 C 72.5 76.8 72 74 70 72.5 C 67.5 70.6 66 67 65.5 62.5" />
-            <path d="M 23.5 63.5 C 23 68 21.5 72 18.5 75.5 C 16.5 78 12 78.6 9.5 77.4 C 7.2 76.3 7.8 74 9.8 72.5 C 12.5 70.5 14.2 66.5 14.8 61" />
-          </>
-        )}
-        {size >= 16 && (
-          <circle
-            cx="85.5"
-            cy="43"
-            r="3.6"
-            fill={eye}
-            stroke="none"
-            className={state !== 'thinking' ? 'animate-kit-blink' : undefined}
-          />
-        )}
+        <KitTurtlePaths
+          showScutes={size >= 20}
+          showEye={size >= 16}
+          state={state}
+          eyeFill={eye}
+          eyeRadius={3.6}
+        />
       </g>
     </svg>
   )
