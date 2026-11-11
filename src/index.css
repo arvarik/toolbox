@@ -4119,3 +4119,16 @@ textarea.input {
   padding: var(--space-3) var(--space-4) 0;
 }
 
+/* Full-screen study session overlay (shared by KitPathPage & GraphPage) */
+.graph-session-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--color-bg-primary);
+  z-index: var(--z-overlay);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+

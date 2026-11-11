@@ -158,11 +158,51 @@ function findBestQuoteMatch(
   return bestIdx
 }
 
-function applyHighlightsToDom(
-  root: HTMLElement,
-  highlights: TextbookHighlight[],
-  onRemove?: (id: string) => void,
-) {
+const EXCLUDED_HIGHLIGHT_SELECTOR = 'mark[data-hl-id], pre, .katex, svg, button'
+const BLOCK_ANCESTOR_SELECTOR =
+  'p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th, pre, div, section, article'
+
+function collectHighlightableSegments(root: HTMLElement): {
+  segments: Array<{ node: Text; start: number; end: number }>
+  combined: string
+} {
+  const segments: Array<{ node: Text; start: number; end: number }> = []
+  let combined = ''
+  let lastBlock: Element | null = null
+  let sawExcludedSinceLast = false
+
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const el = node.parentElement
+      if (!el) return NodeFilter.FILTER_REJECT
+      if (el.closest(EXCLUDED_HIGHLIGHT_SELECTOR)) {
+        sawExcludedSinceLast = true
+        return NodeFilter.FILTER_REJECT
+      }
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+
+  let current = walker.nextNode() as Text | null
+  while (current) {
+    const val = current.nodeValue ?? ''
+    if (val.length > 0) {
+      const block = current.parentElement?.closest(BLOCK_ANCESTOR_SELECTOR) ?? root
+      if (segments.length > 0 && (sawExcludedSinceLast || block !== lastBlock)) {
+        combined += '\u0000'
+      }
+      segments.push({ node: current, start: combined.length, end: combined.length + val.length })
+      combined += val
+      lastBlock = block
+      sawExcludedSinceLast = false
+    }
+    current = walker.nextNode() as Text | null
+  }
+
+  return { segments, combined }
+}
+
+function applyHighlightsToDom(root: HTMLElement, highlights: TextbookHighlight[]) {
   const existing = root.querySelectorAll('mark[data-hl-id]')
   existing.forEach((mark) => {
     const parent = mark.parentNode
@@ -177,28 +217,7 @@ function applyHighlightsToDom(
   for (const h of highlights) {
     if (!h.quote || h.quote.length < 3) continue
 
-    const segments: Array<{ node: Text; start: number; end: number }> = []
-    let combined = ''
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        const el = node.parentElement
-        if (!el) return NodeFilter.FILTER_REJECT
-        if (el.closest('mark[data-hl-id], pre, .katex, svg, button')) {
-          return NodeFilter.FILTER_REJECT
-        }
-        return NodeFilter.FILTER_ACCEPT
-      },
-    })
-
-    let current = walker.nextNode() as Text | null
-    while (current) {
-      const val = current.nodeValue ?? ''
-      if (val.length > 0) {
-        segments.push({ node: current, start: combined.length, end: combined.length + val.length })
-        combined += val
-      }
-      current = walker.nextNode() as Text | null
-    }
+    const { segments, combined } = collectHighlightableSegments(root)
 
     const matchStart = findBestQuoteMatch(combined, h.quote, h.prefix, h.suffix)
     if (matchStart < 0) continue
@@ -216,13 +235,7 @@ function applyHighlightsToDom(
       const mark = document.createElement('mark')
       mark.setAttribute('data-hl-id', h.id)
       mark.className = `hl-mark hl-${h.color} text-[var(--color-ink)]`
-      mark.title = h.note ? `${h.note} (click to remove)` : 'Click to remove highlight'
-      if (onRemove) {
-        mark.addEventListener('click', (ev) => {
-          ev.stopPropagation()
-          onRemove(h.id)
-        })
-      }
+      if (h.note) mark.title = h.note
       target.parentNode?.insertBefore(mark, target)
       mark.appendChild(target)
     }
@@ -257,14 +270,15 @@ export function HighlightableProse({
     text: string
     prefix: string
     suffix: string
+    canHighlight: boolean
     x: number
     y: number
   } | null>(null)
 
   useEffect(() => {
     if (!richContentRef.current) return
-    applyHighlightsToDom(richContentRef.current, highlights, onRemoveHighlight)
-  }, [children, contentKey, highlights, onRemoveHighlight])
+    applyHighlightsToDom(richContentRef.current, highlights)
+  }, [children, contentKey, highlights])
 
   useEffect(() => {
     if (!selection) return
@@ -300,32 +314,64 @@ export function HighlightableProse({
       setSelection(null)
       return
     }
+
+    const startEl =
+      range.startContainer instanceof Element
+        ? range.startContainer
+        : range.startContainer.parentElement
+    const endEl =
+      range.endContainer instanceof Element ? range.endContainer : range.endContainer.parentElement
+    const intersectsExcluded = Boolean(
+      startEl?.closest(EXCLUDED_HIGHLIGHT_SELECTOR) ||
+        endEl?.closest(EXCLUDED_HIGHLIGHT_SELECTOR) ||
+        range.cloneContents().querySelector(EXCLUDED_HIGHLIGHT_SELECTOR),
+    )
+
+    const { segments, combined } = collectHighlightableSegments(richContentRef.current)
+    let matchPos = -1
+    if (!intersectsExcluded && !text.includes('\u0000')) {
+      const startSeg = segments.find((s) => s.node === range.startContainer)
+      const approxOffset = startSeg ? startSeg.start + range.startOffset : 0
+      const exactAtOffset = combined.indexOf(text, Math.max(0, approxOffset - 4))
+      matchPos = exactAtOffset >= 0 ? exactAtOffset : combined.indexOf(text)
+    }
+
+    let prefix = ''
+    let suffix = ''
+    if (matchPos >= 0) {
+      const rawPrefix = matchPos > 0 ? combined.slice(Math.max(0, matchPos - 48), matchPos) : ''
+      const rawSuffix = combined.slice(matchPos + text.length, matchPos + text.length + 48)
+      const lastSep = rawPrefix.lastIndexOf('\u0000')
+      const firstSep = rawSuffix.indexOf('\u0000')
+      prefix = lastSep >= 0 ? rawPrefix.slice(lastSep + 1) : rawPrefix
+      suffix = firstSep >= 0 ? rawSuffix.slice(0, firstSep) : rawSuffix
+    } else {
+      const fullText = richContentRef.current.textContent ?? ''
+      const fallbackPos = fullText.indexOf(text)
+      if (fallbackPos >= 0) {
+        prefix = fallbackPos > 0 ? fullText.slice(Math.max(0, fallbackPos - 48), fallbackPos) : ''
+        suffix = fullText.slice(fallbackPos + text.length, fallbackPos + text.length + 48)
+      }
+    }
+
+    const canHighlight =
+      matchPos >= 0 && findBestQuoteMatch(combined, text, prefix, suffix) >= 0
+    if (!canHighlight && !onMakeCard && !onAskKit) {
+      setSelection(null)
+      return
+    }
+
     const rect =
       typeof range.getBoundingClientRect === 'function'
         ? range.getBoundingClientRect()
         : { left: 0, top: 0, width: 0, height: 0 }
     const host = wrapRef.current.getBoundingClientRect()
-    const fullText = richContentRef.current.textContent ?? ''
-
-    let pos = fullText.indexOf(text)
-    try {
-      const preRange = document.createRange()
-      preRange.selectNodeContents(richContentRef.current)
-      preRange.setEnd(range.startContainer, range.startOffset)
-      const approxOffset = preRange.toString().length
-      const exactAtOffset = fullText.indexOf(text, Math.max(0, approxOffset - 4))
-      if (exactAtOffset >= 0) pos = exactAtOffset
-    } catch {
-      // Fall back to first match if Range boundary crosses exotic nodes
-    }
-
-    const prefix = pos > 0 ? fullText.slice(Math.max(0, pos - 48), pos) : ''
-    const suffix = pos >= 0 ? fullText.slice(pos + text.length, pos + text.length + 48) : ''
 
     setSelection({
       text,
       prefix,
       suffix,
+      canHighlight,
       x: Math.min(
         Math.max(96, rect.left - host.left + rect.width / 2),
         Math.max(96, host.width - 96),
@@ -335,7 +381,7 @@ export function HighlightableProse({
   }
 
   const commitHighlight = (color: HighlightColor) => {
-    if (!selection) return
+    if (!selection?.canHighlight) return
     onAddHighlight(selection.text, color, selection.prefix, selection.suffix)
     window.getSelection()?.removeAllRanges()
     setSelection(null)
@@ -356,29 +402,35 @@ export function HighlightableProse({
           style={{ left: `${selection.x}px`, top: `${selection.y}px` }}
           className="animate-popover-enter absolute z-30 flex -translate-x-1/2 items-center gap-1 rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2 py-1 text-[12px] shadow-[var(--shadow-float)]"
         >
-          <button
-            type="button"
-            onClick={() => commitHighlight('amber')}
-            className="inline-flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface-hover)]"
-          >
-            <span className="h-2.5 w-2.5 rounded-full bg-[#f0a429]" />
-            Highlight
-          </button>
-          {INK_SWATCHES.slice(1).map((sw) => (
-            <button
-              key={sw.color}
-              type="button"
-              title={sw.label}
-              aria-label={sw.label}
-              onClick={() => commitHighlight(sw.color)}
-              className="flex h-6 w-5 cursor-pointer items-center justify-center rounded hover:bg-[var(--color-surface-hover)]"
-            >
-              <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: sw.dotBg }} />
-            </button>
-          ))}
+          {selection.canHighlight && (
+            <>
+              <button
+                type="button"
+                onClick={() => commitHighlight('amber')}
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded px-2 py-1 font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface-hover)]"
+              >
+                <span className="h-2.5 w-2.5 rounded-full bg-[#f0a429]" />
+                Highlight
+              </button>
+              {INK_SWATCHES.slice(1).map((sw) => (
+                <button
+                  key={sw.color}
+                  type="button"
+                  title={sw.label}
+                  aria-label={sw.label}
+                  onClick={() => commitHighlight(sw.color)}
+                  className="flex h-6 w-5 cursor-pointer items-center justify-center rounded hover:bg-[var(--color-surface-hover)]"
+                >
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: sw.dotBg }} />
+                </button>
+              ))}
+            </>
+          )}
           {onMakeCard && (
             <>
-              <span className="h-3.5 w-px bg-[var(--color-line-strong)]" />
+              {selection.canHighlight && (
+                <span className="h-3.5 w-px bg-[var(--color-line-strong)]" />
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -397,7 +449,9 @@ export function HighlightableProse({
           )}
           {onAskKit && (
             <>
-              <span className="h-3.5 w-px bg-[var(--color-line-strong)]" />
+              {(selection.canHighlight || Boolean(onMakeCard)) && (
+                <span className="h-3.5 w-px bg-[var(--color-line-strong)]" />
+              )}
               <button
                 type="button"
                 onClick={() => {

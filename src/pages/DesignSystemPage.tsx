@@ -396,6 +396,7 @@ export default function DesignSystemPage() {
                   </span>
                 </div>
                 <AnkiCardStack
+                  cardKey={String(ankiIdx)}
                   front={currentCard?.front ?? ''}
                   back={currentCard?.back ?? ''}
                   topicLabel={currentCard?.topic ?? 'Complete'}

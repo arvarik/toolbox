@@ -259,4 +259,134 @@ describe('UI Primitives Library & DesignSystemPage', () => {
     fireEvent.click(within(filterTabs).getByRole('tab', { name: 'Notebook & Anki' }))
     fireEvent.click(within(filterTabs).getByRole('tab', { name: 'All' }))
   })
+
+  it('guards highlights against mark click-deletion and unrenderable quotes, and resets AnkiCardStack synchronously without blocking focused links/buttons', async () => {
+    const fs = await import('node:fs')
+    const indexCss = fs.readFileSync('src/index.css', 'utf8')
+    expect(indexCss).toContain('.graph-session-overlay')
+
+    const onAddHl = vi.fn()
+    const onRemoveHl = vi.fn()
+    const onAskKit = vi.fn()
+
+    const { container } = render(
+      <HighlightableProse
+        highlights={[{ id: 'h-existing', quote: 'Strict quorum', color: 'amber' }]}
+        onAddHighlight={onAddHl}
+        onRemoveHighlight={onRemoveHl}
+        onAskKit={onAskKit}
+      >
+        <div>
+          <p id="p-one">Strict quorum guarantees linearizable reads.</p>
+          <p id="p-two"> Anti-entropy repairs divergent replicas.</p>
+          <pre id="code-block">const quorum = Math.floor(n / 2) + 1</pre>
+        </div>
+      </HighlightableProse>,
+    )
+
+    // #1: Clicking or drag-selecting inside an existing <mark> never deletes the highlight
+    const markEl = container.querySelector('mark[data-hl-id="h-existing"]')!
+    expect(markEl).toBeTruthy()
+    const markRange = document.createRange()
+    markRange.selectNodeContents(markEl)
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    sel.addRange(markRange)
+    fireEvent.mouseUp(markEl)
+    fireEvent.click(markEl)
+    expect(onRemoveHl).not.toHaveBeenCalled()
+
+    // Toolbar inside existing <mark> still allows Ask Kit, without offering duplicate Highlight button
+    const toolbar = screen.getByTestId('highlight-selection-toolbar')
+    expect(within(toolbar).queryByText('Highlight')).toBeNull()
+    fireEvent.click(within(toolbar).getByText('Ask Kit'))
+    expect(onAskKit).toHaveBeenCalledWith('Strict quorum')
+
+    // Explicit remove button in chip tray removes the highlight cleanly
+    fireEvent.click(screen.getByLabelText('Remove highlight'))
+    expect(onRemoveHl).toHaveBeenCalledWith('h-existing')
+
+    // #5: Selecting inside <pre> or across two paragraphs does not offer Highlight
+    const codeEl = container.querySelector('#code-block')!
+    const codeRange = document.createRange()
+    codeRange.selectNodeContents(codeEl)
+    sel.removeAllRanges()
+    sel.addRange(codeRange)
+    fireEvent.mouseUp(codeEl)
+    expect(within(screen.getByTestId('highlight-selection-toolbar')).queryByText('Highlight')).toBeNull()
+
+    const crossRange = document.createRange()
+    crossRange.setStart(container.querySelector('#p-one')!.lastChild!, 0)
+    crossRange.setEnd(container.querySelector('#p-two')!.firstChild!, 13)
+    sel.removeAllRanges()
+    sel.addRange(crossRange)
+    fireEvent.mouseUp(container.querySelector('#p-two')!)
+    expect(within(screen.getByTestId('highlight-selection-toolbar')).queryByText('Highlight')).toBeNull()
+    expect(onAddHl).not.toHaveBeenCalled()
+
+    // #3 & #4: Synchronous card reset (zero 1-frame back-face flash) and focused link/button exemption
+    const backRendersForCard2: boolean[] = []
+    function DeckHarness({ idx }: { idx: number }) {
+      const cards = [
+        { id: 'c1', front: 'Card 1 front', back: 'Card 1 secret' },
+        { id: 'c2', front: 'Card 2 front', back: 'Card 2 secret' },
+      ]
+      const card = cards[idx]
+      function BackProbe() {
+        if (card.id === 'c2') backRendersForCard2.push(true)
+        return <div>{card.back}</div>
+      }
+      return (
+        <div>
+          <a href="/library" data-testid="nav-link">
+            Library
+          </a>
+          <button type="button" data-testid="aux-btn">
+            Aux Action
+          </button>
+          <AnkiCardStack
+            cardKey={card.id}
+            front={card.front}
+            back={card.back}
+            backSlot={<BackProbe />}
+            topicLabel="Consensus"
+            intervals={{ again: '10m', hard: '2d', good: '7d', easy: '21d' }}
+            remainingCount={cards.length - idx}
+            onRate={vi.fn()}
+          />
+        </div>
+      )
+    }
+
+    const { rerender } = render(<DeckHarness idx={0} />)
+    const link = screen.getByTestId('nav-link')
+    link.focus()
+    const enterOnLink = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+    })
+    link.dispatchEvent(enterOnLink)
+    expect(enterOnLink.defaultPrevented).toBe(false)
+    expect(screen.queryByTestId('anki-card-back')).toBeNull()
+
+    const btn = screen.getByTestId('aux-btn')
+    btn.focus()
+    const spaceOnBtn = new KeyboardEvent('keydown', {
+      key: ' ',
+      code: 'Space',
+      bubbles: true,
+      cancelable: true,
+    })
+    btn.dispatchEvent(spaceOnBtn)
+    expect(spaceOnBtn.defaultPrevented).toBe(false)
+    expect(screen.queryByTestId('anki-card-back')).toBeNull()
+
+    // Flip Card 1, then advance to Card 2 -> Card 2 backSlot must NOT render even once before reveal
+    fireEvent.click(screen.getByTestId('reveal-answer-btn'))
+    expect(screen.getByText('Card 1 secret')).toBeInTheDocument()
+    rerender(<DeckHarness idx={1} />)
+    expect(backRendersForCard2).toEqual([])
+    expect(screen.queryByTestId('anki-card-back')).toBeNull()
+  })
 })

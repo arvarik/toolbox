@@ -505,52 +505,53 @@ export function AnkiCardStack({
   onRate: (grade: AnkiGrade) => void
   onReset?: () => void
 }) {
-  const [flipped, setFlipped] = useState(false)
+  const cardIdentity = `${cardKey ?? ''}\u0000${front}\u0000${remainingCount}`
+  const [flippedCard, setFlippedCard] = useState<string | null>(null)
+  const flipped = flippedCard === cardIdentity
   const [internalTypeMode, setInternalTypeMode] = useState(false)
   const typeMode = controlledTypeMode ?? internalTypeMode
-  const [typedDraft, setTypedDraft] = useState('')
+  const [draftState, setDraftState] = useState<{ card: string; text: string }>({
+    card: cardIdentity,
+    text: '',
+  })
+  const typedDraft = typeMode && draftState.card === cardIdentity ? draftState.text : ''
   const typeInputRef = useRef<HTMLTextAreaElement>(null)
 
   const toggleTypeMode = () => {
     const next = !typeMode
-    if (!next) setTypedDraft('')
+    if (!next) setDraftState({ card: cardIdentity, text: '' })
     if (onTypeModeChange) onTypeModeChange(next)
     else setInternalTypeMode(next)
   }
 
   useEffect(() => {
-    if (!typeMode) setTypedDraft('')
-  }, [typeMode])
-
-  useEffect(() => {
-    setFlipped(false)
-    setTypedDraft('')
-  }, [cardKey, front, remainingCount])
-
-  useEffect(() => {
     if (typeMode && !flipped) {
       typeInputRef.current?.focus()
     }
-  }, [typeMode, flipped, cardKey, front, remainingCount])
+  }, [typeMode, flipped, cardIdentity])
 
   useEffect(() => {
     if (remainingCount <= 0) return
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return
-      const target = e.target as HTMLElement | null
-      const tag = target?.tagName
-      if (
-        tag === 'INPUT' ||
-        tag === 'TEXTAREA' ||
-        tag === 'SELECT' ||
-        target?.isContentEditable
-      ) {
-        return
+      const target = e.target
+      if (target instanceof Element) {
+        const tag = target.tagName.toUpperCase()
+        if (
+          tag === 'INPUT' ||
+          tag === 'TEXTAREA' ||
+          tag === 'SELECT' ||
+          (target instanceof HTMLElement && target.isContentEditable)
+        ) {
+          return
+        }
       }
       if (!flipped && (e.code === 'Space' || e.key === ' ' || e.key === 'Enter')) {
-        if (tag === 'BUTTON' && e.key === 'Enter') return
+        if (target instanceof Element && target.closest('a, button, [role="button"], summary')) {
+          return
+        }
         e.preventDefault()
-        setFlipped(true)
+        setFlippedCard(cardIdentity)
       } else if (flipped && !submitting) {
         if (e.key === '1') {
           e.preventDefault()
@@ -569,7 +570,7 @@ export function AnkiCardStack({
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [flipped, onRate, remainingCount, submitting])
+  }, [cardIdentity, flipped, onRate, remainingCount, submitting])
 
   if (remainingCount <= 0) {
     if (emptySlot) return <>{emptySlot}</>
@@ -584,7 +585,15 @@ export function AnkiCardStack({
         </p>
         {onReset && (
           <div className="mt-5">
-            <Button variant="secondary" size="sm" onClick={onReset}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setFlippedCard(null)
+                setDraftState({ card: '', text: '' })
+                onReset()
+              }}
+            >
               <RotateCcw size={13} /> Replay sample cards
             </Button>
           </div>
@@ -650,11 +659,11 @@ export function AnkiCardStack({
               aria-label="Jot your recall before flipping"
               rows={2}
               value={typedDraft}
-              onChange={(e) => setTypedDraft(e.target.value)}
+              onChange={(e) => setDraftState({ card: cardIdentity, text: e.target.value })}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
                   e.preventDefault()
-                  setFlipped(true)
+                  setFlippedCard(cardIdentity)
                 }
               }}
               placeholder="Jot your recall before flipping (Enter to reveal, Shift+Enter for new line)..."
@@ -669,7 +678,7 @@ export function AnkiCardStack({
               variant="primary"
               size="md"
               data-testid={revealTestId}
-              onClick={() => setFlipped(true)}
+              onClick={() => setFlippedCard(cardIdentity)}
               className="w-full justify-center py-2.5 sm:w-auto sm:min-w-52"
             >
               <span>Reveal Answer</span>

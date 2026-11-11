@@ -574,19 +574,6 @@
   flex-shrink: 0;
 }
 
-/* In-graph study session overlay */
-.graph-session-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--color-bg-primary);
-  z-index: var(--z-overlay);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow-y: auto;
-  padding: var(--space-4);
-}
-
 /* Remediation banner in study sessions */
 .remediation-banner {
   display: flex;
