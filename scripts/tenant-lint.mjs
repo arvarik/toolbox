@@ -14,6 +14,8 @@ import path from "node:path";
 export const OWNED_TABLES = [
   "kits",
   "guide_content",
+  "guide_dogears",
+  "guide_highlights",
   "chat_starters",
   "decks",
   "flashcards",

@@ -1,6 +1,7 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import db from "../db.ts";
-import { asyncHandler } from "../platform/net/errors.ts";
+import { asyncHandler, NotFoundError, ValidationError } from "../platform/net/errors.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
 import { resolveActiveKit } from "../kits/kitContext.ts";
 import {
@@ -10,6 +11,47 @@ import {
 import logger from "../utils/logger.ts";
 
 const router = Router();
+
+const VALID_HIGHLIGHT_COLORS = new Set(["amber", "sage", "coral"]);
+const MAX_REF_ID_LEN = 200;
+
+function requireValidSlotRef(
+  pillarId: unknown,
+  topicId: unknown,
+  sectionId: unknown = "",
+  requireSection = false,
+): { pillarId: string; topicId: string; sectionId: string } {
+  if (
+    typeof pillarId !== "string" ||
+    !pillarId.trim() ||
+    pillarId.trim().length > MAX_REF_ID_LEN ||
+    typeof topicId !== "string" ||
+    !topicId.trim() ||
+    topicId.trim().length > MAX_REF_ID_LEN
+  ) {
+    throw new ValidationError("Valid pillarId and topicId are required");
+  }
+  if (sectionId !== undefined && typeof sectionId !== "string") {
+    throw new ValidationError("sectionId must be a string");
+  }
+  const sec = typeof sectionId === "string" ? sectionId.trim() : "";
+  if ((requireSection && !sec) || sec.length > MAX_REF_ID_LEN) {
+    throw new ValidationError("Valid sectionId is required");
+  }
+  return { pillarId: pillarId.trim(), topicId: topicId.trim(), sectionId: sec };
+}
+
+function verifyKitOwnedCardId(ownerId: string, kitId: string, cardId: string): string {
+  const ownedCard = db
+    .prepare(
+      `SELECT f.id FROM flashcards f
+       JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+       WHERE f.ownerId = ? AND d.kit_id = ? AND f.id = ?`,
+    )
+    .get(ownerId, kitId, cardId) as { id: string } | undefined;
+  if (!ownedCard) throw new ValidationError("Referenced flashcard not found in this Kit");
+  return ownedCard.id;
+}
 
 router.get("/export", (req, res) => {
   const scope = scopeOf(req);
@@ -89,6 +131,337 @@ router.get("/progress", (req, res) => {
     }
   }
   res.json(filled);
+});
+
+router.get("/dogears", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+
+  const rows = db
+    .prepare(
+      `SELECT pillar_id, topic_id, section_id, created_at
+       FROM guide_dogears
+       WHERE ownerId = ? AND kit_id = ?
+       ORDER BY created_at DESC`,
+    )
+    .all(scope.ownerId, kit.id) as Array<{
+    pillar_id: string;
+    topic_id: string;
+    section_id: string;
+    created_at: string | null;
+  }>;
+
+  res.json(
+    rows.map((r) => ({
+      pillarId: r.pillar_id,
+      topicId: r.topic_id,
+      sectionId: r.section_id,
+      createdAt: r.created_at,
+    })),
+  );
+});
+
+router.post("/dogears/toggle", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const { pillarId: rawPillarId, topicId: rawTopicId, sectionId: rawSectionId = "" } = req.body as {
+    pillarId?: unknown;
+    topicId?: unknown;
+    sectionId?: unknown;
+  };
+  const { pillarId, topicId, sectionId: sec } = requireValidSlotRef(
+    rawPillarId,
+    rawTopicId,
+    rawSectionId,
+    false,
+  );
+
+  const existing = db
+    .prepare(
+      `SELECT created_at FROM guide_dogears
+       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+    )
+    .get(scope.ownerId, kit.id, pillarId, topicId, sec) as
+    | { created_at: string | null }
+    | undefined;
+
+  if (existing) {
+    db.prepare(
+      `DELETE FROM guide_dogears
+       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+    ).run(scope.ownerId, kit.id, pillarId, topicId, sec);
+    res.json({ dogeared: false, createdAt: null });
+    return;
+  }
+
+  const now = new Date().toISOString();
+  db.prepare(
+    `INSERT INTO guide_dogears (ownerId, kit_id, pillar_id, topic_id, section_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(scope.ownerId, kit.id, pillarId, topicId, sec, now);
+  res.json({ dogeared: true, createdAt: now });
+});
+
+router.get("/highlights", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const pillarId = typeof req.query.pillarId === "string" ? req.query.pillarId.trim() : "";
+  const topicId = typeof req.query.topicId === "string" ? req.query.topicId.trim() : "";
+
+  const rows =
+    pillarId && topicId
+      ? (db
+          .prepare(
+            `SELECT id, pillar_id, topic_id, section_id, quote, prefix, suffix, color, note, card_id, created_at, updated_at
+             FROM guide_highlights
+             WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ?
+             ORDER BY created_at ASC`,
+          )
+          .all(scope.ownerId, kit.id, pillarId, topicId) as Array<Record<string, unknown>>)
+      : pillarId
+        ? (db
+            .prepare(
+              `SELECT id, pillar_id, topic_id, section_id, quote, prefix, suffix, color, note, card_id, created_at, updated_at
+               FROM guide_highlights
+               WHERE ownerId = ? AND kit_id = ? AND pillar_id = ?
+               ORDER BY created_at ASC`,
+            )
+            .all(scope.ownerId, kit.id, pillarId) as Array<Record<string, unknown>>)
+        : (db
+            .prepare(
+              `SELECT id, pillar_id, topic_id, section_id, quote, prefix, suffix, color, note, card_id, created_at, updated_at
+               FROM guide_highlights
+               WHERE ownerId = ? AND kit_id = ?
+               ORDER BY created_at DESC`,
+            )
+            .all(scope.ownerId, kit.id) as Array<Record<string, unknown>>);
+
+  res.json(
+    rows.map((r) => ({
+      id: String(r.id),
+      pillarId: String(r.pillar_id),
+      topicId: String(r.topic_id),
+      sectionId: String(r.section_id),
+      quote: String(r.quote),
+      prefix: String(r.prefix ?? ""),
+      suffix: String(r.suffix ?? ""),
+      color: String(r.color ?? "amber"),
+      note: String(r.note ?? ""),
+      cardId: (r.card_id as string | null) ?? null,
+      createdAt: (r.created_at as string | null) ?? null,
+      updatedAt: (r.updated_at as string | null) ?? null,
+    })),
+  );
+});
+
+router.post("/highlights", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const {
+    pillarId: rawPillarId,
+    topicId: rawTopicId,
+    sectionId: rawSectionId,
+    quote,
+    prefix = "",
+    suffix = "",
+    color = "amber",
+    note = "",
+    cardId = null,
+  } = req.body as Record<string, unknown>;
+
+  const { pillarId, topicId, sectionId } = requireValidSlotRef(
+    rawPillarId,
+    rawTopicId,
+    rawSectionId,
+    true,
+  );
+  if (typeof quote !== "string" || !quote.trim()) {
+    throw new ValidationError("pillarId, topicId, sectionId, and quote are required");
+  }
+  if (typeof color !== "string" || !VALID_HIGHLIGHT_COLORS.has(color)) {
+    throw new ValidationError("color must be amber, sage, or coral");
+  }
+  if (cardId !== null && cardId !== undefined && typeof cardId !== "string") {
+    throw new ValidationError("cardId must be a string or null");
+  }
+
+  const verifiedCardId =
+    typeof cardId === "string" && cardId.trim()
+      ? verifyKitOwnedCardId(scope.ownerId, kit.id, cardId.trim())
+      : null;
+
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const safePrefix = typeof prefix === "string" ? prefix.slice(0, 160) : "";
+  const safeSuffix = typeof suffix === "string" ? suffix.slice(0, 160) : "";
+  const safeNote = typeof note === "string" ? note.slice(0, 500) : "";
+  const safeQuote = quote.trim().slice(0, 2000);
+
+  db.prepare(
+    `INSERT INTO guide_highlights (
+       id, ownerId, kit_id, pillar_id, topic_id, section_id,
+       quote, prefix, suffix, color, note, card_id, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    scope.ownerId,
+    kit.id,
+    pillarId,
+    topicId,
+    sectionId,
+    safeQuote,
+    safePrefix,
+    safeSuffix,
+    color,
+    safeNote,
+    verifiedCardId,
+    now,
+    now,
+  );
+
+  res.status(201).json({
+    id,
+    pillarId,
+    topicId,
+    sectionId,
+    quote: safeQuote,
+    prefix: safePrefix,
+    suffix: safeSuffix,
+    color,
+    note: safeNote,
+    cardId: verifiedCardId,
+    createdAt: now,
+    updatedAt: now,
+  });
+});
+
+router.patch("/highlights/:id", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const { id } = req.params;
+  const { color, note, cardId } = req.body as Record<string, unknown>;
+
+  const existing = db
+    .prepare(
+      `SELECT id, color, note, card_id FROM guide_highlights
+       WHERE ownerId = ? AND kit_id = ? AND id = ?`,
+    )
+    .get(scope.ownerId, kit.id, id) as
+    | { id: string; color: string; note: string; card_id: string | null }
+    | undefined;
+
+  if (!existing) throw new NotFoundError("Highlight");
+
+  let nextColor = existing.color;
+  if (color !== undefined) {
+    if (typeof color !== "string" || !VALID_HIGHLIGHT_COLORS.has(color)) {
+      throw new ValidationError("color must be amber, sage, or coral");
+    }
+    nextColor = color;
+  }
+
+  if (note !== undefined && typeof note !== "string") {
+    throw new ValidationError("note must be a string");
+  }
+  const nextNote = typeof note === "string" ? note.slice(0, 500) : existing.note;
+
+  let nextCardId = existing.card_id;
+  if (cardId !== undefined) {
+    if (cardId === null || cardId === "") {
+      nextCardId = null;
+    } else if (typeof cardId === "string") {
+      nextCardId = verifyKitOwnedCardId(scope.ownerId, kit.id, cardId.trim());
+    } else {
+      throw new ValidationError("cardId must be a string or null");
+    }
+  }
+
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE guide_highlights
+     SET color = ?, note = ?, card_id = ?, updated_at = ?
+     WHERE ownerId = ? AND kit_id = ? AND id = ?`,
+  ).run(nextColor, nextNote, nextCardId, now, scope.ownerId, kit.id, id);
+
+  res.json({ id, color: nextColor, note: nextNote, cardId: nextCardId, updatedAt: now });
+});
+
+router.delete("/highlights/:id", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const { id } = req.params;
+
+  const info = db
+    .prepare("DELETE FROM guide_highlights WHERE ownerId = ? AND kit_id = ? AND id = ?")
+    .run(scope.ownerId, kit.id, id);
+
+  if (info.changes === 0) throw new NotFoundError("Highlight");
+  res.json({ ok: true });
+});
+
+router.get("/resume", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+
+  const row = db
+    .prepare("SELECT last_guide_ref FROM kits WHERE ownerId = ? AND id = ?")
+    .get(scope.ownerId, kit.id) as { last_guide_ref: string | null } | undefined;
+
+  if (!row?.last_guide_ref) {
+    res.json({ resume: null });
+    return;
+  }
+  try {
+    const parsed = JSON.parse(row.last_guide_ref) as Record<string, unknown> | null;
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      typeof parsed.pillarId !== "string" ||
+      !parsed.pillarId.trim() ||
+      typeof parsed.topicId !== "string" ||
+      !parsed.topicId.trim()
+    ) {
+      res.json({ resume: null });
+      return;
+    }
+    res.json({
+      resume: {
+        pillarId: parsed.pillarId.trim(),
+        topicId: parsed.topicId.trim(),
+        sectionId: typeof parsed.sectionId === "string" ? parsed.sectionId.trim() : "",
+        ...(typeof parsed.updatedAt === "string" ? { updatedAt: parsed.updatedAt } : {}),
+      },
+    });
+  } catch {
+    res.json({ resume: null });
+  }
+});
+
+router.put("/resume", (req, res) => {
+  const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
+  const { pillarId: rawPillarId, topicId: rawTopicId, sectionId: rawSectionId = "" } =
+    req.body as Record<string, unknown>;
+
+  const { pillarId, topicId, sectionId } = requireValidSlotRef(
+    rawPillarId,
+    rawTopicId,
+    rawSectionId,
+    false,
+  );
+  const resume = {
+    pillarId,
+    topicId,
+    sectionId,
+    updatedAt: new Date().toISOString(),
+  };
+
+  db.prepare("UPDATE kits SET last_guide_ref = ?, updated_at = datetime('now') WHERE ownerId = ? AND id = ?").run(
+    JSON.stringify(resume),
+    scope.ownerId,
+    kit.id,
+  );
+  res.json({ resume });
 });
 
 router.get("/:pillarId/:topicId", (req, res) => {

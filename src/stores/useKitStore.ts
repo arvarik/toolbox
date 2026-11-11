@@ -40,6 +40,15 @@ export interface KitSummaryItem {
   guideTotalCount: number;
   archivedNotesCount: number;
   drillCount: number;
+  dogearCount?: number;
+  lastGuideRef?: {
+    pillarId: string;
+    topicId: string;
+    sectionId: string;
+    pillarName?: string;
+    topicName?: string;
+    updatedAt?: string;
+  } | null;
 }
 
 export interface KitDetailItem extends KitSummaryItem {
@@ -57,6 +66,10 @@ interface KitStoreState {
   selectKitBySlug: (slug: string | null) => Promise<KitDetailItem | null>;
   syncUpstream: (slugOrId: string) => Promise<unknown>;
   setActiveKitDirect: (kit: KitDetailItem | null) => void;
+  updateActiveKitNotebookMeta: (patch: {
+    lastGuideRef?: KitSummaryItem["lastGuideRef"];
+    dogearCount?: number;
+  }) => void;
   removeKitFromState: (slugOrId: string) => void;
 }
 
@@ -168,6 +181,30 @@ export const useKitStore = create<KitStoreState>((set, get) => ({
       activeKit: kit,
       kitCache: { ...state.kitCache, [kit.slug]: kit },
     }));
+  },
+
+  updateActiveKitNotebookMeta: (patch) => {
+    set((state) => {
+      const targetSlug = state.activeKitSlug ?? "system-design";
+      const mergeMeta = <T extends KitSummaryItem>(item: T): T => ({
+        ...item,
+        ...(patch.lastGuideRef !== undefined ? { lastGuideRef: patch.lastGuideRef } : {}),
+        ...(patch.dogearCount !== undefined ? { dogearCount: patch.dogearCount } : {}),
+      });
+      const nextActive = state.activeKit ? mergeMeta(state.activeKit) : null;
+      const cached = state.kitCache[targetSlug];
+      const nextCache = cached
+        ? { ...state.kitCache, [targetSlug]: mergeMeta(cached) }
+        : state.kitCache;
+      const nextKits = state.kits.map((k) =>
+        k.slug === targetSlug ? mergeMeta(k) : k,
+      );
+      return {
+        activeKit: nextActive,
+        kitCache: nextCache,
+        kits: nextKits,
+      };
+    });
   },
 
   removeKitFromState: (slugOrId: string) => {

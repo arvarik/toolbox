@@ -196,6 +196,35 @@ export const KitBackupUserdataV1Schema = z.object({
       }),
     )
     .default([]),
+  guideDogears: z
+    .array(
+      z.object({
+        pillarId: idStr,
+        topicId: idStr,
+        sectionId: z.string().max(200).default(""),
+        createdAt: tsStr,
+      }),
+    )
+    .default([]),
+  guideHighlights: z
+    .array(
+      z.object({
+        id: idStr,
+        pillarId: idStr,
+        topicId: idStr,
+        sectionId: idStr,
+        quote: z.string().min(1).max(2000),
+        prefix: z.string().max(160).default(""),
+        suffix: z.string().max(160).default(""),
+        color: z.enum(["amber", "sage", "coral"]).default("amber"),
+        note: z.string().max(500).default(""),
+        cardId: nullStr,
+        createdAt: tsStr,
+        updatedAt: tsStr,
+      }),
+    )
+    .default([]),
+  lastGuideRef: z.string().max(2000).nullable().default(null),
   chatStarters: z
     .array(
       z.object({
@@ -371,6 +400,16 @@ export async function exportKitBackupZip(
   const guideRows = allKitRows(
     "SELECT pillar_id, topic_id, section_id, content, committed_at FROM guide_content WHERE ownerId = ? AND kit_id = ?",
   );
+  const dogearRows = allKitRows(
+    "SELECT pillar_id, topic_id, section_id, created_at FROM guide_dogears WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC",
+  );
+  const highlightRows = allKitRows(
+    `SELECT id, pillar_id, topic_id, section_id, quote, prefix, suffix, color, note, card_id, created_at, updated_at
+     FROM guide_highlights WHERE ownerId = ? AND kit_id = ? ORDER BY created_at ASC`,
+  );
+  const kitMetaRow = db
+    .prepare("SELECT last_guide_ref FROM kits WHERE ownerId = ? AND id = ?")
+    .get(scope.ownerId, kit.id) as { last_guide_ref?: string | null } | undefined;
   const starterRows = allKitRows(
     "SELECT pillar_id, topic_id, suggestions, content_hash, updated_at FROM chat_starters WHERE ownerId = ? AND kit_id = ?",
   );
@@ -467,6 +506,30 @@ export async function exportKitBackupZip(
       content: s(r.content),
       committedAt: ns(r.committed_at),
     })),
+    guideDogears: dogearRows.map((d) => ({
+      pillarId: s(d.pillar_id),
+      topicId: s(d.topic_id),
+      sectionId: s(d.section_id),
+      createdAt: ns(d.created_at),
+    })),
+    guideHighlights: highlightRows.map((h) => ({
+      id: s(h.id),
+      pillarId: s(h.pillar_id),
+      topicId: s(h.topic_id),
+      sectionId: s(h.section_id),
+      quote: s(h.quote),
+      prefix: s(h.prefix),
+      suffix: s(h.suffix),
+      color: (h.color === "sage" || h.color === "coral" ? h.color : "amber") as
+        | "amber"
+        | "sage"
+        | "coral",
+      note: s(h.note),
+      cardId: ns(h.card_id),
+      createdAt: ns(h.created_at),
+      updatedAt: ns(h.updated_at),
+    })),
+    lastGuideRef: ns(kitMetaRow?.last_guide_ref ?? null),
     chatStarters: starterRows.map((r) => ({
       pillarId: s(r.pillar_id),
       topicId: s(r.topic_id),
@@ -957,6 +1020,77 @@ export async function importKitBackupZip(
           newSourceId,
           ch.chunkIndex,
           ch.text,
+        );
+      }
+
+      if (userdata.lastGuideRef) {
+        try {
+          const parsed = JSON.parse(userdata.lastGuideRef) as Record<string, unknown> | null;
+          if (
+            parsed &&
+            typeof parsed === "object" &&
+            typeof parsed.pillarId === "string" &&
+            parsed.pillarId.trim().length > 0 &&
+            parsed.pillarId.trim().length <= 200 &&
+            typeof parsed.topicId === "string" &&
+            parsed.topicId.trim().length > 0 &&
+            parsed.topicId.trim().length <= 200
+          ) {
+            const sanitizedResume = JSON.stringify({
+              pillarId: parsed.pillarId.trim(),
+              topicId: parsed.topicId.trim(),
+              sectionId:
+                typeof parsed.sectionId === "string"
+                  ? parsed.sectionId.trim().slice(0, 200)
+                  : "",
+              ...(typeof parsed.updatedAt === "string"
+                ? { updatedAt: parsed.updatedAt.slice(0, 64) }
+                : {}),
+            });
+            db.prepare("UPDATE kits SET last_guide_ref = ? WHERE ownerId = ? AND id = ?").run(
+              sanitizedResume,
+              scope.ownerId,
+              newKitId,
+            );
+          }
+        } catch {
+          // Ignore malformed lastGuideRef JSON in archive
+        }
+      }
+
+      const insDogear = db.prepare(
+        `INSERT INTO guide_dogears (
+           ownerId, kit_id, pillar_id, topic_id, section_id, created_at
+         ) VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+         ON CONFLICT(ownerId, kit_id, pillar_id, topic_id, section_id) DO NOTHING`,
+      );
+      for (const dg of userdata.guideDogears) {
+        insDogear.run(scope.ownerId, newKitId, dg.pillarId, dg.topicId, dg.sectionId, dg.createdAt);
+      }
+
+      const insHighlight = db.prepare(
+        `INSERT INTO guide_highlights (
+           id, ownerId, kit_id, pillar_id, topic_id, section_id,
+           quote, prefix, suffix, color, note, card_id, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, datetime('now')), COALESCE(?, datetime('now')))`,
+      );
+      for (const hl of userdata.guideHighlights) {
+        const mappedCardId = hl.cardId ? (cardIdMap.get(hl.cardId) ?? null) : null;
+        insHighlight.run(
+          crypto.randomUUID(),
+          scope.ownerId,
+          newKitId,
+          hl.pillarId,
+          hl.topicId,
+          hl.sectionId,
+          hl.quote,
+          hl.prefix,
+          hl.suffix,
+          hl.color,
+          hl.note,
+          mappedCardId,
+          hl.createdAt,
+          hl.updatedAt,
         );
       }
     })();

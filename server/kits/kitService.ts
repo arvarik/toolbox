@@ -69,6 +69,15 @@ export interface OwnedKitSummary {
   guideTotalCount: number;
   archivedNotesCount: number;
   drillCount: number;
+  dogearCount: number;
+  lastGuideRef: {
+    pillarId: string;
+    topicId: string;
+    sectionId: string;
+    pillarName?: string;
+    topicName?: string;
+    updatedAt?: string;
+  } | null;
 }
 
 export interface OwnedKitDetail extends OwnedKitSummary {
@@ -120,6 +129,7 @@ export interface RawKitRow {
   created_at: string;
   updated_at: string;
   last_opened_at: string | null;
+  last_guide_ref?: string | null;
   upstream_slug?: string | null;
   upstream_latest_version?: number | null;
 }
@@ -371,6 +381,7 @@ interface PreloadedKitAggregates {
   deckStats: Map<string, DeckStatsRow>;
   guideRows: Map<string, Array<{ pillar_id: string; topic_id: string; section_id: string }>>;
   drillCounts: Map<string, number>;
+  dogearRows: Map<string, Array<{ pillar_id: string; topic_id: string; section_id: string }>>;
 }
 
 function hydrateKitSummary(
@@ -423,6 +434,61 @@ function hydrateKitSummary(
           .get(scope.ownerId, row.id) as { c: number }
       ).c;
 
+  const validTopics = new Set<string>();
+  for (const p of skeleton.pillars) {
+    for (const t of p.topics) {
+      validTopics.add(`${p.id}\0${t.id}`);
+    }
+  }
+
+  const rawDogears = preloaded
+    ? (preloaded.dogearRows.get(row.id) ?? [])
+    : (db
+        .prepare(
+          "SELECT pillar_id, topic_id, section_id FROM guide_dogears WHERE ownerId = ? AND kit_id = ?",
+        )
+        .all(scope.ownerId, row.id) as Array<{
+        pillar_id: string;
+        topic_id: string;
+        section_id: string;
+      }>);
+
+  let dogearCount = 0;
+  for (const dg of rawDogears) {
+    const isValid = dg.section_id
+      ? validSlots.has(`${dg.pillar_id}\0${dg.topic_id}\0${dg.section_id}`)
+      : validTopics.has(`${dg.pillar_id}\0${dg.topic_id}`);
+    if (isValid) dogearCount++;
+  }
+
+  let lastGuideRef: OwnedKitSummary["lastGuideRef"] = null;
+  if (row.last_guide_ref) {
+    try {
+      const parsed = JSON.parse(row.last_guide_ref) as {
+        pillarId?: string;
+        topicId?: string;
+        sectionId?: string;
+        updatedAt?: string;
+      };
+      if (parsed?.pillarId && parsed?.topicId) {
+        const pillar = skeleton.pillars.find((p) => p.id === parsed.pillarId);
+        const topic = pillar?.topics.find((t) => t.id === parsed.topicId);
+        if (pillar && topic) {
+          lastGuideRef = {
+            pillarId: parsed.pillarId,
+            topicId: parsed.topicId,
+            sectionId: parsed.sectionId ?? "",
+            pillarName: pillar.name,
+            topicName: topic.name,
+            ...(parsed.updatedAt ? { updatedAt: parsed.updatedAt } : {}),
+          };
+        }
+      }
+    } catch {
+      lastGuideRef = null;
+    }
+  }
+
   const cardCount = deckStat?.cardCount ?? 0;
   const reviewedCount = deckStat?.reviewedCount ?? 0;
   const masteryPercent = cardCount > 0 ? Math.round((reviewedCount / cardCount) * 100) : 0;
@@ -464,6 +530,8 @@ function hydrateKitSummary(
     guideTotalCount,
     archivedNotesCount,
     drillCount,
+    dogearCount,
+    lastGuideRef,
     skeleton,
   };
 }
@@ -534,10 +602,22 @@ export function listOwnedKits(db: Database.Database, scope: Scope): OwnedKitSumm
     .prepare("SELECT kit_id, COUNT(*) as c FROM drills WHERE ownerId = ? GROUP BY kit_id")
     .all(scope.ownerId) as Array<{ kit_id: string; c: number }>;
 
+  const dogearAllRows = db
+    .prepare(
+      "SELECT kit_id, pillar_id, topic_id, section_id FROM guide_dogears WHERE ownerId = ?",
+    )
+    .all(scope.ownerId) as Array<{
+    kit_id: string;
+    pillar_id: string;
+    topic_id: string;
+    section_id: string;
+  }>;
+
   const preloaded: PreloadedKitAggregates = {
     deckStats: new Map(deckStatRows.map((r) => [r.kit_id, r])),
     guideRows: Map.groupBy(guideAllRows, (g) => g.kit_id),
     drillCounts: new Map(drillCountRows.map((r) => [r.kit_id, r.c])),
+    dogearRows: Map.groupBy(dogearAllRows, (d) => d.kit_id),
   };
 
   return rows.map((row) => {

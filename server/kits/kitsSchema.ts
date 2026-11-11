@@ -116,6 +116,7 @@ function createV2Tables(db: Database.Database): void {
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now')),
       last_opened_at TEXT DEFAULT NULL,
+      last_guide_ref TEXT DEFAULT NULL,
       UNIQUE (ownerId, slug)
     );
     CREATE INDEX IF NOT EXISTS idx_kits_owner ON kits(ownerId);
@@ -131,6 +132,37 @@ function createV2Tables(db: Database.Database): void {
       embedding TEXT DEFAULT NULL,
       PRIMARY KEY (ownerId, kit_id, pillar_id, topic_id, section_id)
     );
+
+    CREATE TABLE IF NOT EXISTS guide_dogears (
+      ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
+      pillar_id TEXT NOT NULL,
+      topic_id TEXT NOT NULL,
+      section_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (ownerId, kit_id, pillar_id, topic_id, section_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_guide_dogears_owner_kit
+      ON guide_dogears(ownerId, kit_id);
+
+    CREATE TABLE IF NOT EXISTS guide_highlights (
+      id TEXT PRIMARY KEY,
+      ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
+      pillar_id TEXT NOT NULL,
+      topic_id TEXT NOT NULL,
+      section_id TEXT NOT NULL,
+      quote TEXT NOT NULL,
+      prefix TEXT DEFAULT '',
+      suffix TEXT DEFAULT '',
+      color TEXT NOT NULL DEFAULT 'amber' CHECK (color IN ('amber', 'sage', 'coral')),
+      note TEXT DEFAULT '',
+      card_id TEXT DEFAULT NULL REFERENCES flashcards(id) ON DELETE SET NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_guide_highlights_owner_kit_topic
+      ON guide_highlights(ownerId, kit_id, pillar_id, topic_id);
 
     CREATE TABLE IF NOT EXISTS chat_starters (
       ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -348,8 +380,40 @@ function ensureV2ColumnMigrations(db: Database.Database): void {
   addCol("flashcards", "difficulty", "REAL DEFAULT NULL");
   addCol("flashcards", "lapses", "INTEGER DEFAULT 0");
   addCol("drills", "seed_key", "TEXT DEFAULT NULL");
+  addCol("kits", "last_guide_ref", "TEXT DEFAULT NULL");
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS guide_dogears (
+      ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
+      pillar_id TEXT NOT NULL,
+      topic_id TEXT NOT NULL,
+      section_id TEXT NOT NULL DEFAULT '',
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (ownerId, kit_id, pillar_id, topic_id, section_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_guide_dogears_owner_kit
+      ON guide_dogears(ownerId, kit_id);
+
+    CREATE TABLE IF NOT EXISTS guide_highlights (
+      id TEXT PRIMARY KEY,
+      ownerId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      kit_id TEXT NOT NULL REFERENCES kits(id) ON DELETE CASCADE,
+      pillar_id TEXT NOT NULL,
+      topic_id TEXT NOT NULL,
+      section_id TEXT NOT NULL,
+      quote TEXT NOT NULL,
+      prefix TEXT DEFAULT '',
+      suffix TEXT DEFAULT '',
+      color TEXT NOT NULL DEFAULT 'amber' CHECK (color IN ('amber', 'sage', 'coral')),
+      note TEXT DEFAULT '',
+      card_id TEXT DEFAULT NULL REFERENCES flashcards(id) ON DELETE SET NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_guide_highlights_owner_kit_topic
+      ON guide_highlights(ownerId, kit_id, pillar_id, topic_id);
+
     CREATE UNIQUE INDEX IF NOT EXISTS idx_flashcards_seed_key
       ON flashcards(ownerId, deck_id, seed_key) WHERE seed_key IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_drills_seed_key
@@ -775,6 +839,8 @@ export function initKitsSchema(db: Database.Database): void {
         db.prepare("DELETE FROM rag_chunks_vec WHERE ownerId = ?").run(ownerId);
       }
       db.prepare("DELETE FROM rag_chunks WHERE ownerId = ?").run(ownerId);
+      db.prepare("DELETE FROM guide_highlights WHERE ownerId = ?").run(ownerId);
+      db.prepare("DELETE FROM guide_dogears WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM kits WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM study_sessions WHERE ownerId = ?").run(ownerId);
       db.prepare("DELETE FROM user_learning_profile WHERE ownerId = ?").run(ownerId);
