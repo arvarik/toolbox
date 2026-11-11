@@ -1,8 +1,8 @@
-import { Menu, BookOpen } from 'lucide-react'
+import { Menu, Search } from 'lucide-react'
 import { useLocation } from 'react-router'
 import ModelPicker from '../shared/ModelPicker'
+import useAppStore from '../../stores/appStore'
 import { extractKitSlugFromPathname } from '../../stores/useKitStore'
-import { Button } from '../ui/Controls'
 import { KitLogo } from '../ui/KitLogo'
 
 export interface MobileHeaderProps {
@@ -11,6 +11,7 @@ export interface MobileHeaderProps {
 
 export default function MobileHeader({ onToggleMenu }: MobileHeaderProps) {
   const location = useLocation()
+  const setSearchOpen = useAppStore((s) => s.setSearchOpen)
   const slug = extractKitSlugFromPathname(location.pathname)
   const subPath = location.pathname.replace(/^\/k\/[^/]+/, '') || '/'
   const isChat = subPath.startsWith('/chat')
@@ -52,23 +53,22 @@ export default function MobileHeader({ onToggleMenu }: MobileHeaderProps) {
         <Menu size={20} />
       </button>
 
-      <div className="mobile-header-title flex min-w-0 items-center gap-2">
-        <KitLogo size={20} ariaHidden />
+      <div className="mobile-header-title flex min-w-0 flex-1 items-center gap-1.5 px-1">
+        <KitLogo size={18} ariaHidden />
         <span className="truncate">{getTitle()}</span>
       </div>
 
-      <div className="flex min-w-0 items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          className="mobile-menu-btn"
+          onClick={() => setSearchOpen(true)}
+          aria-label="Open search"
+          id="mobile-search-btn"
+        >
+          <Search size={18} />
+        </button>
         <ModelPicker variant="header" triggerId="mobile-header-model-trigger" />
-        {isChat && (
-          <Button
-            variant="secondary"
-            size="xs"
-            onClick={() => window.dispatchEvent(new CustomEvent('toggle-study-plan'))}
-          >
-            <BookOpen size={12} />
-            Plan
-          </Button>
-        )}
       </div>
     </header>
   )

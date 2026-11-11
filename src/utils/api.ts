@@ -384,50 +384,64 @@ export const chatApi = {
     let fullText = ''
     let buffer = ''
 
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
+    const processLine = (line: string): boolean => {
+      if (!line.startsWith('data: ')) return false
+      const payload = line.slice(6).trim()
+      if (payload === '[DONE]') return true
 
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const payload = line.slice(6).trim()
-
-        if (payload === '[DONE]') {
-          return fullText
+      let parsed: { error?: string; tool?: string; text?: string } | null = null
+      try {
+        parsed = JSON.parse(payload) as {
+          error?: string
+          tool?: string
+          text?: string
         }
-
-        let parsed: { error?: string; tool?: string; text?: string } | null = null
-        try {
-          parsed = JSON.parse(payload) as {
-            error?: string
-            tool?: string
-            text?: string
-          }
-        } catch {
-          // Skip malformed JSON lines
-          continue
-        }
-
-        if (parsed?.error) {
-          throw new Error(parsed.error)
-        }
-        if (parsed?.tool) {
-          onTool?.(parsed.tool)
-          fullText += `\n\n*⚙️ ${parsed.tool}*\n\n`
-          onChunk(fullText)
-        }
-        if (parsed?.text !== undefined) {
-          fullText += parsed.text
-          onChunk(fullText)
-        }
+      } catch {
+        // Skip malformed JSON lines
+        return false
       }
+
+      if (parsed?.error) {
+        throw new Error(parsed.error)
+      }
+      if (parsed?.tool) {
+        onTool?.(parsed.tool)
+        fullText += `\n\n*⚙️ ${parsed.tool}*\n\n`
+        onChunk(fullText)
+      }
+      if (parsed?.text !== undefined) {
+        fullText += parsed.text
+        onChunk(fullText)
+      }
+      return false
     }
 
-    return fullText
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (processLine(line)) return fullText
+        }
+      }
+
+      buffer += decoder.decode()
+      if (buffer.trim()) {
+        for (const line of buffer.split('\n')) {
+          if (processLine(line)) return fullText
+        }
+      }
+
+      return fullText
+    } finally {
+      void reader.cancel().catch(() => {})
+      reader.releaseLock()
+    }
   },
 
   evaluateInterceptor: (data: Record<string, unknown>) =>

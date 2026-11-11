@@ -13,6 +13,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import { ancestorsOf, descendantsOf } from '../../../shared/kits/kitSkeleton'
+import useIsMobile from '../../hooks/useIsMobile'
 import { computeLayout, HEALTH_COLORS, NODE_WIDTH, NODE_HEIGHT, type HealthBucket } from './graphLayout'
 
 export interface GraphNodeItem {
@@ -111,6 +112,7 @@ export default function GraphCanvas({
   selectedId,
   onSelect,
 }: GraphCanvasProps) {
+  const isMobile = useIsMobile()
   const [hoverId, setHoverId] = useState<string | null>(null)
 
   const positions = useMemo(() => computeLayout(nodes, edges), [nodes, edges])
@@ -202,6 +204,8 @@ export default function GraphCanvas({
         nodesDraggable={false}
         nodesConnectable={false}
         edgesFocusable={false}
+        panOnDrag
+        zoomOnPinch
         minZoom={0.15}
         maxZoom={2.5}
         fitView
@@ -209,13 +213,15 @@ export default function GraphCanvas({
       >
         <Background variant={BackgroundVariant.Dots} gap={28} size={1} />
         <Controls showInteractive={false} position="bottom-right" />
-        <MiniMap
-          pannable
-          zoomable
-          position="bottom-left"
-          nodeColor={minimapNodeColor}
-          nodeStrokeWidth={6}
-        />
+        {!isMobile && (
+          <MiniMap
+            pannable
+            zoomable
+            position="bottom-left"
+            nodeColor={minimapNodeColor}
+            nodeStrokeWidth={6}
+          />
+        )}
       </ReactFlow>
     </div>
   )

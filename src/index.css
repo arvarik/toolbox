@@ -97,6 +97,7 @@
   --sidebar-width: 240px;
   --sidebar-collapsed-width: 64px;
   --header-height: 52px;
+  --mobile-header-h: calc(56px + env(safe-area-inset-top, 0px));
   --chat-panel-width: 380px;
   --toolbox-width: 260px;
 
@@ -259,11 +260,13 @@
   position: relative;
 }
 
-.app-content {
+.app-content,
+.main-content {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
   position: relative;
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 /* Page transition */
@@ -285,8 +288,10 @@
 
 /* ---------- Sidebar ---------- */
 .sidebar {
-  width: var(--sidebar-width);
+  width: calc(var(--sidebar-width) + env(safe-area-inset-left, 0px));
   height: 100dvh;
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   background: var(--color-bg-secondary);
   border-right: 1px solid var(--color-border);
   display: flex;
@@ -298,7 +303,7 @@
 }
 
 .sidebar.collapsed {
-  width: var(--sidebar-collapsed-width);
+  width: calc(var(--sidebar-collapsed-width) + env(safe-area-inset-left, 0px));
 }
 
 .sidebar-header {
@@ -693,8 +698,10 @@ textarea.input {
 
 /* ---------- Chat Panel ---------- */
 .chat-panel {
-  width: var(--chat-panel-width);
+  width: calc(var(--chat-panel-width) + env(safe-area-inset-right, 0px));
   height: 100%;
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   background: var(--color-bg-secondary);
   border-left: 1px solid var(--color-border);
   display: flex;
@@ -868,6 +875,8 @@ textarea.input {
   display: flex;
   align-items: center;
   justify-content: center;
+  padding-left: max(var(--space-2), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--space-2), env(safe-area-inset-right, 0px));
   z-index: var(--z-modal);
   animation: fadeIn var(--duration-normal) var(--ease-default);
 }
@@ -1574,7 +1583,9 @@ textarea.input {
   border-bottom: none;
   border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
   box-shadow: var(--shadow-xl);
-  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
   animation: model-picker-sheet-up var(--duration-normal) var(--ease-default);
 }
 
@@ -1807,7 +1818,7 @@ textarea.input {
 .search-bar:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 3px var(--color-accent-subtle);
-  width: 320px;
+  width: min(320px, 100%);
 }
 
 .search-bar svg {
@@ -2063,8 +2074,8 @@ textarea.input {
 /* ---------- Toast / Notification ---------- */
 .toast-container {
   position: fixed;
-  bottom: var(--space-6);
-  right: var(--space-6);
+  bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px));
+  right: max(var(--space-6), env(safe-area-inset-right, 0px));
   z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
@@ -2283,14 +2294,15 @@ textarea.input {
     top: 0;
     left: 0;
     width: 100%;
-    height: calc(56px + env(safe-area-inset-top, 0px));
+    height: var(--mobile-header-h);
     padding-top: env(safe-area-inset-top, 0px);
     z-index: 100;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding-left: var(--space-4);
-    padding-right: var(--space-4);
+    gap: var(--space-1);
+    padding-left: max(var(--space-2), env(safe-area-inset-left, 0px));
+    padding-right: max(var(--space-2), env(safe-area-inset-right, 0px));
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border);
     backdrop-filter: blur(12px);
@@ -2307,8 +2319,9 @@ textarea.input {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
     border-radius: var(--radius-md);
     color: var(--color-text-secondary);
     cursor: pointer;
@@ -2318,6 +2331,11 @@ textarea.input {
   .mobile-menu-btn:hover {
     background-color: var(--color-bg-hover);
     color: var(--color-text-primary);
+  }
+
+  .model-trigger-header {
+    min-height: 44px;
+    max-width: 40vw;
   }
 
   /* ---------- Mobile Drawer ---------- */
@@ -2336,7 +2354,11 @@ textarea.input {
     top: 0;
     left: 0;
     bottom: 0;
-    width: 280px;
+    width: calc(280px + env(safe-area-inset-left, 0px));
+    max-width: calc(100vw - 40px);
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
     background: var(--color-bg-secondary);
     z-index: 210;
     transition: transform 0.3s ease;
@@ -2361,7 +2383,7 @@ textarea.input {
     height: 56px;
     display: flex;
     align-items: center;
-    padding: 0 var(--space-4);
+    padding: 0 var(--space-2) 0 var(--space-4);
     gap: var(--space-3);
     border-bottom: 1px solid var(--color-border);
     flex-shrink: 0;
@@ -2372,8 +2394,9 @@ textarea.input {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
     border-radius: var(--radius-md);
     color: var(--color-text-secondary);
   }
@@ -2396,6 +2419,7 @@ textarea.input {
     display: flex;
     align-items: center;
     gap: var(--space-3);
+    min-height: 44px;
     padding: var(--space-2) var(--space-3);
     border-radius: var(--radius-md);
     color: var(--color-text-secondary);
@@ -2421,12 +2445,15 @@ textarea.input {
   }
 
   .app-main {
-    padding-top: 56px !important;
+    padding-top: var(--mobile-header-h) !important;
     padding-bottom: 0 !important;
   }
 
-  .app-content {
-    height: calc(100dvh - 56px);
+  .app-content,
+  .main-content {
+    height: calc(100dvh - var(--mobile-header-h));
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
 
   /* ---------- Chat Panel (Full-screen overlay) ---------- */
@@ -2435,14 +2462,17 @@ textarea.input {
   .chat-panel[id^="chat-panel-"] {
     width: 100% !important;
     max-width: 100% !important;
-    height: 100% !important;
+    height: calc(100dvh - var(--mobile-header-h)) !important;
     z-index: 300;
     position: fixed;
-    top: 56px;
+    top: var(--mobile-header-h);
     left: 0;
     right: 0;
     bottom: 0;
     border-left: none;
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
     animation: slideUp var(--duration-slow) var(--ease-default);
   }
 
@@ -2532,9 +2562,10 @@ textarea.input {
   }
 
   .mobile-pillar-pill {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: var(--space-2);
+    min-height: 44px;
     padding: var(--space-2) var(--space-3);
     background: var(--color-bg-primary);
     border: 1px solid var(--color-border);
@@ -2562,6 +2593,9 @@ textarea.input {
   }
 
   .mobile-topic-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 40px;
     padding: var(--space-1) var(--space-3);
     background: transparent;
     border: 1px solid var(--color-border);
@@ -2576,7 +2610,7 @@ textarea.input {
   .mobile-topic-pill.active {
     background: var(--color-accent);
     border-color: var(--color-accent);
-    color: white;
+    color: var(--color-accent-ink, #191816);
   }
 
   /* Guide page-wrapper on mobile — minimize horizontal padding for wider text */
@@ -2601,10 +2635,10 @@ textarea.input {
     padding: var(--space-2) !important;
   }
 
-  /* Guide section textarea — maximize width on mobile */
+  /* Guide section textarea — maximize width on mobile without iOS zoom */
   .guide-content textarea {
     box-sizing: border-box !important;
-    font-size: var(--text-sm) !important;
+    font-size: 16px !important;
     padding: var(--space-2) !important;
   }
 
@@ -2779,8 +2813,8 @@ textarea.input {
 
   /* ---------- Toast on Mobile ---------- */
   .toast-container {
-    right: var(--space-3) !important;
-    left: var(--space-3) !important;
+    right: max(var(--space-3), env(safe-area-inset-right, 0px)) !important;
+    left: max(var(--space-3), env(safe-area-inset-left, 0px)) !important;
     bottom: calc(var(--space-3) + 64px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
@@ -2791,9 +2825,12 @@ textarea.input {
 
   /* ---------- Modal on Mobile ---------- */
   .modal {
-    width: 95% !important;
+    width: calc(100% - var(--space-4)) !important;
     max-width: none !important;
-    margin: var(--space-4);
+    max-height: calc(100dvh - var(--space-6) - env(safe-area-inset-top, 0px)) !important;
+    margin: var(--space-2);
+    padding-bottom: calc(var(--space-5) + env(safe-area-inset-bottom, 0px)) !important;
+    overflow-y: auto;
   }
 
   /* ---------- Deck Editor on Mobile ---------- */
@@ -2813,7 +2850,7 @@ textarea.input {
   position: absolute;
   top: 80px;
   left: var(--space-4);
-  width: 300px;
+  width: min(300px, calc(100vw - 32px));
   max-height: calc(100% - 120px);
   background: var(--color-bg-elevated);
   border: 1px solid var(--color-border);
@@ -3066,6 +3103,8 @@ textarea.input {
   align-items: flex-start;
   justify-content: center;
   padding-top: 15vh;
+  padding-left: max(var(--space-3), env(safe-area-inset-left, 0px));
+  padding-right: max(var(--space-3), env(safe-area-inset-right, 0px));
   animation: fadeIn var(--duration-fast) ease;
 }
 
@@ -3297,9 +3336,11 @@ textarea.input {
     gap: var(--space-3);
   }
 
-  /* Input area: tighter padding */
+  /* Input area: tighter padding + safe-area bottom & horizontal insets */
   .learning-chat-input-area {
-    padding: var(--space-3) var(--space-3) var(--space-4);
+    padding: var(--space-2) max(var(--space-3), env(safe-area-inset-right, 0px))
+      calc(var(--space-3) + env(safe-area-inset-bottom, 0px))
+      max(var(--space-3), env(safe-area-inset-left, 0px));
   }
 
   /* User message bubbles: wider */
@@ -3422,7 +3463,9 @@ textarea.input {
 
 /* Chat input */
 .learning-chat-input-area {
-  padding: var(--space-4) var(--space-6) var(--space-5);
+  padding: var(--space-4) max(var(--space-6), env(safe-area-inset-right, 0px))
+    calc(var(--space-5) + env(safe-area-inset-bottom, 0px))
+    max(var(--space-6), env(safe-area-inset-left, 0px));
   border-top: 1px solid var(--color-border);
   flex-shrink: 0;
   background: var(--color-bg-secondary);
@@ -3650,13 +3693,6 @@ textarea.input {
 .session-picker-btn:hover {
   background: var(--color-bg-hover) !important;
   border-color: var(--color-accent) !important;
-}
-
-/* ---------- Mobile Overrides ---------- */
-@media (max-width: 768px) {
-  .learning-chat-input {
-    font-size: 16px; /* Prevents iOS auto-zoom on focus */
-  }
 }
 
 /* ---------- Utility Classes ---------- */
@@ -3969,6 +4005,7 @@ textarea.input {
 .blueprint-topic-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 
@@ -4099,14 +4136,24 @@ textarea.input {
   100% { background-position: -200% 0; }
 }
 
-/* ---------- Mobile iOS Safari Zoom Fix ---------- */
+/* ---------- Mobile iOS Safari Auto-Zoom Prevention ---------- */
 @media (max-width: 768px) {
-  .input,
-  textarea.input,
-  .settings-textarea,
-  .feynman-textarea,
-  .blueprint-edit-textarea {
-    font-size: 16px !important; /* Prevents iOS auto-zoom on focus */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]),
+  textarea,
+  select {
+    font-size: max(16px, 1rem) !important;
+  }
+}
+
+/* ---------- Reduced Motion Hygiene ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
 
@@ -4129,6 +4176,9 @@ textarea.input {
   align-items: center;
   justify-content: center;
   overflow-y: auto;
-  padding: var(--space-4);
+  padding: max(var(--space-4), env(safe-area-inset-top, 0px))
+    max(var(--space-4), env(safe-area-inset-right, 0px))
+    max(var(--space-4), env(safe-area-inset-bottom, 0px))
+    max(var(--space-4), env(safe-area-inset-left, 0px));
 }
 

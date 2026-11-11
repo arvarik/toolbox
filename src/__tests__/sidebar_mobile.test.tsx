@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -42,11 +42,12 @@ describe('Sidebar Navigation & Mobile Shell', () => {
   }
 
   beforeEach(() => {
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ groups: [], kits: [], authRequired: false, user: null }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ groups: [], kits: [], authRequired: false, user: null }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
     )
     useAppStore.getState().resetWorkspaceState()
     useCommitStore.getState().closeCompletely()
@@ -164,9 +165,13 @@ describe('Sidebar Navigation & Mobile Shell', () => {
     const chatPanel = await screen.findByTestId('chat-panel-container')
     expect(chatPanel.className).toContain('mobile-fullscreen')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close chat' }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Close chat' }))
+    })
     expect(useAppStore.getState().chatOpen.guide).toBe(false)
-    expect(screen.queryByTestId('chat-panel-container')).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByTestId('chat-panel-container')).not.toBeInTheDocument()
+    })
 
     applyViewport(1024)
     expect(document.querySelector('#app-sidebar')?.className).not.toContain('hidden-mobile')

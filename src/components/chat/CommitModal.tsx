@@ -1,4 +1,4 @@
-import { useEffect, useCallback } from 'react'
+import { useEffect, useCallback, useRef } from 'react'
 import { GitCommit, Check, Loader2, X, Sparkles, AlertCircle } from 'lucide-react'
 import { chatApi, type CommitSectionUpdate } from '../../utils/api'
 import { KitAvatar, NoteUpdateCard } from '../ui'
@@ -124,24 +124,29 @@ export default function CommitModal() {
   const addToast = useAppStore((s) => s.addToast)
   const { sectionsByPillar } = useActiveKit()
 
-  const {
-    isOpen,
-    phase,
-    errorMsg,
-    updates,
-    enabledSections,
-    savedCount,
-    messages,
-    topicContext,
-    closeCompletely,
-    setMinimized,
-    setPhase,
-    setError,
-    setUpdatesResult,
-    mergeUpdatesResult,
-    setEnabledSections,
-    setSavedCount,
-  } = useCommitStore()
+  const isOpen = useCommitStore((s) => s.isOpen)
+  const phase = useCommitStore((s) => s.phase)
+  const errorMsg = useCommitStore((s) => s.errorMsg)
+  const updates = useCommitStore((s) => s.updates)
+  const enabledSections = useCommitStore((s) => s.enabledSections)
+  const savedCount = useCommitStore((s) => s.savedCount)
+  const messages = useCommitStore((s) => s.messages)
+  const topicContext = useCommitStore((s) => s.topicContext)
+  const closeCompletely = useCommitStore((s) => s.closeCompletely)
+  const setMinimized = useCommitStore((s) => s.setMinimized)
+  const setPhase = useCommitStore((s) => s.setPhase)
+  const setError = useCommitStore((s) => s.setError)
+  const setUpdatesResult = useCommitStore((s) => s.setUpdatesResult)
+  const mergeUpdatesResult = useCommitStore((s) => s.mergeUpdatesResult)
+  const setEnabledSections = useCommitStore((s) => s.setEnabledSections)
+  const setSavedCount = useCommitStore((s) => s.setSavedCount)
+
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    return () => {
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+    }
+  }, [])
 
   const analyze = useCallback(
     async (targetSectionIds: string[] = []) => {
@@ -272,7 +277,8 @@ export default function CommitModal() {
 
       window.dispatchEvent(new Event('guide-progress-updated'))
 
-      setTimeout(closeCompletely, 1500)
+      if (closeTimerRef.current) clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = setTimeout(closeCompletely, 1500)
     } catch (err) {
       addToast({
         type: 'error',
@@ -297,7 +303,7 @@ export default function CommitModal() {
 
   return (
     <div
-      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[3px]"
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 py-4 pl-[max(1rem,env(safe-area-inset-left,0px))] pr-[max(1rem,env(safe-area-inset-right,0px))] backdrop-blur-[3px] max-md:items-end max-md:p-0"
       onClick={(e) => {
         if (e.target === e.currentTarget && phase !== 'saving') handleCloseOrMinimize()
       }}
@@ -307,20 +313,20 @@ export default function CommitModal() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="commit-modal-title"
-        className="flex max-h-[90vh] w-full max-w-[740px] flex-col overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] shadow-[var(--shadow-float)]"
+        className="flex max-h-[90dvh] w-full max-w-[740px] flex-col overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] shadow-[var(--shadow-float)] max-md:rounded-b-none max-md:border-b-0 max-md:pl-[env(safe-area-inset-left,0px)] max-md:pr-[env(safe-area-inset-right,0px)]"
       >
         {/* ── Header ── */}
-        <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] px-6 py-4">
-          <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] px-4 py-3.5 sm:px-6 sm:py-4">
+          <div className="flex min-w-0 items-center gap-3">
             <KitAvatar size={20} state={headerKitState} />
-            <div>
+            <div className="min-w-0">
               <h2
                 id="commit-modal-title"
                 className="font-serif text-[17px] leading-tight font-normal text-[var(--color-ink)]"
               >
                 Commit to Guide
               </h2>
-              <div className="text-[12px] text-[var(--color-ink-muted)]">
+              <div className="truncate text-[12px] text-[var(--color-ink-muted)]">
                 {topicContext?.topicName || 'Unknown topic'}
               </div>
             </div>
@@ -328,7 +334,7 @@ export default function CommitModal() {
           <button
             type="button"
             aria-label="Close"
-            className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+            className="inline-flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-lg text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)] sm:h-8 sm:w-8"
             onClick={handleCloseOrMinimize}
           >
             <X size={16} />
@@ -399,7 +405,7 @@ export default function CommitModal() {
         {/* ── Preview Phase ── */}
         {(phase === 'preview' || phase === 'saving') && (
           <>
-            <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] bg-[var(--color-surface-low)] px-6 py-2.5 text-[12px] text-[var(--color-ink-muted)]">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-[var(--color-line)] bg-[var(--color-surface-low)] px-4 py-2.5 text-[12px] text-[var(--color-ink-muted)] sm:px-6">
               <div className="tabular-nums">
                 <strong className="font-semibold text-[var(--color-ink)]">
                   {updates.length}
@@ -412,7 +418,7 @@ export default function CommitModal() {
               </div>
               <button
                 type="button"
-                className="cursor-pointer rounded px-2 py-1 text-[11.5px] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+                className="min-h-[36px] cursor-pointer rounded px-2 py-1 text-[11.5px] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)] sm:min-h-0"
                 onClick={() => {
                   if (enabledCount === allSections.length) {
                     setEnabledSections(new Set())
@@ -426,7 +432,7 @@ export default function CommitModal() {
             </div>
 
             {/* Section cards using shared NoteUpdateCard primitive */}
-            <div className="flex-1 overflow-y-auto px-6 py-4">
+            <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
               {allSections.map((sec) => {
                 const update = updateMap.get(sec.id)
                 const isEnabled = enabledSections.has(sec.id)
@@ -450,7 +456,7 @@ export default function CommitModal() {
                         aria-checked={isEnabled}
                         aria-label={`Include ${sec.name}`}
                         onClick={() => toggleSection(sec.id)}
-                        className={`flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded border transition-colors ${
+                        className={`flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded border transition-colors sm:h-5 sm:w-5 ${
                           isEnabled
                             ? 'border-[var(--color-accent-fill)] bg-[var(--color-accent-fill)] text-[var(--color-accent-ink)]'
                             : 'border-[var(--color-line-strong)] bg-[var(--color-surface-low)]'
@@ -488,10 +494,10 @@ export default function CommitModal() {
             </div>
 
             {/* Footer */}
-            <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-[var(--color-line)] bg-[var(--color-surface-low)] px-6 py-3.5">
+            <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-[var(--color-line)] bg-[var(--color-surface-low)] px-4 pt-3.5 pb-[calc(0.875rem+env(safe-area-inset-bottom,0px))] sm:px-6 sm:pb-3.5">
               <button
                 type="button"
-                className="inline-flex h-9 cursor-pointer items-center rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-3.5 text-[13px] font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-45"
+                className="inline-flex h-11 cursor-pointer items-center rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-3.5 text-[13px] font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-45 sm:h-9"
                 onClick={closeCompletely}
                 disabled={phase === 'saving'}
               >
@@ -500,7 +506,7 @@ export default function CommitModal() {
               {requiresReanalysis ? (
                 <button
                   type="button"
-                  className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-4 text-[13px] font-semibold text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-45"
+                  className="inline-flex h-11 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-4 text-[13px] font-semibold text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-45 sm:h-9"
                   onClick={() => {
                     void analyze(Array.from(enabledSections))
                   }}
@@ -512,7 +518,7 @@ export default function CommitModal() {
               ) : (
                 <button
                   type="button"
-                  className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-4 text-[13px] font-semibold text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-45"
+                  className="inline-flex h-11 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-4 text-[13px] font-semibold text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-45 sm:h-9"
                   onClick={() => {
                     void handleSave()
                   }}

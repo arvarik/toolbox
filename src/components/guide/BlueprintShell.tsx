@@ -865,7 +865,7 @@ export default function BlueprintShell({
                 </div>
 
                 <div className="min-w-0 flex-1">
-                  <div className="blueprint-section-header-row pr-6">
+                  <div className="blueprint-section-header-row flex-wrap pr-8 sm:pr-6">
                     <h3
                       className="blueprint-section-title font-serif"
                       onClick={() => toggleSection(section.id)}
@@ -887,17 +887,19 @@ export default function BlueprintShell({
                       <div className="blueprint-edit-actions">
                         <button
                           type="button"
-                          className="btn btn-ghost btn-icon btn-sm h-[26px] w-[26px]"
+                          className="btn btn-ghost btn-icon btn-sm h-9 w-9 sm:h-[26px] sm:w-[26px]"
                           onClick={() => startEdit(section.id)}
                           title="Edit content"
+                          aria-label={`Edit ${section.name}`}
                         >
                           <Edit3 size={12} />
                         </button>
                         <button
                           type="button"
-                          className="btn btn-ghost btn-icon btn-sm h-[26px] w-[26px] text-[var(--color-err)]"
+                          className="btn btn-ghost btn-icon btn-sm h-9 w-9 text-[var(--color-err)] sm:h-[26px] sm:w-[26px]"
                           onClick={() => clearSection(section.id)}
                           title="Clear section"
+                          aria-label={`Clear ${section.name}`}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -907,7 +909,7 @@ export default function BlueprintShell({
                     {!hasContent && !isEditing && (
                       <button
                         type="button"
-                        className="btn btn-ghost btn-sm blueprint-add-notes-btn"
+                        className="btn btn-ghost btn-sm blueprint-add-notes-btn min-h-[36px] sm:min-h-0"
                         onClick={() => startEdit(section.id)}
                         title="Add notes manually"
                       >

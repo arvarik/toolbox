@@ -741,7 +741,9 @@ export default function FlashcardReviewModal({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        padding: isMobile ? 0 : 'var(--space-4)',
+        padding: isMobile
+          ? 0
+          : 'max(var(--space-4), env(safe-area-inset-top, 0px)) max(var(--space-4), env(safe-area-inset-right, 0px)) max(var(--space-4), env(safe-area-inset-bottom, 0px)) max(var(--space-4), env(safe-area-inset-left, 0px))',
       }}
       onClick={(e) => {
         if (e.target === e.currentTarget && !isSaving) onClose()
@@ -755,8 +757,10 @@ export default function FlashcardReviewModal({
           border: isMobile ? 'none' : '1px solid var(--color-border)',
           width: '100%',
           maxWidth: isMobile ? '100%' : 640,
-          height: isMobile ? '100%' : 'auto',
-          maxHeight: isMobile ? '100%' : '90vh',
+          height: isMobile ? '100dvh' : 'auto',
+          maxHeight: isMobile ? '100dvh' : '90dvh',
+          paddingLeft: isMobile ? 'env(safe-area-inset-left, 0px)' : undefined,
+          paddingRight: isMobile ? 'env(safe-area-inset-right, 0px)' : undefined,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -768,7 +772,9 @@ export default function FlashcardReviewModal({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: isMobile ? 'var(--space-4)' : 'var(--space-5) var(--space-6)',
+            padding: isMobile
+              ? 'calc(var(--space-3) + env(safe-area-inset-top, 0px)) var(--space-4) var(--space-3)'
+              : 'var(--space-5) var(--space-6)',
             borderBottom: '1px solid var(--color-border)',
             flexShrink: 0,
           }}
@@ -819,7 +825,8 @@ export default function FlashcardReviewModal({
             className="btn btn-ghost btn-icon"
             onClick={onClose}
             disabled={isSaving}
-            style={{ width: 36, height: 36, flexShrink: 0 }}
+            aria-label="Close flashcard review"
+            style={{ width: isMobile ? 44 : 36, height: isMobile ? 44 : 36, flexShrink: 0 }}
           >
             <X size={18} />
           </button>
@@ -995,7 +1002,9 @@ export default function FlashcardReviewModal({
 
         <div
           style={{
-            padding: isMobile ? 'var(--space-3) var(--space-4)' : 'var(--space-4) var(--space-6)',
+            padding: isMobile
+              ? 'var(--space-3) var(--space-4) calc(var(--space-3) + env(safe-area-inset-bottom, 0px))'
+              : 'var(--space-4) var(--space-6)',
             borderTop: '1px solid var(--color-border)',
             display: 'flex',
             flexDirection: 'column',
