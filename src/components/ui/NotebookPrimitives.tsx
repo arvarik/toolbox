@@ -316,12 +316,28 @@ function onSharedMouseDown(e: MouseEvent): void {
 }
 
 function onSharedPointerDown(e: PointerEvent): void {
-  if (isHighlightToolbarTarget(e.target) || e.pointerType !== 'mouse') return
+  if (isHighlightToolbarTarget(e.target)) return
+  if (e.pointerType !== 'mouse') {
+    isMouseDragging = false
+    return
+  }
   const button = typeof e.button === 'number' ? e.button : 0
   const buttons = typeof e.buttons === 'number' ? e.buttons : 0
   if (button === 0 || (buttons & 1) === 1) {
     isMouseDragging = true
     clearSharedSelectionTimer()
+  }
+}
+
+function onSharedTouchStart(e: TouchEvent): void {
+  if (isHighlightToolbarTarget(e.target)) return
+  isMouseDragging = false
+}
+
+function onSharedMouseMove(e: MouseEvent): void {
+  if (!isMouseDragging) return
+  if (typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+    finishSharedMouseDrag()
   }
 }
 
@@ -347,6 +363,13 @@ function onSharedWindowBlur(): void {
   clearSharedSelectionTimer()
 }
 
+function onSharedVisibilityChange(): void {
+  if (document.hidden) {
+    isMouseDragging = false
+    clearSharedSelectionTimer()
+  }
+}
+
 function onSharedSelectionChange(): void {
   if (isMouseDragging) {
     clearSharedSelectionTimer()
@@ -369,6 +392,9 @@ function attachSharedHighlightListeners(): void {
   document.addEventListener('selectionchange', onSharedSelectionChange)
   document.addEventListener('mousedown', onSharedMouseDown, true)
   document.addEventListener('pointerdown', onSharedPointerDown, true)
+  document.addEventListener('touchstart', onSharedTouchStart, true)
+  document.addEventListener('visibilitychange', onSharedVisibilityChange)
+  window.addEventListener('mousemove', onSharedMouseMove, true)
   window.addEventListener('mouseup', finishSharedMouseDrag, true)
   window.addEventListener('pointerup', finishSharedMouseDrag, true)
   window.addEventListener('pointercancel', finishSharedMouseDrag, true)
@@ -387,6 +413,9 @@ function detachSharedHighlightListeners(): void {
   document.removeEventListener('selectionchange', onSharedSelectionChange)
   document.removeEventListener('mousedown', onSharedMouseDown, true)
   document.removeEventListener('pointerdown', onSharedPointerDown, true)
+  document.removeEventListener('touchstart', onSharedTouchStart, true)
+  document.removeEventListener('visibilitychange', onSharedVisibilityChange)
+  window.removeEventListener('mousemove', onSharedMouseMove, true)
   window.removeEventListener('mouseup', finishSharedMouseDrag, true)
   window.removeEventListener('pointerup', finishSharedMouseDrag, true)
   window.removeEventListener('pointercancel', finishSharedMouseDrag, true)

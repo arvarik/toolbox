@@ -679,6 +679,44 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
     // Releasing mouse button immediately renders the highlight toolbar
     fireEvent.mouseUp(proseEl, { button: 0, buttons: 0 })
     expect(screen.getByTestId('highlight-selection-toolbar')).toBeInTheDocument()
+
+    // Edge case A (outside-viewport release + subsequent touch): mousedown with NO mouseup/blur
+    // recovers cleanly when a touch pointerdown arrives on a hybrid touchscreen.
+    sel.removeAllRanges()
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(200)
+    })
+    expect(screen.queryByTestId('highlight-selection-toolbar')).toBeNull()
+
+    fireEvent.mouseDown(proseEl, { button: 0, buttons: 1 })
+    fireEvent.pointerDown(proseEl, { pointerType: 'touch' })
+    sel.addRange(range)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(200)
+    })
+    expect(screen.getByTestId('highlight-selection-toolbar')).toBeInTheDocument()
+
+    // Edge case B (outside-viewport release + cursor re-entry): mousedown with NO mouseup/blur
+    // recovers immediately when mousemove sees buttons === 0.
+    sel.removeAllRanges()
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(200)
+    })
+    expect(screen.queryByTestId('highlight-selection-toolbar')).toBeNull()
+
+    fireEvent.mouseDown(proseEl, { button: 0, buttons: 1 })
+    sel.addRange(range)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(250)
+    })
+    expect(screen.queryByTestId('highlight-selection-toolbar')).toBeNull()
+    fireEvent.mouseMove(window, { buttons: 0 })
+    expect(screen.getByTestId('highlight-selection-toolbar')).toBeInTheDocument()
+
     sel.removeAllRanges()
     unmountProse()
 
@@ -756,6 +794,68 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
 
     fireEvent.mouseUp(msgEl, { button: 0, buttons: 0 })
     expect(document.getElementById('flashcard-popup')).not.toBeNull()
+
+    // Outside-viewport release recovery in LearningChat:
+    // (a) touch pointerdown clears stuck mouse drag, (b) mousemove({ buttons: 0 }) reveals popup
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: true,
+      rangeCount: 0,
+      anchorNode: null,
+      toString: () => '',
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(350)
+    })
+    expect(document.getElementById('flashcard-popup')).toBeNull()
+
+    fireEvent.mouseDown(msgEl, { button: 0, buttons: 1 })
+    fireEvent.pointerDown(msgEl, { pointerType: 'touch' })
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      anchorNode: msgEl.firstChild ?? msgEl,
+      toString: () => 'Quorum intersection guarantees single-copy',
+      getRangeAt: () => fakeRange,
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(350)
+    })
+    expect(document.getElementById('flashcard-popup')).not.toBeNull()
+
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: true,
+      rangeCount: 0,
+      anchorNode: null,
+      toString: () => '',
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(350)
+    })
+    expect(document.getElementById('flashcard-popup')).toBeNull()
+
+    fireEvent.mouseDown(msgEl, { button: 0, buttons: 1 })
+    vi.spyOn(window, 'getSelection').mockReturnValue({
+      isCollapsed: false,
+      rangeCount: 1,
+      anchorNode: msgEl.firstChild ?? msgEl,
+      toString: () => 'Quorum intersection guarantees single-copy',
+      getRangeAt: () => fakeRange,
+      removeAllRanges: vi.fn(),
+    } as unknown as Selection)
+    act(() => {
+      document.dispatchEvent(new Event('selectionchange'))
+      vi.advanceTimersByTime(350)
+    })
+    expect(document.getElementById('flashcard-popup')).toBeNull()
+    fireEvent.mouseMove(window, { buttons: 0 })
+    expect(document.getElementById('flashcard-popup')).not.toBeNull()
+
     unmountChat()
   })
 

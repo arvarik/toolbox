@@ -548,12 +548,28 @@ export default function LearningChat({
     }
 
     const handlePointerDown = (e: PointerEvent) => {
-      if (isPopupTarget(e.target) || e.pointerType !== 'mouse') return
+      if (isPopupTarget(e.target)) return
+      if (e.pointerType !== 'mouse') {
+        isMouseDraggingRef.current = false
+        return
+      }
       const button = typeof e.button === 'number' ? e.button : 0
       const buttons = typeof e.buttons === 'number' ? e.buttons : 0
       if (button === 0 || (buttons & 1) === 1) {
         isMouseDraggingRef.current = true
         clearSelectionTimer()
+      }
+    }
+
+    const handleTouchStart = (e: TouchEvent) => {
+      if (isPopupTarget(e.target)) return
+      isMouseDraggingRef.current = false
+    }
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isMouseDraggingRef.current) return
+      if (typeof e.buttons === 'number' && (e.buttons & 1) === 0) {
+        finishMouseDrag()
       }
     }
 
@@ -586,6 +602,13 @@ export default function LearningChat({
       clearSelectionTimer()
     }
 
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        isMouseDraggingRef.current = false
+        clearSelectionTimer()
+      }
+    }
+
     const handleSelectionChange = () => {
       if (popupInteractingRef.current || isMouseDraggingRef.current) {
         clearSelectionTimer()
@@ -608,8 +631,11 @@ export default function LearningChat({
     }
     document.addEventListener('mousedown', handleMouseDown, true)
     document.addEventListener('pointerdown', handlePointerDown, true)
+    document.addEventListener('touchstart', handleTouchStart, true)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     document.addEventListener('mouseup', handleDirectMouseUp)
     document.addEventListener('selectionchange', handleSelectionChange)
+    window.addEventListener('mousemove', handleMouseMove, true)
     window.addEventListener('mouseup', finishMouseDrag, true)
     window.addEventListener('pointerup', finishMouseDrag, true)
     window.addEventListener('pointercancel', finishMouseDrag, true)
@@ -625,8 +651,11 @@ export default function LearningChat({
       isMouseDraggingRef.current = false
       document.removeEventListener('mousedown', handleMouseDown, true)
       document.removeEventListener('pointerdown', handlePointerDown, true)
+      document.removeEventListener('touchstart', handleTouchStart, true)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
       document.removeEventListener('mouseup', handleDirectMouseUp)
       document.removeEventListener('selectionchange', handleSelectionChange)
+      window.removeEventListener('mousemove', handleMouseMove, true)
       window.removeEventListener('mouseup', finishMouseDrag, true)
       window.removeEventListener('pointerup', finishMouseDrag, true)
       window.removeEventListener('pointercancel', finishMouseDrag, true)
