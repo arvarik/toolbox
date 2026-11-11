@@ -1,7 +1,7 @@
 import net from "node:net";
 import type { Request, Response, NextFunction } from "express";
-import { AppError } from "./errors.ts";
-import { isOwnOrigin } from "./originAndFetch.ts";
+import { AppError, isApiSurface } from "./errors.ts";
+import { isOwnOrigin, validatePublicUrl } from "./originAndFetch.ts";
 
 interface HostConfig {
   key: string;
@@ -11,16 +11,28 @@ interface HostConfig {
 
 let cached: HostConfig | null = null;
 
+function isValidPort(portStr: string): boolean {
+  if (!/^\d{1,5}$/.test(portStr)) return false;
+  const port = Number(portStr);
+  return port >= 1 && port <= 65535;
+}
+
 function stripBracketsAndPort(raw: string): string {
   const trimmed = raw.trim().toLowerCase();
   if (!trimmed) return "";
   if (trimmed.startsWith("[")) {
     const close = trimmed.indexOf("]");
-    return close === -1 ? "" : trimmed.slice(1, close);
+    if (close === -1) return "";
+    const rest = trimmed.slice(close + 1);
+    if (rest !== "" && (!rest.startsWith(":") || !isValidPort(rest.slice(1)))) {
+      return "";
+    }
+    return trimmed.slice(1, close);
   }
   const firstColon = trimmed.indexOf(":");
   const lastColon = trimmed.lastIndexOf(":");
   if (firstColon !== -1 && firstColon === lastColon) {
+    if (!isValidPort(trimmed.slice(firstColon + 1))) return "";
     return trimmed.slice(0, firstColon);
   }
   return trimmed;
@@ -67,21 +79,17 @@ export function __resetHostGuard(): void {
 
 export function isHostAllowed(hostHeader: string | undefined): boolean {
   if (!hostHeader) return true;
+  if (hostHeader.includes(",")) return false;
   const name = stripBracketsAndPort(hostHeader);
   if (!name) return false;
-  if (net.isIP(name) !== 0) return true;
+  const ipKind = net.isIP(name);
+  if (hostHeader.trimStart().startsWith("[")) return ipKind === 6;
+  if (ipKind !== 0) return true;
+  if (!/^[a-z0-9._-]+$/.test(name)) return false;
   if (!name.includes(".")) return true;
   const { exact, suffixes } = getHostConfig();
   if (exact.has(name)) return true;
   return suffixes.some((s) => name.endsWith(s));
-}
-
-function isApiSurface(pathname: string): boolean {
-  return (
-    pathname === "/api" ||
-    pathname.startsWith("/api/") ||
-    pathname.startsWith("/.well-known/")
-  );
 }
 
 /**
@@ -98,6 +106,16 @@ export function hostGuard(req: Request, _res: Response, next: NextFunction): voi
   );
 }
 
+function configuredCorsOrigin(): string | null {
+  const raw = process.env.CORS_ORIGIN?.trim();
+  if (!raw || raw === "*") return null;
+  try {
+    return validatePublicUrl(raw);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * MCP Streamable HTTP Origin guard (2025-2026 MCP security specification).
  * Native CLI/desktop MCP clients send no `Origin` header and pass through.
@@ -107,7 +125,7 @@ export function hostGuard(req: Request, _res: Response, next: NextFunction): voi
  */
 export function mcpOriginGuard(
   req: Request,
-  _res: Response,
+  res: Response,
   next: NextFunction,
 ): void {
   const origin = req.headers.origin;
@@ -116,12 +134,23 @@ export function mcpOriginGuard(
   const trimmed = origin.trim();
   const isHttpScheme =
     trimmed.startsWith("http://") || trimmed.startsWith("https://");
-  const corsOrigin = process.env.CORS_ORIGIN?.trim();
 
-  if (
-    isHttpScheme &&
-    (isOwnOrigin(req, trimmed) || (Boolean(corsOrigin) && trimmed === corsOrigin))
-  ) {
+  if (isHttpScheme && isOwnOrigin(req, trimmed)) {
+    return next();
+  }
+
+  const allowedCors = configuredCorsOrigin();
+  if (isHttpScheme && allowedCors !== null && trimmed === allowedCors) {
+    res.setHeader("Access-Control-Allow-Origin", allowedCors);
+    res.vary("Origin");
+    if (req.method === "OPTIONS") {
+      res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+      res.setHeader(
+        "Access-Control-Allow-Headers",
+        "Authorization, Content-Type, Accept, MCP-Protocol-Version",
+      );
+      res.setHeader("Access-Control-Max-Age", "600");
+    }
     return next();
   }
 
@@ -132,4 +161,22 @@ export function mcpOriginGuard(
       { code: "ORIGIN_NOT_ALLOWED" },
     ),
   );
+}
+
+/**
+ * Handles CORS preflight (`OPTIONS /api/mcp`) for browser MCP clients before Bearer auth runs.
+ */
+export function mcpCorsPreflight(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  if (req.method !== "OPTIONS" || (req.path !== "/" && req.path !== "")) {
+    return next();
+  }
+  mcpOriginGuard(req, res, (err?: unknown) => {
+    if (err) return next(err);
+    res.setHeader("Allow", "POST, OPTIONS");
+    res.status(204).end();
+  });
 }

@@ -13,6 +13,7 @@ import {
   AppError,
   UpstreamTimeoutError,
   ValidationError,
+  log,
 } from "./errors.ts";
 
 const MAX_HOPS = 10;
@@ -28,6 +29,36 @@ export function trustProxyHops(
     );
   }
   return Number(value);
+}
+
+export function hasHttpsForwardedProto(req: Request): boolean {
+  const header = req.headers["x-forwarded-proto"];
+  const raw = Array.isArray(header) ? header.join(",") : header;
+  if (!raw) return false;
+  return raw.split(",").some((part) => part.trim().toLowerCase() === "https");
+}
+
+export function warnIfTlsProxyUntrusted(hops = trustProxyHops()): boolean {
+  if (hops > 0) return false;
+  for (const [name, raw] of [
+    ["PUBLIC_URL", process.env.PUBLIC_URL],
+    ["PUBLIC_ORIGIN", process.env.PUBLIC_ORIGIN],
+  ] as const) {
+    const trimmed = raw?.trim();
+    if (!trimmed) continue;
+    try {
+      if (new URL(trimmed).protocol === "https:") {
+        log.warn(
+          "security",
+          `${name} uses https:// (${trimmed}) while TRUST_PROXY_HOPS is 0; req.secure, "; Secure" session cookies, and Strict-Transport-Security will remain inactive behind a reverse proxy until TRUST_PROXY_HOPS=1 (or your proxy hop count) is set.`,
+        );
+        return true;
+      }
+    } catch {
+      // Invalid URLs are surfaced by validatePublicUrl().
+    }
+  }
+  return false;
 }
 
 const HOST_SHAPE = /^(?:\[[0-9a-fA-F:]+\]|[A-Za-z0-9.\-_]+)(?::\d{1,5})?$/;
@@ -75,18 +106,30 @@ export function oidcCallbackUrl(req: Request): string {
   return `${publicOrigin(req)}/api/auth/oidc/callback`;
 }
 
-export function isOwnOrigin(req: Request, origin: string): boolean {
-  let host: string;
+function safeConfiguredOrigin(): string | null {
+  const configured = process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN;
+  if (!configured) return null;
   try {
-    host = new URL(origin).host;
+    return validatePublicUrl(configured);
+  } catch {
+    return null;
+  }
+}
+
+export function isOwnOrigin(req: Request, origin: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
   } catch {
     return false;
   }
-  const configured = process.env.PUBLIC_URL || process.env.PUBLIC_ORIGIN;
-  return (
-    host === (req.host ?? "").toLowerCase() ||
-    origin === validatePublicUrl(configured)
-  );
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return false;
+  }
+  const configuredOrigin = safeConfiguredOrigin();
+  if (configuredOrigin !== null && origin === configuredOrigin) return true;
+  if (req.secure && parsed.protocol !== "https:") return false;
+  return parsed.host === (req.host ?? "").toLowerCase();
 }
 
 export function mailLinkOrigin(): string | null {

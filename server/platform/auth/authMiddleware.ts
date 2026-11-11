@@ -64,19 +64,14 @@ function readCookie(req: Request, name: string): string | null {
   return null;
 }
 
-function isHttps(req: Request): boolean {
-  if (req.secure) return true;
-  const forwarded = req.headers["x-forwarded-proto"];
-  const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  return typeof value === "string" && value.split(",")[0].trim() === "https";
-}
-
 function cookieAttributes(
   req: Request,
   maxAgeSeconds: number | null,
   path = "/",
 ): string {
-  const secure = isHttps(req) ? "; Secure" : "";
+  // Relies on req.secure (honoring TRUST_PROXY_HOPS) rather than raw X-Forwarded-Proto;
+  // createApp() warns at startup and once at runtime if TLS proxy headers arrive with TRUST_PROXY_HOPS=0.
+  const secure = req.secure ? "; Secure" : "";
   const maxAge = maxAgeSeconds !== null ? `; Max-Age=${maxAgeSeconds}` : "";
   return `HttpOnly; SameSite=Lax; Path=${path}${secure}${maxAge}`;
 }
@@ -247,7 +242,7 @@ export function requirePasswordCurrent(
   const user = req.principal?.user;
   if (!user || user.mustChangePassword !== 1) return next();
 
-  const pathOnly = req.originalUrl.split("?")[0];
+  const pathOnly = trimTrailingSlashes(req.originalUrl.split("?")[0].toLowerCase());
   if (
     PASSWORD_CHANGE_EXEMPT.has(pathOnly) ||
     (pathOnly === "/api/auth/me" && READ_METHODS.has(req.method))

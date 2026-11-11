@@ -5,9 +5,13 @@ import { isBackgroundJobsDisabled } from "./appConfig.ts";
 import db from "./db.ts";
 import { ensureLocalOwner } from "./platform/db/connection.ts";
 import {
+  assertJsonDepth,
   attachRequestId,
   errorHandler,
+  isApiSurface,
+  log,
   notFoundHandler,
+  safeJsonReviver,
   securityHeaders,
 } from "./platform/net/errors.ts";
 import { gzipCompression } from "./platform/net/compression.ts";
@@ -15,8 +19,12 @@ import {
   createCostRateLimiters,
   createRateLimiter,
 } from "./platform/net/rateLimit.ts";
-import { trustProxyHops } from "./platform/net/originAndFetch.ts";
-import { hostGuard } from "./platform/net/hostGuard.ts";
+import {
+  hasHttpsForwardedProto,
+  trustProxyHops,
+  warnIfTlsProxyUntrusted,
+} from "./platform/net/originAndFetch.ts";
+import { hostGuard, mcpCorsPreflight } from "./platform/net/hostGuard.ts";
 import { attachRequestContext } from "./platform/tenancy/scope.ts";
 import { countPasswordAccounts } from "./platform/auth/authService.ts";
 import {
@@ -75,9 +83,12 @@ const aiCostLimiters = createCostRateLimiters([
   /^\/api\/calculator\/audit$/,
 ]);
 
+let proxyWarnEpoch = 0;
+
 export function __resetAppRateLimits(): void {
   apiRateLimit.reset();
   aiCostLimiters.reset();
+  proxyWarnEpoch++;
 }
 
 export function createApp(): Express {
@@ -90,14 +101,40 @@ export function createApp(): Express {
   seedApiKeysFromEnv();
 
   const app = express();
+  app.disable("x-powered-by");
   const isProduction = process.env.NODE_ENV === "production";
 
-  app.set("trust proxy", trustProxyHops());
+  const proxyHops = trustProxyHops();
+  app.set("trust proxy", proxyHops);
+  warnIfTlsProxyUntrusted(proxyHops);
+  let warnedUntrustedProxyEpoch = -1;
+  app.use((req, _res, next) => {
+    if (
+      warnedUntrustedProxyEpoch !== proxyWarnEpoch &&
+      !req.secure &&
+      proxyHops === 0 &&
+      trustProxyHops() === 0 &&
+      hasHttpsForwardedProto(req)
+    ) {
+      warnedUntrustedProxyEpoch = proxyWarnEpoch;
+      log.warn(
+        "security",
+        "Received X-Forwarded-Proto: https while TRUST_PROXY_HOPS is 0; ignoring untrusted header. Set TRUST_PROXY_HOPS=1 (or your proxy hop count) if Toolbox runs behind a trusted TLS reverse proxy so session cookies receive '; Secure' and Strict-Transport-Security.",
+      );
+    }
+    next();
+  });
   app.use(attachRequestId);
   app.use(securityHeaders);
   app.use(hostGuard);
   app.use(gzipCompression);
-  app.use(express.json({ limit: "10mb" }));
+  app.use(
+    express.json({
+      limit: "10mb",
+      verify: (_req, _res, buf) => assertJsonDepth(buf),
+      reviver: safeJsonReviver,
+    }),
+  );
 
   app.get("/api/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
@@ -112,6 +149,7 @@ export function createApp(): Express {
   app.use(refuseCrossSiteWrites);
 
   app.use("/api/auth", authRouter);
+  app.use("/api/mcp", mcpCorsPreflight);
   mountMcpRoutes(app);
   app.use("/api/admin", requireAdmin, requirePasswordCurrent, adminRouter);
 
@@ -151,10 +189,12 @@ export function createApp(): Express {
       express.static(path.join(distPath, "assets"), {
         maxAge: "1y",
         immutable: true,
+        dotfiles: "deny",
       }),
     );
     app.use(
       express.static(distPath, {
+        dotfiles: "deny",
         setHeaders: (res, filePath) => {
           if (path.basename(filePath) === "index.html") {
             res.setHeader("Cache-Control", "no-cache");
@@ -163,11 +203,7 @@ export function createApp(): Express {
       }),
     );
     app.get("*all", (req, res, next) => {
-      if (
-        req.path === "/api" ||
-        req.path.startsWith("/api/") ||
-        req.path.startsWith("/.well-known/")
-      ) {
+      if (isApiSurface(req.path)) {
         notFoundHandler(req, res, next);
         return;
       }

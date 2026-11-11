@@ -21,11 +21,14 @@ export default defineConfig({
   },
   server: {
     port: 5173,
-    host: true,
+    host: process.env.VITE_DEV_HOST || true,
+    allowedHosts: [".local"],
     proxy: {
       "/api": {
         target: "http://localhost:3100",
-        changeOrigin: true,
+        // Preserve the client's real Host header so Express hostGuard rejects
+        // DNS-rebinding domains while LAN IP / .local Origin===Host writes work.
+        changeOrigin: false,
       },
     },
     fs: {
@@ -45,6 +48,9 @@ export default defineConfig({
       ],
     },
   },
+  preview: {
+    host: process.env.VITE_DEV_HOST || "127.0.0.1",
+  },
   build: {
     outDir: "dist",
     sourcemap: false,
@@ -56,6 +62,7 @@ export default defineConfig({
     globals: true,
     environment: "jsdom",
     setupFiles: "./vitest.setup.ts",
+    testTimeout: 15_000,
     exclude: [
       ...configDefaults.exclude,
       "tests/e2e/**",
