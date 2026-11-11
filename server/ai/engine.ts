@@ -29,6 +29,12 @@ const STREAM_TIMEOUT_MS = 600_000;
 const MAX_TOOL_STEPS = 8;
 const MAX_RETRY_TOKENS = 32_768;
 const MAX_STRUCTURED_MODES = 256;
+export const MAX_SINGLE_MESSAGE_CHARS = 120_000;
+const MAX_HISTORY_TURN_CHARS = 64_000;
+const DEFAULT_HISTORY_BUDGET_CHARS = 200_000;
+const MIN_TRUNCATED_HISTORY_CHARS = 2_000;
+const HISTORY_OMISSION_MARKER =
+  "\n\n[... earlier turn middle omitted for context budget ...]\n\n";
 
 // A stream that starts and then goes silent this long is cut off, instead of
 // holding the request until STREAM_TIMEOUT_MS.
@@ -40,6 +46,199 @@ export function __setStreamIdleTimeoutMs(ms: number): void {
 
 // Suppress AI SDK console warning when Rung 2 intentionally pairs json_object mode with Output.object
 (globalThis as { AI_SDK_LOG_WARNINGS?: boolean }).AI_SDK_LOG_WARNINGS = false;
+
+const SECRET_PATTERNS: Array<[RegExp, string]> = [
+  [/([?&](?:key|api_key|apikey|token|secret)=)[^&\s"']+/gi, "$1[redacted]"],
+  [/\b(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}/gi, "$1[redacted]"],
+  [/\bAIza[0-9A-Za-z_-]{20,}\b/g, "AIza[redacted]"],
+  [/\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{16,}\b/g, "sk-[redacted]"],
+];
+
+export function redactAiErrorMessage(raw: string): string {
+  let out = raw;
+  for (const [pattern, replacement] of SECRET_PATTERNS) {
+    out = out.replace(pattern, replacement);
+  }
+  return out;
+}
+
+function sanitizeThrownAiError(err: unknown, seen = new Set<unknown>()): unknown {
+  if (!err || typeof err !== "object" || seen.has(err)) return err;
+  seen.add(err);
+  const e = err as {
+    message?: unknown;
+    stack?: unknown;
+    cause?: unknown;
+    lastError?: unknown;
+  };
+  if (typeof e.message === "string") {
+    try {
+      e.message = redactAiErrorMessage(e.message);
+    } catch {
+      // Read-only getter on exotic Error subclass
+    }
+  }
+  if (typeof e.stack === "string") {
+    try {
+      e.stack = redactAiErrorMessage(e.stack);
+    } catch {
+      // Ignore read-only stack
+    }
+  }
+  if (e.cause) sanitizeThrownAiError(e.cause, seen);
+  if (e.lastError) sanitizeThrownAiError(e.lastError, seen);
+  return err;
+}
+
+function unwrapUpstreamProviderError(err: unknown): {
+  statusCode: number;
+  retryAfter?: string;
+} | null {
+  if (!err || typeof err !== "object") return null;
+  const e = err as {
+    name?: string;
+    statusCode?: number;
+    responseHeaders?: Record<string, string | undefined>;
+    lastError?: unknown;
+    cause?: unknown;
+  };
+  if (e.name === "AI_RetryError") return unwrapUpstreamProviderError(e.lastError);
+  if (e.name === "AI_APICallError" && typeof e.statusCode === "number") {
+    if (e.statusCode === 429 || e.statusCode >= 500) {
+      return {
+        statusCode: e.statusCode,
+        retryAfter: e.responseHeaders?.["retry-after"],
+      };
+    }
+  }
+  return e.cause ? unwrapUpstreamProviderError(e.cause) : null;
+}
+
+export function isForwardableAiError(err: unknown): boolean {
+  if (err instanceof AppError) return true;
+  if ((err as { name?: string } | null)?.name === "TimeoutError") return true;
+  return unwrapUpstreamProviderError(err) !== null;
+}
+
+export function formatStreamErrorMessage(err: unknown): string {
+  const upstream = unwrapUpstreamProviderError(err);
+  if (upstream?.statusCode === 429) {
+    return "The AI provider is rate limiting this instance. Try again shortly.";
+  }
+  if (upstream && upstream.statusCode >= 500) {
+    return `The AI provider failed with HTTP ${upstream.statusCode}. Try again shortly.`;
+  }
+  if ((err as { name?: string } | null)?.name === "TimeoutError") {
+    return "An upstream service did not answer in time. Try again shortly.";
+  }
+  const raw = err instanceof Error ? err.message : String(err);
+  return redactAiErrorMessage(raw) || "AI stream failed.";
+}
+
+export function shortenHistoricalTurn(
+  text: string,
+  maxChars: number = MAX_HISTORY_TURN_CHARS,
+): string {
+  if (text.length <= maxChars) return text;
+  const available = maxChars - HISTORY_OMISSION_MARKER.length;
+  if (available <= 0) return text.slice(0, Math.max(0, maxChars));
+  const headLen = Math.ceil(available / 2);
+  const tailLen = Math.floor(available / 2);
+  return (
+    text.slice(0, headLen) +
+    HISTORY_OMISSION_MARKER +
+    text.slice(text.length - tailLen)
+  );
+}
+
+export function clampModelMessages(
+  messages: ModelMessage[],
+  budgetChars: number = DEFAULT_HISTORY_BUDGET_CHARS,
+  opts?: { historyOnly?: boolean },
+): ModelMessage[] {
+  if (messages.length === 0) return messages;
+
+  const measure = (m: ModelMessage): number =>
+    typeof m.content === "string"
+      ? m.content.length
+      : JSON.stringify(m.content).length;
+
+  const lastIdx = messages.length - 1;
+  const protectCurrentUserTurn =
+    !opts?.historyOnly && messages[lastIdx].role === "user";
+
+  if (protectCurrentUserTurn) {
+    const currentLen = measure(messages[lastIdx]);
+    if (currentLen > MAX_SINGLE_MESSAGE_CHARS) {
+      throw new AppError(
+        `Message is too long (${currentLen.toLocaleString("en-US")} characters; maximum is ${MAX_SINGLE_MESSAGE_CHARS.toLocaleString("en-US")}). Shorten the pasted content or split it across turns.`,
+        400,
+        {
+          code: "MESSAGE_TOO_LONG",
+          details: {
+            length: currentLen,
+            maxLength: MAX_SINGLE_MESSAGE_CHARS,
+          },
+        },
+      );
+    }
+  }
+
+  const kept: ModelMessage[] = [];
+  let used = 0;
+  for (let i = lastIdx; i >= 0; i--) {
+    const item = messages[i];
+    if (i === lastIdx && protectCurrentUserTurn) {
+      kept.push(item);
+      used += measure(item);
+      continue;
+    }
+
+    const remaining = budgetChars - used;
+    if (typeof item.content === "string") {
+      const cap =
+        kept.length === 0
+          ? Math.min(
+              MAX_HISTORY_TURN_CHARS,
+              Math.max(budgetChars, HISTORY_OMISSION_MARKER.length + 200),
+            )
+          : Math.min(MAX_HISTORY_TURN_CHARS, remaining);
+
+      if (item.content.length <= cap) {
+        kept.push(item);
+        used += item.content.length;
+        continue;
+      }
+
+      if (kept.length > 0 && remaining < MIN_TRUNCATED_HISTORY_CHARS) {
+        break;
+      }
+
+      const shortened = shortenHistoricalTurn(item.content, cap);
+      kept.push({ ...item, content: shortened } as ModelMessage);
+      used += shortened.length;
+      if (used >= budgetChars) break;
+      continue;
+    }
+
+    const len = measure(item);
+    if (kept.length > 0 && used + len > budgetChars) break;
+    kept.push(item);
+    used += len;
+  }
+  kept.reverse();
+
+  // Keep conversation starting on a user turn when older history was trimmed,
+  // so strict alternating providers (Gemini/Anthropic) and OpenAI tool-call pairing
+  // never see a leading assistant turn or an orphaned leading tool-result turn.
+  while (
+    kept.length > 1 &&
+    (kept[0].role === "assistant" || kept[0].role === "tool")
+  ) {
+    kept.shift();
+  }
+  return kept;
+}
 
 const MODEL_FACTORIES: Record<
   "gemini" | "claude" | "openai",
@@ -85,15 +284,13 @@ function buildLanguageModelFromDescriptor(
       baseURL: desc.baseUrl,
       apiKey: desc.apiKey || undefined,
       supportsStructuredOutputs,
-      // A user's endpoint was checked when saved; DNS and redirects can change, so check every call.
-      ...(desc.keySource === "byok"
-        ? {
-            fetch: guardedFetch({
-              allowPrivate: desc.allowPrivate,
-              timeoutMs: STREAM_TIMEOUT_MS,
-            }),
-          }
-        : {}),
+      // Always route OpenAI-compatible traffic through guardedFetch: BYOK blocks all private/RFC1918
+      // hosts (unless ALLOW_PRIVATE_BYOK_ENDPOINTS=true), and admin/instance endpoints still block
+      // cloud metadata IPs (169.254.169.254 / fd00:ec2::254) and strip Authorization on cross-origin redirects.
+      fetch: guardedFetch({
+        allowPrivate: desc.allowPrivate,
+        timeoutMs: STREAM_TIMEOUT_MS,
+      }),
     });
     return provider.chatModel(desc.upstreamModelId);
   }
@@ -141,24 +338,58 @@ function finishStructuredCall(
   }
 }
 
-function isReasoningExhausted(result: {
-  text: string;
-  finishReason?: string;
-  reasoningText?: string;
-  usage?: unknown;
-}): boolean {
-  if (result.text.trim() !== "") return false;
-  if (result.finishReason === "length") return true;
-  if (result.reasoningText && result.reasoningText.trim() !== "") return true;
-  const usage = result.usage as
+function readReasoningTokens(usage: unknown): number {
+  const u = usage as
     | {
         reasoningTokens?: number;
         outputTokenDetails?: { reasoningTokens?: number };
       }
     | undefined;
-  const reasoningTokens =
-    usage?.reasoningTokens ?? usage?.outputTokenDetails?.reasoningTokens ?? 0;
-  return reasoningTokens > 0;
+  return u?.reasoningTokens ?? u?.outputTokenDetails?.reasoningTokens ?? 0;
+}
+
+function isReasoningExhausted(result: {
+  text?: string;
+  finishReason?: string;
+  reasoningText?: string;
+  usage?: unknown;
+}): boolean {
+  if ((result.text ?? "").trim() !== "") return false;
+  if (result.finishReason === "length") return true;
+  if (result.reasoningText && result.reasoningText.trim() !== "") return true;
+  return readReasoningTokens(result.usage) > 0;
+}
+
+function isLengthTruncatedError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { finishReason?: string; cause?: unknown };
+  if (e.finishReason === "length") return true;
+  return e.cause ? isLengthTruncatedError(e.cause) : false;
+}
+
+function isReasoningExhaustedError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as {
+    text?: string;
+    finishReason?: string;
+    reasoningText?: string;
+    usage?: unknown;
+    cause?: unknown;
+  };
+  if (
+    (e.finishReason !== undefined ||
+      e.usage !== undefined ||
+      e.reasoningText !== undefined) &&
+    isReasoningExhausted({
+      text: typeof e.text === "string" ? e.text : "",
+      finishReason: e.finishReason,
+      reasoningText: e.reasoningText,
+      usage: e.usage,
+    })
+  ) {
+    return true;
+  }
+  return e.cause ? isReasoningExhaustedError(e.cause) : false;
 }
 
 function throwReasoningExhausted(modelId: string, maxTokens: number): never {
@@ -192,75 +423,173 @@ export async function runText({
     scope,
     capability,
   });
+  const boundedMessages = messages ? clampModelMessages(messages) : undefined;
   const startedAt = Date.now();
+  let effectiveMaxTokens = maxOutputTokens;
 
-  let result = await generateText({
-    model: languageModel,
-    system,
-    ...(messages ? { messages } : { prompt: prompt ?? "" }),
-    maxOutputTokens,
-    abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-  });
-
-  if (isReasoningExhausted(result)) {
-    const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
-    logger.warn(
-      `[ai] ${feature} reasoning budget exhausted at ${maxOutputTokens} tokens (model=${modelId}); retrying with ${retryTokens}`,
-    );
+  let result;
+  try {
     result = await generateText({
       model: languageModel,
       system,
-      ...(messages ? { messages } : { prompt: prompt ?? "" }),
-      maxOutputTokens: retryTokens,
+      ...(boundedMessages ? { messages: boundedMessages } : { prompt: prompt ?? "" }),
+      maxOutputTokens,
       abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
     });
+
     if (isReasoningExhausted(result)) {
-      throwReasoningExhausted(modelId, retryTokens);
+      const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
+      if (retryTokens > maxOutputTokens) {
+        effectiveMaxTokens = retryTokens;
+        logger.warn(
+          `[ai] ${feature} reasoning budget exhausted at ${maxOutputTokens} tokens (model=${modelId}); retrying with ${retryTokens}`,
+        );
+        result = await generateText({
+          model: languageModel,
+          system,
+          ...(boundedMessages ? { messages: boundedMessages } : { prompt: prompt ?? "" }),
+          maxOutputTokens: retryTokens,
+          abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        });
+      }
+      if (isReasoningExhausted(result)) {
+        throwReasoningExhausted(modelId, effectiveMaxTokens);
+      }
     }
+  } catch (err) {
+    throw sanitizeThrownAiError(err);
   }
 
   logCall(feature, modelId, result.usage, result.finishReason, startedAt);
   if (result.finishReason === "length") {
     logger.warn(
-      `[ai] ${feature} output was truncated at ${maxOutputTokens} tokens (model=${modelId})`,
+      `[ai] ${feature} output was truncated at ${effectiveMaxTokens} tokens (model=${modelId})`,
     );
   }
   return result.text;
 }
 
-function shouldDowngradeStructuredRung(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
+function extractUpstreamHttpStatus(
+  err: unknown,
+  seen = new Set<unknown>(),
+): number | undefined {
+  if (!err || typeof err !== "object" || seen.has(err)) return undefined;
+  seen.add(err);
   const e = err as {
-    statusCode?: number;
-    name?: string;
-    message?: string;
+    statusCode?: unknown;
+    lastError?: unknown;
     cause?: unknown;
   };
-  if (e.name === "AbortError" || e.name === "TimeoutError") return false;
+  if (typeof e.statusCode === "number") return e.statusCode;
+  return (
+    extractUpstreamHttpStatus(e.lastError, seen) ??
+    extractUpstreamHttpStatus(e.cause, seen)
+  );
+}
+
+const NON_DOWNGRADABLE_ERROR_RE =
+  /api[_ -]?key[_ -]?invalid|api key not valid|invalid[_ -]?api[_ -]?key|incorrect api key|\bunauthorized\b|permission[_ -]?denied|\bsafety\b|content[_ -]?filter|blocked due to|candidate was blocked|\brecitation\b|prohibited[_ -]?content|context[_ -]?length|maximum context|too many tokens|prompt is too long|input is too long|insufficient[_ -]?quota|\bbilling\b|quota exceeded|credit balance is too low|resource[_ -]?exhausted/i;
+
+const STRUCTURED_INCOMPATIBLE_RE =
+  /response_format|response_?schema|response_mime_type|json_schema|json_object|json mode|structured[ _-]?outputs?|invalid schema|schema.*not supported|tool_choice|guided_json|\bgrammar\b/i;
+
+function hasNonDowngradableFailure(
+  err: unknown,
+  seen = new Set<unknown>(),
+): boolean {
+  if (!err || typeof err !== "object" || seen.has(err)) return false;
+  seen.add(err);
+  if (err instanceof AppError) return true;
+  const e = err as {
+    statusCode?: unknown;
+    name?: unknown;
+    finishReason?: unknown;
+    message?: unknown;
+    responseBody?: unknown;
+    lastError?: unknown;
+    cause?: unknown;
+  };
   if (
-    e.statusCode === 401 ||
-    e.statusCode === 403 ||
-    e.statusCode === 429 ||
-    (typeof e.statusCode === "number" && e.statusCode >= 500)
-  ) {
-    return false;
-  }
-  if (e.statusCode === 400 || e.statusCode === 422) return true;
-  if (
-    typeof e.name === "string" &&
-    /NoObjectGenerated|JSONParse|TypeValidation/i.test(e.name)
+    e.name === "AbortError" ||
+    e.name === "TimeoutError" ||
+    e.name === "AI_LoadAPIKeyError"
   ) {
     return true;
   }
-  const msg = e.message ?? "";
   if (
-    /response_format|json_schema|json_object|structured|no object generated|could not parse/i.test(
-      msg,
+    typeof e.finishReason === "string" &&
+    /^(length|content-filter|safety|recitation|prohibited_content|blocklist|spii)$/i.test(
+      e.finishReason,
     )
   ) {
     return true;
   }
-  return e.cause ? shouldDowngradeStructuredRung(e.cause) : false;
+  if (
+    typeof e.statusCode === "number" &&
+    (e.statusCode === 401 ||
+      e.statusCode === 403 ||
+      e.statusCode === 404 ||
+      e.statusCode === 408 ||
+      e.statusCode === 429 ||
+      e.statusCode >= 500)
+  ) {
+    return true;
+  }
+  const detail = `${typeof e.message === "string" ? e.message : ""}\n${typeof e.responseBody === "string" ? e.responseBody : ""}`;
+  if (NON_DOWNGRADABLE_ERROR_RE.test(detail)) return true;
+  return (
+    hasNonDowngradableFailure(e.lastError, seen) ||
+    hasNonDowngradableFailure(e.cause, seen)
+  );
+}
+
+export function shouldDowngradeStructuredRung(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  // Never mistake token-limit truncation, auth/API-key errors, safety blocks, context-window
+  // overflows, billing/quota limits, or upstream rate-limit/5xx/404 errors for schema rejection.
+  if (
+    isLengthTruncatedError(err) ||
+    unwrapUpstreamProviderError(err) !== null ||
+    hasNonDowngradableFailure(err)
+  ) {
+    return false;
+  }
+
+  const httpStatus = extractUpstreamHttpStatus(err);
+  const seen = new Set<unknown>();
+
+  const matchesStructuredRejection = (node: unknown): boolean => {
+    if (!node || typeof node !== "object" || seen.has(node)) return false;
+    seen.add(node);
+    const e = node as {
+      name?: unknown;
+      message?: unknown;
+      responseBody?: unknown;
+      lastError?: unknown;
+      cause?: unknown;
+    };
+    const detail = `${typeof e.message === "string" ? e.message : ""}\n${typeof e.responseBody === "string" ? e.responseBody : ""}`;
+    if (STRUCTURED_INCOMPATIBLE_RE.test(detail)) return true;
+    if (
+      typeof e.name === "string" &&
+      /UnsupportedFunctionality/i.test(e.name)
+    ) {
+      return true;
+    }
+    if (
+      httpStatus === undefined &&
+      typeof e.name === "string" &&
+      /NoObjectGenerated|JSONParse|TypeValidation/i.test(e.name)
+    ) {
+      return true;
+    }
+    return (
+      matchesStructuredRejection(e.lastError) ||
+      matchesStructuredRejection(e.cause)
+    );
+  };
+
+  return matchesStructuredRejection(err);
 }
 
 /** Appends the JSON Schema instruction to `system` (or uses it alone). */
@@ -287,27 +616,366 @@ function withJsonSchemaInstruction(
   return system ? `${system}\n\n${instruction}` : instruction;
 }
 
-function extractJsonPayload(raw: string): unknown {
-  let cleaned = raw.trim();
-  const fenceMatch = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  if (fenceMatch) {
-    cleaned = fenceMatch[1].trim();
-  } else {
-    const anyFence = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
-    if (anyFence) cleaned = anyFence[1].trim();
+const OPEN_REASONING_TAG_RE = /^<(think|thinking|reasoning|thought)\b[^>]*>/i;
+
+function stripReasoningBlocks(raw: string): string {
+  // 1. Strip anchored leading closed <think>...</think> blocks (even if thoughts contain unbalanced quotes).
+  let current = raw.trim();
+  const leadingClosedRe =
+    /^\s*<(think|thinking|reasoning|thought)\b[^>]*>[\s\S]*?<\/\1\s*>\s*/i;
+  while (true) {
+    const match = current.match(leadingClosedRe);
+    if (!match) break;
+    current = current.slice(match[0].length);
   }
-  try {
-    return JSON.parse(cleaned);
-  } catch {
-    const firstBrace = cleaned.search(/[{[]/);
-    const lastBrace = Math.max(
-      cleaned.lastIndexOf("}"),
-      cleaned.lastIndexOf("]"),
-    );
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+
+  // 2. Strip any remaining reasoning blocks ONLY outside JSON string literals so literal
+  //    `<think>` / `</think>` tokens inside JSON string values are never altered or merged across fields.
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  let i = 0;
+  while (i < current.length) {
+    const ch = current[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      i++;
+      continue;
     }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === "<") {
+      const openMatch = current.slice(i).match(OPEN_REASONING_TAG_RE);
+      if (openMatch) {
+        const tag = openMatch[1];
+        const afterOpen = i + openMatch[0].length;
+        const closeRe = new RegExp(`<\\/${tag}\\s*>`, "i");
+        const closeMatch = closeRe.exec(current.slice(afterOpen));
+        if (closeMatch) {
+          i = afterOpen + closeMatch.index + closeMatch[0].length;
+          continue;
+        }
+        if (out.trim() === "") {
+          i = afterOpen;
+          continue;
+        }
+      }
+    }
+    out += ch;
+    i++;
+  }
+  return out.trim();
+}
+
+function stripTrailingCommasOutsideStrings(jsonLike: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < jsonLike.length; i++) {
+    const ch = jsonLike[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ",") {
+      let j = i + 1;
+      while (j < jsonLike.length && /\s/.test(jsonLike[j])) j++;
+      if (jsonLike[j] === "}" || jsonLike[j] === "]") {
+        continue;
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function tryParseJsonCandidate(candidate: string): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: JSON.parse(candidate) };
+  } catch {
+    try {
+      return { ok: true, value: JSON.parse(stripTrailingCommasOutsideStrings(candidate)) };
+    } catch {
+      return { ok: false };
+    }
+  }
+}
+
+type BalancedScanResult =
+  | { kind: "balanced"; slice: string }
+  | { kind: "mismatch" }
+  | { kind: "unclosed" };
+
+function scanBalancedJsonAt(
+  text: string,
+  startIdx: number,
+): BalancedScanResult {
+  const open = text[startIdx];
+  if (open !== "{" && open !== "[") return { kind: "mismatch" };
+  const stack: string[] = [open === "{" ? "}" : "]"];
+  let inString = false;
+  let escaped = false;
+
+  for (let i = startIdx + 1; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{") {
+      stack.push("}");
+    } else if (ch === "[") {
+      stack.push("]");
+    } else if (ch === "}" || ch === "]") {
+      if (stack[stack.length - 1] !== ch) return { kind: "mismatch" };
+      stack.pop();
+      if (stack.length === 0) {
+        return { kind: "balanced", slice: text.slice(startIdx, i + 1) };
+      }
+    }
+  }
+  return { kind: "unclosed" };
+}
+
+function tryParseDirectOrOuterFence(
+  trimmed: string,
+): { ok: true; value: unknown } | { ok: false } {
+  if (!trimmed) return { ok: false };
+  // 1. Fast path: pure JSON object or array
+  const direct = tryParseJsonCandidate(trimmed);
+  if (direct.ok) return direct;
+
+  // 2. Outer markdown fence only (anchored to end of string so inner ```python blocks never truncate!)
+  if (trimmed.startsWith("```") && trimmed.endsWith("```")) {
+    const firstNewline = trimmed.indexOf("\n");
+    if (firstNewline !== -1) {
+      const inner = trimmed.slice(firstNewline + 1, -3).trim();
+      const fenced = tryParseJsonCandidate(inner);
+      if (fenced.ok) return fenced;
+    }
+  }
+  return { ok: false };
+}
+
+export function extractJsonPayload(raw: string): unknown {
+  const trimmed = raw.trim();
+  if (!trimmed) {
     throw new Error("Model did not return valid JSON.");
+  }
+
+  // Attempt whole-payload / outer-fenced JSON parse BEFORE any reasoning-tag stripping
+  // so valid JSON containing literal `<think>`/`</think>` text is returned untouched.
+  const untouched = tryParseDirectOrOuterFence(trimmed);
+  if (untouched.ok) return untouched.value;
+
+  const cleaned = stripReasoningBlocks(trimmed);
+  if (!cleaned) {
+    throw new Error("Model did not return valid JSON.");
+  }
+
+  const afterStrip = tryParseDirectOrOuterFence(cleaned);
+  if (afterStrip.ok) return afterStrip.value;
+
+  // 3. Prefer a ```json fenced block when leading prose contains {placeholders}
+  const jsonFenceRegex = /```(?:json)?\s*([{[])/gi;
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = jsonFenceRegex.exec(cleaned)) !== null) {
+    const braceIdx = fenceMatch.index + fenceMatch[0].length - 1;
+    const scan = scanBalancedJsonAt(cleaned, braceIdx);
+    if (scan.kind === "unclosed") {
+      throw new Error("Model did not return valid JSON.");
+    }
+    if (scan.kind === "balanced") {
+      const parsed = tryParseJsonCandidate(scan.slice);
+      if (parsed.ok) return parsed.value;
+    }
+  }
+
+  // 4. General string-aware balanced scan across any { or [ in the response.
+  //    Abort immediately if an opening { or [ reaches EOF unclosed (depth > 0) so
+  //    truncated JSON never returns a partial inner object or array fragment.
+  for (let i = 0; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (ch === "{" || ch === "[") {
+      const scan = scanBalancedJsonAt(cleaned, i);
+      if (scan.kind === "unclosed") {
+        break;
+      }
+      if (scan.kind === "balanced") {
+        const parsed = tryParseJsonCandidate(scan.slice);
+        if (parsed.ok) return parsed.value;
+        i += scan.slice.length - 1;
+      }
+    }
+  }
+
+  throw new Error("Model did not return valid JSON.");
+}
+
+export function unwrapArrayCandidate(parsed: unknown): unknown {
+  if (Array.isArray(parsed) || !parsed || typeof parsed !== "object") {
+    return parsed;
+  }
+  const obj = parsed as Record<string, unknown>;
+  for (const key of ["elements", "items", "data", "results"]) {
+    if (Array.isArray(obj[key])) return obj[key];
+  }
+  const arrayValues = Object.values(obj).filter(Array.isArray);
+  if (arrayValues.length === 1) return arrayValues[0];
+  return parsed;
+}
+
+async function callStructuredWithLengthRetry<
+  R extends {
+    usage?: { inputTokens?: number; outputTokens?: number };
+    finishReason?: string;
+    text?: string;
+    reasoningText?: string;
+  },
+>({
+  feature,
+  modelId,
+  maxOutputTokens,
+  invoke,
+}: {
+  feature: string;
+  modelId: string;
+  maxOutputTokens: number;
+  invoke: (tokens: number) => Promise<R>;
+}): Promise<{ result: R; effectiveMaxTokens: number }> {
+  // Attempt 1: isolated try/catch so a retry below can NEVER fall into a catch that retries again.
+  let firstResult: R | undefined;
+  let firstErr: unknown;
+  try {
+    firstResult = await invoke(maxOutputTokens);
+  } catch (err) {
+    firstErr = err;
+  }
+
+  if (firstErr !== undefined) {
+    if (firstErr instanceof AppError) throw firstErr;
+    if (!isLengthTruncatedError(firstErr) && !isReasoningExhaustedError(firstErr)) {
+      throw firstErr;
+    }
+  } else if (
+    firstResult &&
+    firstResult.finishReason !== "length" &&
+    !isReasoningExhausted(firstResult)
+  ) {
+    return { result: firstResult, effectiveMaxTokens: maxOutputTokens };
+  }
+
+  const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
+  if (retryTokens <= maxOutputTokens) {
+    if (firstErr !== undefined) {
+      if (isReasoningExhaustedError(firstErr)) {
+        throwReasoningExhausted(modelId, maxOutputTokens);
+      }
+      throw new Error(
+        `The model response was cut off at ${maxOutputTokens} output tokens. Retry with a shorter input or a higher output limit.`,
+        { cause: firstErr },
+      );
+    }
+    if (firstResult && isReasoningExhausted(firstResult)) {
+      throwReasoningExhausted(modelId, maxOutputTokens);
+    }
+    return { result: firstResult!, effectiveMaxTokens: maxOutputTokens };
+  }
+
+  // Attempt 2 (at most once): doubled budget up to MAX_RETRY_TOKENS.
+  logger.warn(
+    `[ai] ${feature} structured output truncated at ${maxOutputTokens} tokens (model=${modelId}); retrying with ${retryTokens}`,
+  );
+  try {
+    const retryResult = await invoke(retryTokens);
+    if (isReasoningExhausted(retryResult)) {
+      throwReasoningExhausted(modelId, retryTokens);
+    }
+    return { result: retryResult, effectiveMaxTokens: retryTokens };
+  } catch (retryErr) {
+    if (retryErr instanceof AppError) throw retryErr;
+    if (isReasoningExhaustedError(retryErr)) {
+      throwReasoningExhausted(modelId, retryTokens);
+    }
+    if (isLengthTruncatedError(retryErr)) {
+      throw new Error(
+        `The model response was cut off at ${retryTokens} output tokens. Retry with a shorter input or a higher output limit.`,
+        { cause: retryErr },
+      );
+    }
+    throw retryErr;
+  }
+}
+
+async function runPromptGuidedStructured<T>({
+  languageModel,
+  modelId,
+  system,
+  prompt,
+  schema,
+  element,
+  maxOutputTokens,
+  feature,
+  startedAt,
+}: {
+  languageModel: LanguageModel;
+  modelId: string;
+  system?: string;
+  prompt: string;
+  schema?: z.ZodType;
+  element?: z.ZodType;
+  maxOutputTokens: number;
+  feature: string;
+  startedAt: number;
+}): Promise<T> {
+  const augmentedSystem = withJsonSchemaInstruction(system, schema, element, false);
+  const { result, effectiveMaxTokens } = await callStructuredWithLengthRetry({
+    feature,
+    modelId,
+    maxOutputTokens,
+    invoke: (tokens) =>
+      generateText({
+        model: languageModel,
+        system: augmentedSystem,
+        prompt,
+        maxOutputTokens: tokens,
+        abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      }),
+  });
+
+  finishStructuredCall(feature, modelId, result, startedAt, effectiveMaxTokens);
+
+  const parsedJson = extractJsonPayload(result.text);
+  try {
+    if (element) {
+      return z.array(element).parse(unwrapArrayCandidate(parsedJson)) as T;
+    }
+    return schema!.parse(parsedJson) as T;
+  } catch (parseErr) {
+    const detail =
+      parseErr instanceof Error ? parseErr.message : String(parseErr);
+    throw new Error(`Model output failed schema validation: ${detail}`, {
+      cause: parseErr,
+    });
   }
 }
 
@@ -339,15 +1007,21 @@ async function runOpenAiCompatibleStructured<T>({
   if (rung === "json_schema") {
     try {
       const model = buildLanguageModelFromDescriptor(desc, true);
-      const result = await generateText({
-        model,
-        system,
-        prompt,
-        output,
+      const { result, effectiveMaxTokens } = await callStructuredWithLengthRetry({
+        feature,
+        modelId: desc.modelId,
         maxOutputTokens,
-        abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        invoke: (tokens) =>
+          generateText({
+            model,
+            system,
+            prompt,
+            output,
+            maxOutputTokens: tokens,
+            abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+          }),
       });
-      finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
+      finishStructuredCall(feature, desc.modelId, result, startedAt, effectiveMaxTokens);
       rememberStructuredMode(cacheKey, "json_schema");
       return result.output as T;
     } catch (err) {
@@ -363,15 +1037,21 @@ async function runOpenAiCompatibleStructured<T>({
   if (rung === "json_object") {
     try {
       const model = buildLanguageModelFromDescriptor(desc, false);
-      const result = await generateText({
-        model,
-        system: withJsonSchemaInstruction(system, schema, element, true),
-        prompt,
-        output,
+      const { result, effectiveMaxTokens } = await callStructuredWithLengthRetry({
+        feature,
+        modelId: desc.modelId,
         maxOutputTokens,
-        abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        invoke: (tokens) =>
+          generateText({
+            model,
+            system: withJsonSchemaInstruction(system, schema, element, true),
+            prompt,
+            output,
+            maxOutputTokens: tokens,
+            abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+          }),
       });
-      finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
+      finishStructuredCall(feature, desc.modelId, result, startedAt, effectiveMaxTokens);
       rememberStructuredMode(cacheKey, "json_object");
       return result.output as T;
     } catch (err) {
@@ -385,49 +1065,17 @@ async function runOpenAiCompatibleStructured<T>({
   }
 
   // Rung 3: Plain prompt JSON (zero response_format on the wire, e.g. LM Studio)
-  const model = buildLanguageModelFromDescriptor(desc, false);
-  const augmentedSystem = withJsonSchemaInstruction(system, schema, element, false);
-
-  let result = await generateText({
-    model,
-    system: augmentedSystem,
+  return runPromptGuidedStructured<T>({
+    languageModel: buildLanguageModelFromDescriptor(desc, false),
+    modelId: desc.modelId,
+    system,
     prompt,
+    schema,
+    element,
     maxOutputTokens,
-    abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+    feature,
+    startedAt,
   });
-
-  if (isReasoningExhausted(result)) {
-    const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
-    result = await generateText({
-      model,
-      system: augmentedSystem,
-      prompt,
-      maxOutputTokens: retryTokens,
-      abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
-    });
-    if (isReasoningExhausted(result)) {
-      throwReasoningExhausted(desc.modelId, retryTokens);
-    }
-  }
-
-  finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
-
-  const parsedJson = extractJsonPayload(result.text);
-  if (element) {
-    const candidate = Array.isArray(parsedJson)
-      ? parsedJson
-      : parsedJson &&
-          typeof parsedJson === "object" &&
-          Array.isArray((parsedJson as { elements?: unknown }).elements)
-        ? (parsedJson as { elements: unknown[] }).elements
-        : parsedJson &&
-            typeof parsedJson === "object" &&
-            Array.isArray((parsedJson as { items?: unknown }).items)
-          ? (parsedJson as { items: unknown[] }).items
-          : parsedJson;
-    return z.array(element).parse(candidate) as T;
-  }
-  return schema!.parse(parsedJson) as T;
 }
 
 export async function runStructured<T = unknown>({
@@ -467,7 +1115,8 @@ export async function runStructured<T = unknown>({
         startedAt,
       });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      sanitizeThrownAiError(err);
+      const msg = redactAiErrorMessage(err instanceof Error ? err.message : String(err));
       logger.error(
         `[ai] ${feature} structured generation failed (model=${desc.modelId}): ${msg}`,
       );
@@ -480,26 +1129,60 @@ export async function runStructured<T = unknown>({
     ? Output.array({ element })
     : Output.object({ schema: schema! });
 
-  let result;
   try {
-    result = await generateText({
-      model: languageModel,
-      system,
-      prompt,
-      output,
+    const { result, effectiveMaxTokens } = await callStructuredWithLengthRetry({
+      feature,
+      modelId: desc.modelId,
       maxOutputTokens,
-      abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+      invoke: (tokens) =>
+        generateText({
+          model: languageModel,
+          system,
+          prompt,
+          output,
+          maxOutputTokens: tokens,
+          abortSignal: AbortSignal.timeout(CALL_TIMEOUT_MS),
+        }),
     });
+    finishStructuredCall(feature, desc.modelId, result, startedAt, effectiveMaxTokens);
+    return result.output as T;
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    // Fallback for built-in models (e.g. Gemma on Gemini API) that reject native responseSchema
+    // or emit reasoning/fenced prose around valid JSON.
+    if (shouldDowngradeStructuredRung(err)) {
+      logger.warn(
+        `[ai] ${feature} native structured output rejected on ${desc.modelId}; falling back to prompt JSON`,
+      );
+      try {
+        return await runPromptGuidedStructured<T>({
+          languageModel,
+          modelId: desc.modelId,
+          system,
+          prompt,
+          schema,
+          element,
+          maxOutputTokens,
+          feature,
+          startedAt,
+        });
+      } catch (fallbackErr) {
+        sanitizeThrownAiError(fallbackErr);
+        const msg = redactAiErrorMessage(
+          fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr),
+        );
+        logger.error(
+          `[ai] ${feature} structured generation failed (model=${desc.modelId}): ${msg}`,
+        );
+        throw fallbackErr;
+      }
+    }
+    sanitizeThrownAiError(err);
+    const msg = redactAiErrorMessage(err instanceof Error ? err.message : String(err));
     logger.error(
       `[ai] ${feature} structured generation failed (model=${desc.modelId}): ${msg}`,
     );
     throw err;
   }
-
-  finishStructuredCall(feature, desc.modelId, result, startedAt, maxOutputTokens);
-  return result.output as T;
 }
 
 export function chatStream({
@@ -532,14 +1215,16 @@ export function chatStream({
   const result = streamText({
     model: languageModel,
     system,
-    messages,
+    messages: clampModelMessages(messages),
     tools,
     stopWhen: stepCountIs(MAX_TOOL_STEPS),
     maxOutputTokens,
     abortSignal: AbortSignal.any(signals),
     timeout: { chunkMs: streamIdleTimeoutMs },
     onError: ({ error }) => {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = redactAiErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      );
       logger.error(`[ai] chat stream error (model=${modelId}): ${msg}`);
     },
     onAbort: () => {

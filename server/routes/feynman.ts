@@ -143,7 +143,7 @@ router.post(
           ? `Reference Study Guide Notes:\n${committedNotes}`
           : "",
         `Feynman Evaluation Rubric:\n${rubricLines.join("\n")}`,
-        `<untrusted_submission>\n${explanation.trim()}\n</untrusted_submission>`,
+        `<untrusted_submission>\n${explanation.trim().slice(0, 32_000).replace(/<\/untrusted_/gi, "<\\/untrusted_")}\n</untrusted_submission>`,
       ]
         .filter(Boolean)
         .join("\n\n"),

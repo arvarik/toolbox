@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { z } from "zod";
-import { runStructured } from "../ai/engine.ts";
+import {
+  isForwardableAiError,
+  redactAiErrorMessage,
+  runStructured,
+} from "../ai/engine.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
 import logger from "../utils/logger.ts";
 
@@ -48,7 +52,7 @@ const AUDIT_SCHEMA = z.object({
     ),
 });
 
-router.post("/audit", async (req, res) => {
+router.post("/audit", async (req, res, next) => {
   const { scenario, inputs, results, model } = req.body as {
     scenario?: { id?: string; name?: string; description?: string };
     inputs?: unknown;
@@ -95,7 +99,13 @@ Audit the estimate. Ground rules:
     });
     res.json(audit);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    if (isForwardableAiError(err)) {
+      next(err);
+      return;
+    }
+    const msg = redactAiErrorMessage(
+      err instanceof Error ? err.message : String(err),
+    );
     logger.error("[calculator/audit] Error:", msg);
     res.status(500).json({ message: msg || "Failed to audit the estimate." });
   }

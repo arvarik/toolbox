@@ -76,11 +76,11 @@ async function fetchGeminiModels(apiKey: string): Promise<RawDiscoveredModel[]> 
     const url = new URL(
       "https://generativelanguage.googleapis.com/v1beta/models",
     );
-    url.searchParams.set("key", apiKey);
     url.searchParams.set("pageSize", "200");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
 
     const res = await fetch(url, {
+      headers: { "x-goog-api-key": apiKey },
       signal: AbortSignal.timeout(LIST_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(await extractErrorMessage(res));
@@ -221,7 +221,7 @@ export const PROVIDER_DEFS: ProviderDef[] = [
         family: "Flash",
       },
       {
-        id: "gemini-3.1-pro",
+        id: "gemini-3.1-pro-preview",
         name: "Gemini 3.1 Pro",
         description: "Advanced reasoning, stable and reliable",
         family: "Pro",

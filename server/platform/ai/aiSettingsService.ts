@@ -373,7 +373,7 @@ function getInstanceEndpointRaw(
 
 function loadCatalogModels(
   catalogId: string,
-): Array<{ id: string; upstreamId?: string; name: string }> {
+): Array<{ id: string; upstreamId?: string; name: string; family?: string | null }> {
   try {
     const row = sqlite
       .prepare("SELECT models FROM model_catalog WHERE catalog_id = ?")
@@ -383,6 +383,7 @@ function loadCatalogModels(
       id: string;
       upstreamId?: string;
       name: string;
+      family?: string | null;
     }>;
     return Array.isArray(parsed) ? parsed : [];
   } catch {
@@ -519,21 +520,50 @@ export function inferProviderId(modelId: string): "gemini" | "claude" | "openai"
 
 const AUTO_CANDIDATES: Record<GenerationCapability, Record<string, string[]>> = {
   quick: {
-    gemini: ["gemini-3.5-flash", "gemini-3.1-flash-lite"],
+    gemini: [
+      "gemini-3.5-flash",
+      "gemini-3.8-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.1-flash-lite",
+    ],
     claude: ["claude-haiku-4-5", "claude-sonnet-4-6"],
     openai: ["gpt-5.6-luna", "gpt-5.6-terra"],
   },
   deep: {
-    gemini: ["gemini-3.1-pro", "gemini-3.5-flash"],
+    gemini: ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-pro-preview"],
     claude: ["claude-sonnet-4-6", "claude-opus-4-8"],
     openai: ["gpt-5.6-sol", "gpt-5.6-terra"],
   },
   research: {
-    gemini: ["gemini-3.5-flash", "gemini-3.1-pro"],
+    gemini: ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-pro-preview"],
     openai: ["gpt-5.6-terra", "gpt-5.6-sol"],
     claude: ["claude-sonnet-4-6", "claude-haiku-4-5"],
   },
 };
+
+function pickAutoModelForProvider(
+  pid: "gemini" | "claude" | "openai",
+  capability: GenerationCapability,
+): string {
+  const candidates = AUTO_CANDIDATES[capability][pid];
+  const catalog = loadCatalogModels(pid);
+  if (catalog.length > 0) {
+    const catalogIds = new Set(catalog.map((m) => m.id));
+    const matched = candidates.find((id) => catalogIds.has(id));
+    if (matched) return matched;
+
+    const preferredFamilies =
+      capability === "deep"
+        ? ["Pro", "Opus", "Sonnet", "Flagship", "Balanced", "Flash"]
+        : ["Flash", "Haiku", "Fast", "Balanced", "Sonnet", "Pro"];
+    for (const fam of preferredFamilies) {
+      const byFam = catalog.find((m) => m.family === fam);
+      if (byFam) return byFam.id;
+    }
+    return catalog[0].id;
+  }
+  return candidates[0];
+}
 
 function canResolveModelId(modelId: string, scope?: Scope): boolean {
   const custom = parseCustomModelId(modelId);
@@ -566,7 +596,7 @@ function autoPickModelForCapability(
     const byok = readUserByok(scope);
     for (const pid of providerOrder) {
       if (byok.providerKeys[pid]) {
-        return AUTO_CANDIDATES[capability][pid][0];
+        return pickAutoModelForProvider(pid, capability);
       }
     }
     for (const ep of byok.endpoints) {
@@ -576,7 +606,7 @@ function autoPickModelForCapability(
 
   for (const pid of providerOrder) {
     if (getInstanceApiKey(pid)) {
-      return AUTO_CANDIDATES[capability][pid][0];
+      return pickAutoModelForProvider(pid, capability);
     }
   }
   for (const ep of listInstanceEndpointsRaw()) {
