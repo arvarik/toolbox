@@ -201,7 +201,7 @@ export const KitBackupUserdataV1Schema = z.object({
       z.object({
         pillarId: idStr,
         topicId: idStr,
-        sectionId: z.string().default(""),
+        sectionId: z.string().max(200).default(""),
         createdAt: tsStr,
       }),
     )
@@ -213,18 +213,18 @@ export const KitBackupUserdataV1Schema = z.object({
         pillarId: idStr,
         topicId: idStr,
         sectionId: idStr,
-        quote: z.string(),
-        prefix: z.string().default(""),
-        suffix: z.string().default(""),
+        quote: z.string().min(1).max(2000),
+        prefix: z.string().max(160).default(""),
+        suffix: z.string().max(160).default(""),
         color: z.enum(["amber", "sage", "coral"]).default("amber"),
-        note: z.string().default(""),
+        note: z.string().max(500).default(""),
         cardId: nullStr,
         createdAt: tsStr,
         updatedAt: tsStr,
       }),
     )
     .default([]),
-  lastGuideRef: nullStr,
+  lastGuideRef: z.string().max(2000).nullable().default(null),
   chatStarters: z
     .array(
       z.object({
@@ -1024,11 +1024,38 @@ export async function importKitBackupZip(
       }
 
       if (userdata.lastGuideRef) {
-        db.prepare("UPDATE kits SET last_guide_ref = ? WHERE ownerId = ? AND id = ?").run(
-          userdata.lastGuideRef,
-          scope.ownerId,
-          newKitId,
-        );
+        try {
+          const parsed = JSON.parse(userdata.lastGuideRef) as Record<string, unknown> | null;
+          if (
+            parsed &&
+            typeof parsed === "object" &&
+            typeof parsed.pillarId === "string" &&
+            parsed.pillarId.trim().length > 0 &&
+            parsed.pillarId.trim().length <= 200 &&
+            typeof parsed.topicId === "string" &&
+            parsed.topicId.trim().length > 0 &&
+            parsed.topicId.trim().length <= 200
+          ) {
+            const sanitizedResume = JSON.stringify({
+              pillarId: parsed.pillarId.trim(),
+              topicId: parsed.topicId.trim(),
+              sectionId:
+                typeof parsed.sectionId === "string"
+                  ? parsed.sectionId.trim().slice(0, 200)
+                  : "",
+              ...(typeof parsed.updatedAt === "string"
+                ? { updatedAt: parsed.updatedAt.slice(0, 64) }
+                : {}),
+            });
+            db.prepare("UPDATE kits SET last_guide_ref = ? WHERE ownerId = ? AND id = ?").run(
+              sanitizedResume,
+              scope.ownerId,
+              newKitId,
+            );
+          }
+        } catch {
+          // Ignore malformed lastGuideRef JSON in archive
+        }
       }
 
       const insDogear = db.prepare(

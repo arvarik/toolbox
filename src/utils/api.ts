@@ -290,7 +290,10 @@ export const decksApi = {
 /* ---- Flashcards ---- */
 export const flashcardsApi = {
   due: (deckId: string) => request<FlashcardRecord[]>(`/decks/${deckId}/cards/due`),
-  dueAll: () => request<FlashcardRecord[]>('/decks/all/cards/due'),
+  dueAll: (kit?: string) =>
+    request<FlashcardRecord[]>(
+      kit ? `/decks/all/cards/due?kit=${encodeURIComponent(kit)}` : '/decks/all/cards/due',
+    ),
   create: (deckId: string, data: object) =>
     request<FlashcardRecord>(`/decks/${deckId}/cards`, { method: 'POST', body: data }),
   update: (deckId: string, cardId: string, data: object) =>
@@ -534,10 +537,10 @@ export const guideContentApi = {
       },
     ),
   listHighlights: (pillarId?: string, topicId?: string) => {
-    const qs =
-      pillarId && topicId
-        ? `?pillarId=${encodeURIComponent(pillarId)}&topicId=${encodeURIComponent(topicId)}`
-        : ''
+    const params = new URLSearchParams()
+    if (pillarId) params.set('pillarId', pillarId)
+    if (topicId) params.set('topicId', topicId)
+    const qs = params.toString() ? `?${params.toString()}` : ''
     return request<GuideHighlightItem[]>(`/guide-content/highlights${qs}`)
   },
   createHighlight: (data: {

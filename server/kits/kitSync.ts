@@ -212,6 +212,151 @@ export function syncKitStructure(
       }
     }
 
+    // 3b. Remap moved guide_dogears, guide_highlights, and kits.last_guide_ref
+    const resolveTargetPillarTopic = (
+      pillarId: string,
+      topicId: string,
+      sectionId: string,
+    ): { pillarId: string; topicId: string } | null => {
+      const targetTopicId = topicAliases[topicId] ?? topicId;
+      const samePillar = pillarsById.get(pillarId);
+      if (
+        samePillar?.topics.has(targetTopicId) &&
+        (!sectionId || samePillar.sections.has(sectionId))
+      ) {
+        return { pillarId, topicId: targetTopicId };
+      }
+      const movedPillarId = uniqueTopicPillar.get(targetTopicId) ?? null;
+      const movedPillar = movedPillarId ? pillarsById.get(movedPillarId) : null;
+      if (
+        movedPillarId &&
+        movedPillar &&
+        (!sectionId || movedPillar.sections.has(sectionId))
+      ) {
+        return { pillarId: movedPillarId, topicId: targetTopicId };
+      }
+      return null;
+    };
+
+    const dogearRows = db
+      .prepare(
+        `SELECT pillar_id, topic_id, section_id, created_at
+         FROM guide_dogears
+         WHERE ownerId = ? AND kit_id = ?`,
+      )
+      .all(scope.ownerId, existing.id) as Array<{
+      pillar_id: string;
+      topic_id: string;
+      section_id: string;
+      created_at: string | null;
+    }>;
+    const insertDogearStmt = db.prepare(
+      `INSERT INTO guide_dogears (ownerId, kit_id, pillar_id, topic_id, section_id, created_at)
+       VALUES (?, ?, ?, ?, ?, COALESCE(?, datetime('now')))
+       ON CONFLICT(ownerId, kit_id, pillar_id, topic_id, section_id) DO NOTHING`,
+    );
+    const deleteDogearStmt = db.prepare(
+      `DELETE FROM guide_dogears
+       WHERE ownerId = ? AND kit_id = ? AND pillar_id = ? AND topic_id = ? AND section_id = ?`,
+    );
+    for (const dg of dogearRows) {
+      const resolved = resolveTargetPillarTopic(dg.pillar_id, dg.topic_id, dg.section_id);
+      if (!resolved) continue;
+      if (resolved.pillarId !== dg.pillar_id || resolved.topicId !== dg.topic_id) {
+        insertDogearStmt.run(
+          scope.ownerId,
+          existing.id,
+          resolved.pillarId,
+          resolved.topicId,
+          dg.section_id,
+          dg.created_at,
+        );
+        deleteDogearStmt.run(
+          scope.ownerId,
+          existing.id,
+          dg.pillar_id,
+          dg.topic_id,
+          dg.section_id,
+        );
+      }
+    }
+
+    const highlightRows = db
+      .prepare(
+        `SELECT id, pillar_id, topic_id, section_id
+         FROM guide_highlights
+         WHERE ownerId = ? AND kit_id = ?`,
+      )
+      .all(scope.ownerId, existing.id) as Array<{
+      id: string;
+      pillar_id: string;
+      topic_id: string;
+      section_id: string;
+    }>;
+    const updateHighlightSlotStmt = db.prepare(
+      `UPDATE guide_highlights
+       SET pillar_id = ?, topic_id = ?, updated_at = datetime('now')
+       WHERE ownerId = ? AND kit_id = ? AND id = ?`,
+    );
+    for (const hl of highlightRows) {
+      const resolved = resolveTargetPillarTopic(hl.pillar_id, hl.topic_id, hl.section_id);
+      if (!resolved) continue;
+      if (resolved.pillarId !== hl.pillar_id || resolved.topicId !== hl.topic_id) {
+        updateHighlightSlotStmt.run(
+          resolved.pillarId,
+          resolved.topicId,
+          scope.ownerId,
+          existing.id,
+          hl.id,
+        );
+      }
+    }
+
+    const resumeRow = db
+      .prepare("SELECT last_guide_ref FROM kits WHERE ownerId = ? AND id = ?")
+      .get(scope.ownerId, existing.id) as { last_guide_ref: string | null } | undefined;
+    if (resumeRow?.last_guide_ref) {
+      try {
+        const parsed = JSON.parse(resumeRow.last_guide_ref) as {
+          pillarId?: string;
+          topicId?: string;
+          sectionId?: string;
+          updatedAt?: string;
+        };
+        if (parsed?.pillarId && parsed?.topicId) {
+          const resolved = resolveTargetPillarTopic(
+            parsed.pillarId,
+            parsed.topicId,
+            parsed.sectionId ?? "",
+          );
+          if (!resolved) {
+            db.prepare("UPDATE kits SET last_guide_ref = NULL WHERE ownerId = ? AND id = ?").run(
+              scope.ownerId,
+              existing.id,
+            );
+          } else if (
+            resolved.pillarId !== parsed.pillarId ||
+            resolved.topicId !== parsed.topicId
+          ) {
+            db.prepare("UPDATE kits SET last_guide_ref = ? WHERE ownerId = ? AND id = ?").run(
+              JSON.stringify({
+                ...parsed,
+                pillarId: resolved.pillarId,
+                topicId: resolved.topicId,
+              }),
+              scope.ownerId,
+              existing.id,
+            );
+          }
+        }
+      } catch {
+        db.prepare("UPDATE kits SET last_guide_ref = NULL WHERE ownerId = ? AND id = ?").run(
+          scope.ownerId,
+          existing.id,
+        );
+      }
+    }
+
     // 4. Hydrate unseen starter cards, unseen drills, and empty-slot baseline guide notes
     const seeded = seedKitStarterContent(db, scope, existing.id, normalizedSkeleton);
     return { ...seeded, remappedCards, clearedOrphanNodeCards, remappedGuideNotes };

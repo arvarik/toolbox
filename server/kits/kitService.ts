@@ -381,7 +381,7 @@ interface PreloadedKitAggregates {
   deckStats: Map<string, DeckStatsRow>;
   guideRows: Map<string, Array<{ pillar_id: string; topic_id: string; section_id: string }>>;
   drillCounts: Map<string, number>;
-  dogearCounts: Map<string, number>;
+  dogearRows: Map<string, Array<{ pillar_id: string; topic_id: string; section_id: string }>>;
 }
 
 function hydrateKitSummary(
@@ -434,13 +434,32 @@ function hydrateKitSummary(
           .get(scope.ownerId, row.id) as { c: number }
       ).c;
 
-  const dogearCount = preloaded
-    ? (preloaded.dogearCounts.get(row.id) ?? 0)
-    : (
-        db
-          .prepare("SELECT COUNT(*) as c FROM guide_dogears WHERE ownerId = ? AND kit_id = ?")
-          .get(scope.ownerId, row.id) as { c: number }
-      ).c;
+  const validTopics = new Set<string>();
+  for (const p of skeleton.pillars) {
+    for (const t of p.topics) {
+      validTopics.add(`${p.id}\0${t.id}`);
+    }
+  }
+
+  const rawDogears = preloaded
+    ? (preloaded.dogearRows.get(row.id) ?? [])
+    : (db
+        .prepare(
+          "SELECT pillar_id, topic_id, section_id FROM guide_dogears WHERE ownerId = ? AND kit_id = ?",
+        )
+        .all(scope.ownerId, row.id) as Array<{
+        pillar_id: string;
+        topic_id: string;
+        section_id: string;
+      }>);
+
+  let dogearCount = 0;
+  for (const dg of rawDogears) {
+    const isValid = dg.section_id
+      ? validSlots.has(`${dg.pillar_id}\0${dg.topic_id}\0${dg.section_id}`)
+      : validTopics.has(`${dg.pillar_id}\0${dg.topic_id}`);
+    if (isValid) dogearCount++;
+  }
 
   let lastGuideRef: OwnedKitSummary["lastGuideRef"] = null;
   if (row.last_guide_ref) {
@@ -454,14 +473,16 @@ function hydrateKitSummary(
       if (parsed?.pillarId && parsed?.topicId) {
         const pillar = skeleton.pillars.find((p) => p.id === parsed.pillarId);
         const topic = pillar?.topics.find((t) => t.id === parsed.topicId);
-        lastGuideRef = {
-          pillarId: parsed.pillarId,
-          topicId: parsed.topicId,
-          sectionId: parsed.sectionId ?? "",
-          ...(pillar ? { pillarName: pillar.name } : {}),
-          ...(topic ? { topicName: topic.name } : {}),
-          ...(parsed.updatedAt ? { updatedAt: parsed.updatedAt } : {}),
-        };
+        if (pillar && topic) {
+          lastGuideRef = {
+            pillarId: parsed.pillarId,
+            topicId: parsed.topicId,
+            sectionId: parsed.sectionId ?? "",
+            pillarName: pillar.name,
+            topicName: topic.name,
+            ...(parsed.updatedAt ? { updatedAt: parsed.updatedAt } : {}),
+          };
+        }
       }
     } catch {
       lastGuideRef = null;
@@ -581,15 +602,22 @@ export function listOwnedKits(db: Database.Database, scope: Scope): OwnedKitSumm
     .prepare("SELECT kit_id, COUNT(*) as c FROM drills WHERE ownerId = ? GROUP BY kit_id")
     .all(scope.ownerId) as Array<{ kit_id: string; c: number }>;
 
-  const dogearCountRows = db
-    .prepare("SELECT kit_id, COUNT(*) as c FROM guide_dogears WHERE ownerId = ? GROUP BY kit_id")
-    .all(scope.ownerId) as Array<{ kit_id: string; c: number }>;
+  const dogearAllRows = db
+    .prepare(
+      "SELECT kit_id, pillar_id, topic_id, section_id FROM guide_dogears WHERE ownerId = ?",
+    )
+    .all(scope.ownerId) as Array<{
+    kit_id: string;
+    pillar_id: string;
+    topic_id: string;
+    section_id: string;
+  }>;
 
   const preloaded: PreloadedKitAggregates = {
     deckStats: new Map(deckStatRows.map((r) => [r.kit_id, r])),
     guideRows: Map.groupBy(guideAllRows, (g) => g.kit_id),
     drillCounts: new Map(drillCountRows.map((r) => [r.kit_id, r.c])),
-    dogearCounts: new Map(dogearCountRows.map((r) => [r.kit_id, r.c])),
+    dogearRows: Map.groupBy(dogearAllRows, (d) => d.kit_id),
   };
 
   return rows.map((row) => {

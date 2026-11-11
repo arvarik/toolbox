@@ -311,6 +311,43 @@ describe("Personal Kits, Shared Library Fork/Sync, Mode 1 & Mode 2 Archive Round
       await bobAgent.put(`/api/guide-content/${pathKey}`).set("X-Toolbox-Kit", "distributed-rust").send({ content }).expect(200);
     }
 
+    // Cross-kit cardId linkage on a different kit (system-design) is rejected
+    await bobAgent
+      .post("/api/guide-content/highlights")
+      .set("X-Toolbox-Kit", "system-design")
+      .send({
+        pillarId: "fundamentals",
+        topicId: "networking",
+        sectionId: "overview",
+        quote: "Cross-kit card test",
+        color: "amber",
+        cardId: bobCard1.id,
+      })
+      .expect(400);
+
+    // Bob dogears, highlights, and saves resume on old-topic-id before v2 sync
+    await bobAgent
+      .post("/api/guide-content/dogears/toggle")
+      .set("X-Toolbox-Kit", "distributed-rust")
+      .send({ pillarId: "basics", topicId: "old-topic-id", sectionId: "mechanics" })
+      .expect(200);
+    await bobAgent
+      .post("/api/guide-content/highlights")
+      .set("X-Toolbox-Kit", "distributed-rust")
+      .send({
+        pillarId: "basics",
+        topicId: "old-topic-id",
+        sectionId: "mechanics",
+        quote: "CFG borrow regions",
+        color: "amber",
+      })
+      .expect(201);
+    await bobAgent
+      .put("/api/guide-content/resume")
+      .set("X-Toolbox-Kit", "distributed-rust")
+      .send({ pillarId: "basics", topicId: "old-topic-id", sectionId: "mechanics" })
+      .expect(200);
+
     const bobDrill1 = db
       .prepare("SELECT id FROM drills WHERE ownerId = ? AND kit_id = ? AND seed_key = ?")
       .get(bobId, bobKitId, "rust-drill-1") as { id: string };
@@ -409,6 +446,18 @@ describe("Personal Kits, Shared Library Fork/Sync, Mode 1 & Mode 2 Archive Round
 
     const migratedNote = await bobAgent.get("/api/guide-content/basics/new-topic-id").set("X-Toolbox-Kit", "distributed-rust").expect(200);
     expect(migratedNote.body.mechanics.content).toBe("Bob note on old-topic-id that should migrate");
+
+    const migratedDogears = await bobAgent.get("/api/guide-content/dogears").set("X-Toolbox-Kit", "distributed-rust").expect(200);
+    expect(migratedDogears.body).toEqual([
+      expect.objectContaining({ pillarId: "basics", topicId: "new-topic-id", sectionId: "mechanics" }),
+    ]);
+    const migratedHighlights = await bobAgent
+      .get("/api/guide-content/highlights?pillarId=basics&topicId=new-topic-id")
+      .set("X-Toolbox-Kit", "distributed-rust")
+      .expect(200);
+    expect(migratedHighlights.body).toHaveLength(1);
+    const migratedResume = await bobAgent.get("/api/guide-content/resume").set("X-Toolbox-Kit", "distributed-rust").expect(200);
+    expect(migratedResume.body.resume).toMatchObject({ pillarId: "basics", topicId: "new-topic-id", sectionId: "mechanics" });
 
     const archivedRes = await bobAgent.get(`/api/kits/${bobKitId}/archived-notes`).expect(200);
     expect(archivedRes.body.notes).toHaveLength(1);
