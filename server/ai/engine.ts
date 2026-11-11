@@ -399,26 +399,55 @@ export async function runText({
   return result.text;
 }
 
-function shouldDowngradeStructuredRung(err: unknown): boolean {
-  if (!err || typeof err !== "object") return false;
-  // Never mistake token-limit truncation for response_format incompatibility.
+function extractUpstreamHttpStatus(
+  err: unknown,
+  seen = new Set<unknown>(),
+): number | undefined {
+  if (!err || typeof err !== "object" || seen.has(err)) return undefined;
+  seen.add(err);
+  const e = err as {
+    statusCode?: unknown;
+    lastError?: unknown;
+    cause?: unknown;
+  };
+  if (typeof e.statusCode === "number") return e.statusCode;
+  return (
+    extractUpstreamHttpStatus(e.lastError, seen) ??
+    extractUpstreamHttpStatus(e.cause, seen)
+  );
+}
+
+export function shouldDowngradeStructuredRung(
+  err: unknown,
+  seen = new Set<unknown>(),
+): boolean {
+  if (!err || typeof err !== "object" || seen.has(err)) return false;
+  seen.add(err);
+  if (err instanceof AppError) return false;
+  // Never mistake token-limit truncation or upstream rate-limit/5xx/404 errors for schema incompatibility.
   if (isLengthTruncatedError(err)) return false;
+  if (unwrapUpstreamProviderError(err) !== null) return false;
+
+  const httpStatus = extractUpstreamHttpStatus(err);
+  if (
+    httpStatus === 401 ||
+    httpStatus === 403 ||
+    httpStatus === 404 ||
+    httpStatus === 408 ||
+    httpStatus === 429 ||
+    (typeof httpStatus === "number" && httpStatus >= 500)
+  ) {
+    return false;
+  }
 
   const e = err as {
     statusCode?: number;
     name?: string;
     message?: string;
+    lastError?: unknown;
     cause?: unknown;
   };
   if (e.name === "AbortError" || e.name === "TimeoutError") return false;
-  if (
-    e.statusCode === 401 ||
-    e.statusCode === 403 ||
-    e.statusCode === 429 ||
-    (typeof e.statusCode === "number" && e.statusCode >= 500)
-  ) {
-    return false;
-  }
   const msg = e.message ?? "";
   if (
     /context_length|maximum context|too many tokens|prompt is too long/i.test(
@@ -441,7 +470,10 @@ function shouldDowngradeStructuredRung(err: unknown): boolean {
   ) {
     return true;
   }
-  return e.cause ? shouldDowngradeStructuredRung(e.cause) : false;
+  return (
+    (e.lastError ? shouldDowngradeStructuredRung(e.lastError, seen) : false) ||
+    (e.cause ? shouldDowngradeStructuredRung(e.cause, seen) : false)
+  );
 }
 
 /** Appends the JSON Schema instruction to `system` (or uses it alone). */
@@ -468,16 +500,60 @@ function withJsonSchemaInstruction(
   return system ? `${system}\n\n${instruction}` : instruction;
 }
 
+const OPEN_REASONING_TAG_RE = /^<(think|thinking|reasoning|thought)\b[^>]*>/i;
+
 function stripReasoningBlocks(raw: string): string {
-  // Remove closed <think>/<thinking>/<reasoning>/<thought> blocks emitted by reasoning models.
-  let out = raw.replace(
-    /<(think|thinking|reasoning|thought)\b[^>]*>[\s\S]*?<\/\1>/gi,
-    "",
-  );
-  // If an unclosed <think> tag precedes a closing tag fragment or nothing valid, strip leading tag.
-  const openMatch = out.match(/^\s*<(think|thinking|reasoning|thought)\b[^>]*>/i);
-  if (openMatch) {
-    out = out.slice(openMatch[0].length);
+  // 1. Strip anchored leading closed <think>...</think> blocks (even if thoughts contain unbalanced quotes).
+  let current = raw.trim();
+  const leadingClosedRe =
+    /^\s*<(think|thinking|reasoning|thought)\b[^>]*>[\s\S]*?<\/\1\s*>\s*/i;
+  while (true) {
+    const match = current.match(leadingClosedRe);
+    if (!match) break;
+    current = current.slice(match[0].length);
+  }
+
+  // 2. Strip any remaining reasoning blocks ONLY outside JSON string literals so literal
+  //    `<think>` / `</think>` tokens inside JSON string values are never altered or merged across fields.
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  let i = 0;
+  while (i < current.length) {
+    const ch = current[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      i++;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      i++;
+      continue;
+    }
+    if (ch === "<") {
+      const openMatch = current.slice(i).match(OPEN_REASONING_TAG_RE);
+      if (openMatch) {
+        const tag = openMatch[1];
+        const afterOpen = i + openMatch[0].length;
+        const closeRe = new RegExp(`<\\/${tag}\\s*>`, "i");
+        const closeMatch = closeRe.exec(current.slice(afterOpen));
+        if (closeMatch) {
+          i = afterOpen + closeMatch.index + closeMatch[0].length;
+          continue;
+        }
+        if (out.trim() === "") {
+          i = afterOpen;
+          continue;
+        }
+      }
+    }
+    out += ch;
+    i++;
   }
   return out.trim();
 }
@@ -556,25 +632,44 @@ function scanBalancedJsonAt(text: string, startIdx: number): string | null {
   return null;
 }
 
+function tryParseDirectOrOuterFence(
+  trimmed: string,
+): { ok: true; value: unknown } | { ok: false } {
+  if (!trimmed) return { ok: false };
+  // 1. Fast path: pure JSON object or array
+  const direct = tryParseJsonCandidate(trimmed);
+  if (direct.ok) return direct;
+
+  // 2. Outer markdown fence only (anchored to end of string so inner ```python blocks never truncate!)
+  if (trimmed.startsWith("```") && trimmed.endsWith("```")) {
+    const firstNewline = trimmed.indexOf("\n");
+    if (firstNewline !== -1) {
+      const inner = trimmed.slice(firstNewline + 1, -3).trim();
+      const fenced = tryParseJsonCandidate(inner);
+      if (fenced.ok) return fenced;
+    }
+  }
+  return { ok: false };
+}
+
 export function extractJsonPayload(raw: string): unknown {
-  const cleaned = stripReasoningBlocks(raw);
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("Model did not return valid JSON.");
+  }
+
+  // Attempt whole-payload / outer-fenced JSON parse BEFORE any reasoning-tag stripping
+  // so valid JSON containing literal `<think>`/`</think>` text is returned untouched.
+  const untouched = tryParseDirectOrOuterFence(trimmed);
+  if (untouched.ok) return untouched.value;
+
+  const cleaned = stripReasoningBlocks(trimmed);
   if (!cleaned) {
     throw new Error("Model did not return valid JSON.");
   }
 
-  // 1. Fast path: pure JSON object or array
-  const direct = tryParseJsonCandidate(cleaned);
-  if (direct.ok) return direct.value;
-
-  // 2. Outer markdown fence only (anchored to end of string so inner ```python blocks never truncate!)
-  if (cleaned.startsWith("```") && cleaned.endsWith("```")) {
-    const firstNewline = cleaned.indexOf("\n");
-    if (firstNewline !== -1) {
-      const inner = cleaned.slice(firstNewline + 1, -3).trim();
-      const fenced = tryParseJsonCandidate(inner);
-      if (fenced.ok) return fenced.value;
-    }
-  }
+  const afterStrip = tryParseDirectOrOuterFence(cleaned);
+  if (afterStrip.ok) return afterStrip.value;
 
   // 3. Prefer a ```json fenced block when leading prose contains {placeholders}
   const jsonFenceRegex = /```(?:json)?\s*([{[])/gi;

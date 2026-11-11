@@ -17,6 +17,7 @@ const {
   extractJsonPayload,
   redactAiErrorMessage,
   runStructured,
+  shouldDowngradeStructuredRung,
   unwrapArrayCandidate,
   __getStructuredModeFor,
   __resetStructuredModeCache,
@@ -188,6 +189,31 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
       "S1",
       "S2",
     ]);
+
+    // Regression: literal <think>...</think> inside JSON string values must NEVER be stripped
+    const inlineThinkJson =
+      '{"note":"Models wrap scratchpad in <think>chain of thought</think> before answering."}';
+    expect(extractJsonPayload(inlineThinkJson)).toEqual({
+      note: "Models wrap scratchpad in <think>chain of thought</think> before answering.",
+    });
+
+    // Regression: literal <think> in Card 1 and </think> in Card 2 must NEVER merge or drop Q2
+    // (tested as pure JSON, fenced JSON, AND preceded by a real outer <think> wrapper + prose!)
+    const twoCardsObj = {
+      cards: [
+        { front: "Q1", back: "Literal `<think>` token" },
+        { front: "Q2", back: "Literal `</think>` token" },
+      ],
+    };
+    expect(extractJsonPayload(JSON.stringify(twoCardsObj))).toEqual(twoCardsObj);
+    expect(
+      extractJsonPayload(`\`\`\`json\n${JSON.stringify(twoCardsObj)}\n\`\`\``),
+    ).toEqual(twoCardsObj);
+    expect(
+      extractJsonPayload(
+        `<think>Drafting {"draft": 1} with unclosed "quote</think>\nSure! <thinking>{"draft": 2}</thinking>\n${JSON.stringify(twoCardsObj)}\nScore in [0, 1].`,
+      ),
+    ).toEqual(twoCardsObj);
   });
 
   it("2. retries structured calls on finish_reason=length without poisoning structuredModeCache, and surfaces 422 AI_REASONING_EXHAUSTED when doubled budget still exhausts on thoughts", async () => {
@@ -196,8 +222,12 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
 
     const wireFormats: Array<string | undefined> = [];
     const maxTokensSeen: number[] = [];
-    let behavior: "truncate_once" | "exhaust_always" | "context_400" =
-      "truncate_once";
+    let behavior:
+      | "truncate_once"
+      | "exhaust_always"
+      | "context_400"
+      | "missing_404"
+      | "retry_429" = "truncate_once";
 
     const mockServer = await listenLocal(async (req, res) => {
       if (req.url === "/v1/models") {
@@ -205,6 +235,8 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
           data: [
             { id: "reasoner-pro", created: 1_760_000_000 },
             { id: "ctx-model", created: 1_760_000_000 },
+            { id: "missing-404-model", created: 1_760_000_000 },
+            { id: "ratelimit-429-model", created: 1_760_000_000 },
           ],
         });
         return;
@@ -228,6 +260,30 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
               "This model's maximum context length is 32768 tokens, however you requested 40000 tokens.",
           },
         });
+        return;
+      }
+
+      if (behavior === "missing_404") {
+        sendJson(res, 404, {
+          error: {
+            message:
+              "Model missing-404-model not found for structured json_schema endpoint",
+          },
+        });
+        return;
+      }
+
+      if (behavior === "retry_429") {
+        sendJson(
+          res,
+          429,
+          {
+            error: {
+              message: "Rate limit exceeded for structured json_schema requests",
+            },
+          },
+          { "retry-after-ms": "1" },
+        );
         return;
       }
 
@@ -342,6 +398,66 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
       ).rejects.toThrow(/maximum context length/);
       expect(
         __getStructuredModeFor(`instance:${epId}`, "ctx-model"),
+      ).toBeUndefined();
+
+      // HTTP 404 & AI_RetryError (429/5xx) whose messages mention "structured"/"json_schema"
+      // must NEVER downgrade rungs, fire Rung 2/3 requests, or poison structuredModeCache!
+      expect(
+        shouldDowngradeStructuredRung({
+          name: "AI_RetryError",
+          message: "Failed after 3 attempts: structured json_schema rate limit",
+          lastError: { name: "AI_APICallError", statusCode: 429 },
+        }),
+      ).toBe(false);
+      expect(
+        shouldDowngradeStructuredRung({
+          name: "AI_RetryError",
+          message: "Failed after 3 attempts: json mode gateway unavailable",
+          lastError: { name: "AI_APICallError", statusCode: 503 },
+        }),
+      ).toBe(false);
+      expect(
+        shouldDowngradeStructuredRung({
+          name: "AI_APICallError",
+          statusCode: 404,
+          message: "Model not found for structured json_schema",
+        }),
+      ).toBe(false);
+      expect(
+        shouldDowngradeStructuredRung({
+          name: "AI_NoObjectGeneratedError",
+          message: "No object generated",
+          cause: { name: "AI_APICallError", statusCode: 404 },
+        }),
+      ).toBe(false);
+
+      wireFormats.length = 0;
+      behavior = "missing_404";
+      await expect(
+        runStructured({
+          model: `custom:${epId}:missing-404-model`,
+          prompt: "Missing model",
+          schema,
+        }),
+      ).rejects.toThrow(/missing-404-model/);
+      expect(wireFormats).toEqual(["json_schema"]);
+      expect(
+        __getStructuredModeFor(`instance:${epId}`, "missing-404-model"),
+      ).toBeUndefined();
+
+      wireFormats.length = 0;
+      behavior = "retry_429";
+      await expect(
+        runStructured({
+          model: `custom:${epId}:ratelimit-429-model`,
+          prompt: "Rate limited",
+          schema,
+        }),
+      ).rejects.toThrow(/Rate limit exceeded/);
+      // AI SDK retries Rung 1 only (all json_schema), ZERO Rung 2 (json_object) or Rung 3 (undefined) calls!
+      expect(wireFormats.every((fmt) => fmt === "json_schema")).toBe(true);
+      expect(
+        __getStructuredModeFor(`instance:${epId}`, "ratelimit-429-model"),
       ).toBeUndefined();
 
       // Repeated reasoning exhaustion surfaces HTTP 422 AI_REASONING_EXHAUSTED on calculator/audit & chat/commit
