@@ -1,7 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams } from 'react-router'
 import {
-  MessageSquare,
   Calculator,
   Archive,
   ChevronDown,
@@ -13,10 +12,11 @@ import {
 import PillarNav from '../components/guide/PillarNav'
 import BlueprintShell from '../components/guide/BlueprintShell'
 import ChatPanel from '../components/shared/ChatPanel'
+import { KitAvatar, SelectPopover } from '../components/ui'
 import useAppStore from '../stores/appStore'
-import { useActiveKit } from '../stores/useKitStore'
+import useKitStore, { useActiveKit } from '../stores/useKitStore'
 import useIsMobile from '../hooks/useIsMobile'
-import * as apiModule from '../utils/api'
+import { guideContentApi, kitsApi, type GuideDogearItem } from '../utils/api'
 
 interface ArchivedNote {
   pillarId: string
@@ -25,47 +25,53 @@ interface ArchivedNote {
   content: string
 }
 
-interface KitsArchiveApi {
-  getArchivedNotes?: (kitId: string) => Promise<{ notes?: ArchivedNote[] } | null>
-  refileArchivedNote?: (
-    kitId: string,
-    payload: {
-      fromPillarId: string
-      fromTopicId: string
-      fromSectionId: string
-      toPillarId: string
-      toTopicId: string
-      toSectionId: string
-    },
-  ) => Promise<unknown>
-  deleteArchivedNote?: (
-    kitId: string,
-    payload: { pillarId: string; topicId: string; sectionId: string },
-  ) => Promise<unknown>
-}
-
-function safeGetKitsApi(): KitsArchiveApi | null {
-  try {
-    const mod = apiModule as unknown as { kitsApi?: KitsArchiveApi }
-    return mod?.kitsApi ?? null
-  } catch {
-    return null
-  }
+function toggleDogearEntry(
+  list: GuideDogearItem[],
+  pId: string,
+  tId: string,
+  secId = '',
+): GuideDogearItem[] {
+  const exists = list.some(
+    (d) => d.pillarId === pId && d.topicId === tId && (d.sectionId || '') === secId,
+  )
+  return exists
+    ? list.filter(
+        (d) => !(d.pillarId === pId && d.topicId === tId && (d.sectionId || '') === secId),
+      )
+    : [
+        ...list,
+        {
+          pillarId: pId,
+          topicId: tId,
+          sectionId: secId,
+          createdAt: new Date().toISOString(),
+        },
+      ]
 }
 
 /**
- * GuidePage — The authoritative library of study kit knowledge.
+ * GuidePage — Living textbook notebook with automatic reading resume,
+ * folded page dogears, and companion Kit drawer.
  */
 export default function GuidePage() {
-  const { pillarId } = useParams()
+  const { pillarId, topicId } = useParams()
   const chatOpen = useAppStore((s) => s.chatOpen.guide)
   const toggleChat = useAppStore((s) => s.toggleChat)
   const setCalcModalOpen = useAppStore((s) => s.setCalcModalOpen)
   const addToast = useAppStore((s) => s.addToast)
-  const { kitId, skeleton, pillars, capabilities } = useActiveKit()
+  const { kitId, kitSlug, skeleton, pillars, capabilities } = useActiveKit()
+  const kits = useKitStore((s) => s.kits)
+  const effectiveKitId = useMemo(
+    () =>
+      kitId ||
+      kits.find((k) => k.slug === (kitSlug || 'system-design'))?.id ||
+      null,
+    [kitId, kitSlug, kits],
+  )
 
   const isMobile = useIsMobile()
 
+  const [dogears, setDogears] = useState<GuideDogearItem[]>([])
   const [archivedNotes, setArchivedNotes] = useState<ArchivedNote[]>([])
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [refilingKey, setRefilingKey] = useState<string | null>(null)
@@ -73,25 +79,97 @@ export default function GuidePage() {
   const [targetTopicId, setTargetTopicId] = useState('')
   const [targetSectionId, setTargetSectionId] = useState('')
 
+  // Automatic reading resume when viewing a specific topic page
+  useEffect(() => {
+    if (!pillarId || !topicId) return
+    const nextRef = {
+      pillarId,
+      topicId,
+      sectionId: '',
+      updatedAt: new Date().toISOString(),
+    }
+    useKitStore.getState().updateActiveKitNotebookMeta({ lastGuideRef: nextRef })
+    void Promise.resolve(guideContentApi?.putResume?.(pillarId, topicId))
+      .then((res) => {
+        if (res?.resume) {
+          useKitStore.getState().updateActiveKitNotebookMeta({ lastGuideRef: res.resume })
+        }
+      })
+      .catch(() => null)
+  }, [pillarId, topicId, kitId, kitSlug])
+
+  const dogearsRef = useRef<GuideDogearItem[]>(dogears)
+  dogearsRef.current = dogears
+
+  // Load folded page dogears for active Kit
+  const loadDogears = useCallback(() => {
+    if (!guideContentApi?.listDogears) {
+      dogearsRef.current = []
+      setDogears([])
+      return
+    }
+    Promise.resolve(guideContentApi.listDogears())
+      .then((items) => {
+        const list = Array.isArray(items) ? items : []
+        dogearsRef.current = list
+        setDogears(list)
+        useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: list.length })
+      })
+      .catch(() => {
+        dogearsRef.current = []
+        setDogears([])
+      })
+  }, [])
+
+  useEffect(() => {
+    loadDogears()
+  }, [kitId, kitSlug, loadDogears])
+
+  const handleToggleDogear = useCallback((pId: string, tId: string, secId = '') => {
+    const next = toggleDogearEntry(dogearsRef.current, pId, tId, secId)
+    dogearsRef.current = next
+    setDogears(next)
+    useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: next.length })
+
+    Promise.resolve(guideContentApi?.toggleDogear?.(pId, tId, secId))
+      .then(() => {
+        window.dispatchEvent(new Event('guide-dogears-updated'))
+      })
+      .catch(() => {
+        const reverted = toggleDogearEntry(dogearsRef.current, pId, tId, secId)
+        dogearsRef.current = reverted
+        setDogears(reverted)
+        useKitStore.getState().updateActiveKitNotebookMeta({ dogearCount: reverted.length })
+      })
+  }, [])
+
+  const openGuideChat = useCallback(() => {
+    const state = useAppStore.getState()
+    if (!state.chatOpen.guide) {
+      state.toggleChat('guide')
+    }
+  }, [])
+
   const loadArchived = useCallback(async () => {
-    const kitsApi = safeGetKitsApi()
-    if (!kitId || !kitsApi?.getArchivedNotes) {
+    if (!effectiveKitId || !kitsApi?.getArchivedNotes) {
       setArchivedNotes([])
       return
     }
     try {
-      const res = await kitsApi.getArchivedNotes(kitId)
+      const res = (await kitsApi.getArchivedNotes(effectiveKitId)) as {
+        notes?: ArchivedNote[]
+      } | null
       setArchivedNotes(Array.isArray(res?.notes) ? res.notes : [])
     } catch {
       setArchivedNotes([])
     }
-  }, [kitId])
+  }, [effectiveKitId])
 
   useEffect(() => {
     setRefilingKey(null)
     setDrawerOpen(false)
     void loadArchived()
-  }, [kitId, loadArchived])
+  }, [effectiveKitId, loadArchived])
 
   const openRefilePicker = (key: string) => {
     if (refilingKey === key) {
@@ -115,10 +193,9 @@ export default function GuidePage() {
   }
 
   const handleRefileNote = async (note: ArchivedNote) => {
-    const kitsApi = safeGetKitsApi()
-    if (!kitId || !kitsApi?.refileArchivedNote) return
+    if (!effectiveKitId || !kitsApi?.refileArchivedNote) return
     try {
-      await kitsApi.refileArchivedNote(kitId, {
+      await kitsApi.refileArchivedNote(effectiveKitId, {
         fromPillarId: note.pillarId,
         fromTopicId: note.topicId,
         fromSectionId: note.sectionId,
@@ -131,15 +208,17 @@ export default function GuidePage() {
       window.dispatchEvent(new Event('guide-progress-updated'))
       await loadArchived()
     } catch (err) {
-      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Could not re-file note' })
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Could not re-file note',
+      })
     }
   }
 
   const handleDeleteArchived = async (note: ArchivedNote) => {
-    const kitsApi = safeGetKitsApi()
-    if (!kitId || !kitsApi?.deleteArchivedNote) return
+    if (!effectiveKitId || !kitsApi?.deleteArchivedNote) return
     try {
-      await kitsApi.deleteArchivedNote(kitId, {
+      await kitsApi.deleteArchivedNote(effectiveKitId, {
         pillarId: note.pillarId,
         topicId: note.topicId,
         sectionId: note.sectionId,
@@ -147,7 +226,10 @@ export default function GuidePage() {
       addToast({ type: 'info', message: 'Archived note deleted' })
       await loadArchived()
     } catch (err) {
-      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Could not delete note' })
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Could not delete note',
+      })
     }
   }
 
@@ -161,16 +243,29 @@ export default function GuidePage() {
   }
 
   const selectedRefilePillar = pillars.find((p) => p.id === targetPillarId)
+  const pillarOptions = useMemo(
+    () => pillars.map((p) => ({ value: p.id, label: p.shortName })),
+    [pillars],
+  )
+  const topicOptions = useMemo(
+    () => (selectedRefilePillar?.topics || []).map((t) => ({ value: t.id, label: t.name })),
+    [selectedRefilePillar],
+  )
+  const sectionOptions = useMemo(
+    () => (selectedRefilePillar?.sections || []).map((s) => ({ value: s.id, label: s.name })),
+    [selectedRefilePillar],
+  )
 
   return (
     <div className="guide-layout" id="guide-page">
-      {pillarId && <PillarNav />}
+      {pillarId && <PillarNav dogears={dogears} />}
 
       <div className="guide-content">
         {!isMobile && pillarId && (
           <div className="guide-float-actions">
             {capabilities.calculator !== false && (
               <button
+                type="button"
                 className="btn btn-secondary floating-calc-btn"
                 onClick={() => setCalcModalOpen(true)}
                 title="BotE Calculator (⌘E)"
@@ -182,10 +277,11 @@ export default function GuidePage() {
             )}
             {!chatOpen && (
               <button
-                className="btn btn-primary floating-chat-btn"
+                type="button"
+                className="btn btn-primary floating-chat-btn inline-flex items-center gap-1.5"
                 onClick={() => toggleChat('guide')}
               >
-                <MessageSquare size={16} />
+                <KitAvatar size={16} state="idle" />
                 Ask AI
               </button>
             )}
@@ -194,32 +290,32 @@ export default function GuidePage() {
 
         {archivedNotes.length > 0 && (
           <div
-            className="mx-4 mt-4 rounded-xl border border-outline-variant bg-surface-container-low p-3.5"
+            className="mx-4 mt-4 rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-low)] p-3.5"
             data-testid="archived-notes-drawer"
           >
             <button
               type="button"
               onClick={() => setDrawerOpen((v) => !v)}
-              className="w-full flex items-center justify-between text-left text-xs font-semibold text-on-surface"
+              className="flex w-full cursor-pointer items-center justify-between text-left text-xs font-semibold text-[var(--color-ink)]"
             >
               <span className="inline-flex items-center gap-2">
-                <Archive size={15} className="text-primary" />
+                <Archive size={15} className="text-[var(--color-brand)]" />
                 Archived Notes ({archivedNotes.length}) — preserved from retired topics
               </span>
               {drawerOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
             </button>
 
             {drawerOpen && (
-              <div className="mt-3 space-y-2.5 border-t border-outline-variant pt-3">
+              <div className="mt-3 space-y-2.5 border-t border-[var(--color-line)] pt-3">
                 {archivedNotes.map((note) => {
                   const key = `${note.pillarId}__${note.topicId}__${note.sectionId}`
                   return (
                     <div
                       key={key}
-                      className="rounded-lg border border-outline-variant bg-surface p-3 space-y-2"
+                      className="space-y-2 rounded-lg border border-[var(--color-line)] bg-[var(--color-surface-card)] p-3"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <code className="text-[11px] text-on-surface-variant">
+                        <code className="font-mono text-[11px] text-[var(--color-ink-muted)]">
                           {note.pillarId} / {note.topicId} / {note.sectionId}
                         </code>
                         <div className="flex items-center gap-1">
@@ -247,52 +343,42 @@ export default function GuidePage() {
                         </div>
                       </div>
 
-                      <pre className="text-xs text-on-surface whitespace-pre-wrap max-h-36 overflow-y-auto bg-surface-container-low rounded p-2">
+                      <pre className="max-h-36 overflow-y-auto rounded bg-[var(--color-surface-low)] p-2 font-mono text-xs whitespace-pre-wrap text-[var(--color-ink)]">
                         {note.content}
                       </pre>
 
                       {refilingKey === key && (
                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                          <select
-                            aria-label="Target pillar"
+                          <SelectPopover
+                            size="xs"
+                            ariaLabel="Target pillar"
                             value={targetPillarId}
-                            onChange={(e) => handlePillarTargetChange(e.target.value)}
-                            className="input text-xs py-1"
-                          >
-                            {pillars.map((p) => (
-                              <option key={p.id} value={p.id}>
-                                {p.shortName}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            aria-label="Target topic"
+                            onChange={handlePillarTargetChange}
+                            options={pillarOptions}
+                            menuWidthClass="w-52"
+                          />
+                          <SelectPopover
+                            size="xs"
+                            ariaLabel="Target topic"
                             value={targetTopicId}
-                            onChange={(e) => setTargetTopicId(e.target.value)}
-                            className="input text-xs py-1"
-                          >
-                            {(selectedRefilePillar?.topics || []).map((t) => (
-                              <option key={t.id} value={t.id}>
-                                {t.name}
-                              </option>
-                            ))}
-                          </select>
-                          <select
-                            aria-label="Target section"
+                            onChange={setTargetTopicId}
+                            options={topicOptions}
+                            menuWidthClass="w-60"
+                          />
+                          <SelectPopover
+                            size="xs"
+                            ariaLabel="Target section"
                             value={targetSectionId}
-                            onChange={(e) => setTargetSectionId(e.target.value)}
-                            className="input text-xs py-1"
-                          >
-                            {(selectedRefilePillar?.sections || []).map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                          </select>
+                            onChange={setTargetSectionId}
+                            options={sectionOptions}
+                            menuWidthClass="w-60"
+                          />
                           <button
                             type="button"
                             className="btn btn-primary btn-sm"
-                            disabled={!targetPillarId || !targetTopicId || !targetSectionId}
+                            disabled={
+                              !targetPillarId || !targetTopicId || !targetSectionId
+                            }
                             onClick={() => void handleRefileNote(note)}
                           >
                             Move Note
@@ -307,9 +393,14 @@ export default function GuidePage() {
           </div>
         )}
 
-        <BlueprintShell />
+        <BlueprintShell
+          dogears={dogears}
+          onToggleDogear={handleToggleDogear}
+          onAskKit={() => openGuideChat()}
+        />
       </div>
 
+      {/* Desktop companion drawer only; Layout mounts the mobile drawer when isMobile */}
       {!isMobile && pillarId && (
         <ChatPanel
           page="guide"

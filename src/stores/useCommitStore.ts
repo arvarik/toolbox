@@ -25,7 +25,6 @@ export interface CommitStoreState {
   errorMsg: string
   updates: CommitSectionUpdate[]
   enabledSections: Set<string>
-  expandedSections: Set<string>
   savedCount: number
   messages: CommitMessage[]
   topicContext: CommitTopicContext | null
@@ -36,14 +35,9 @@ export interface CommitStoreState {
   startAnalysis: (messages: CommitMessage[], topicContext: CommitTopicContext | null) => void
   setPhase: (phase: CommitPhase) => void
   setError: (errorMsg: string) => void
-  setUpdatesResult: (
-    updates: CommitSectionUpdate[],
-    enabledSet: Set<string>,
-    expandedSet: Set<string>,
-  ) => void
+  setUpdatesResult: (updates: CommitSectionUpdate[], enabledSet: Set<string>) => void
   mergeUpdatesResult: (newUpdates: CommitSectionUpdate[], targetSectionIds: string[]) => void
   setEnabledSections: (updater: SetUpdater<string>) => void
-  setExpandedSections: (updater: SetUpdater<string>) => void
   setSavedCount: (count: number) => void
 }
 
@@ -55,7 +49,6 @@ const useCommitStore = create<CommitStoreState>((set) => ({
   errorMsg: '',
   updates: [],
   enabledSections: new Set<string>(),
-  expandedSections: new Set<string>(),
   savedCount: 0,
 
   messages: [],
@@ -70,7 +63,6 @@ const useCommitStore = create<CommitStoreState>((set) => ({
       phase: 'idle',
       updates: [],
       enabledSections: new Set<string>(),
-      expandedSections: new Set<string>(),
       savedCount: 0,
       messages: [],
       topicContext: null,
@@ -86,7 +78,6 @@ const useCommitStore = create<CommitStoreState>((set) => ({
       errorMsg: '',
       updates: [],
       enabledSections: new Set<string>(),
-      expandedSections: new Set<string>(),
       savedCount: 0,
       messages,
       topicContext,
@@ -95,11 +86,10 @@ const useCommitStore = create<CommitStoreState>((set) => ({
   setPhase: (phase) => set({ phase }),
   setError: (errorMsg) => set({ errorMsg, phase: 'error' }),
 
-  setUpdatesResult: (updates, enabledSet, expandedSet) =>
+  setUpdatesResult: (updates, enabledSet) =>
     set({
       updates,
       enabledSections: enabledSet,
-      expandedSections: expandedSet,
       phase: 'preview',
     }),
 
@@ -115,13 +105,9 @@ const useCommitStore = create<CommitStoreState>((set) => ({
       const nextEnabled = new Set(state.enabledSections)
       for (const id of targetSectionIds) nextEnabled.add(id)
 
-      const nextExpanded = new Set(state.expandedSections)
-      for (const id of targetSectionIds) nextExpanded.add(id)
-
       return {
         updates: nextUpdates,
         enabledSections: nextEnabled,
-        expandedSections: nextExpanded,
         phase: 'preview',
       }
     }),
@@ -129,11 +115,6 @@ const useCommitStore = create<CommitStoreState>((set) => ({
   setEnabledSections: (updater) =>
     set((state) => ({
       enabledSections: typeof updater === 'function' ? updater(state.enabledSections) : updater,
-    })),
-
-  setExpandedSections: (updater) =>
-    set((state) => ({
-      expandedSections: typeof updater === 'function' ? updater(state.expandedSections) : updater,
     })),
 
   setSavedCount: (count) => set({ savedCount: count }),

@@ -1,25 +1,44 @@
 import { useEffect, useMemo } from 'react'
-import { X, Layers, Settings, Sun, Moon } from 'lucide-react'
-import { NavLink } from 'react-router'
+import { X, Sun, Moon, LogOut } from 'lucide-react'
+import { NavLink, useLocation } from 'react-router'
 import PomodoroWidget from './PomodoroWidget'
-import { buildStudyNavItems, workspaceItems } from './Sidebar'
+import {
+  ActiveKitSwitcher,
+  bottomItems,
+  buildStudyNavItems,
+  performWorkspaceSignOut,
+  workspaceItems,
+} from './Sidebar'
+import { useAuth } from '../auth/AuthGate'
 import useAppStore from '../../stores/appStore'
-import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
+import useKitStore, {
+  extractKitSlugFromPathname,
+  useActiveKit,
+  useKitRoutePrefix,
+} from '../../stores/useKitStore'
+import { KitLogo } from '../ui/KitLogo'
 
 export interface MobileDrawerProps {
   open: boolean
   onClose: () => void
 }
 
+const activeLinkStyle = {
+  background: 'var(--color-surface-elevated)',
+  color: 'var(--color-ink)',
+  boxShadow: 'var(--shadow-hairline)',
+} as const
+
 export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
-  const model = useAppStore((s) => s.model)
-  const setModel = useAppStore((s) => s.setModel)
   const theme = useAppStore((s) => s.theme)
   const toggleTheme = useAppStore((s) => s.toggleTheme)
-  const availableModels = useAppStore((s) => s.availableModels)
-  const fetchAvailableModels = useAppStore((s) => s.fetchAvailableModels)
-  const { capabilities } = useActiveKit()
+  const kits = useKitStore((s) => s.kits)
+  const fetchKits = useKitStore((s) => s.fetchKits)
+  const { authRequired, user, logout } = useAuth()
+  const { skeleton, capabilities } = useActiveKit()
   const prefix = useKitRoutePrefix()
+  const location = useLocation()
+  const urlSlug = extractKitSlugFromPathname(location.pathname)
 
   const studyItems = useMemo(
     () => buildStudyNavItems(prefix, capabilities),
@@ -27,24 +46,57 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
   )
 
   useEffect(() => {
-    if (open) void fetchAvailableModels()
-  }, [open, fetchAvailableModels])
+    if (!open) return
+    void fetchKits()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        onClose()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, fetchKits, onClose])
+
+  const handleSignOut = () => {
+    onClose()
+    performWorkspaceSignOut(logout)
+  }
 
   if (!open) return null
 
   return (
     <div className="mobile-drawer-overlay mobile-overlay" onClick={onClose} id="mobile-nav-overlay">
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Navigation menu"
         className="mobile-drawer"
         onClick={(e) => e.stopPropagation()}
         id="mobile-drawer"
+        style={{
+          background: 'var(--color-surface-low)',
+          borderRight: '1px solid var(--color-line)',
+        }}
       >
-        <div className="mobile-drawer-header">
+        <div
+          className="mobile-drawer-header"
+          style={{ borderBottom: '1px solid var(--color-line)' }}
+        >
           <div className="sidebar-logo">
-            <Layers size={16} />
+            <KitLogo size={20} />
           </div>
-          <span className="sidebar-title">Toolbox</span>
+          <div className="flex min-w-0 flex-col leading-tight">
+            <span className="sidebar-title text-[14px] font-semibold tracking-tight text-[var(--color-ink)]">
+              Toolbox
+            </span>
+            <span className="truncate text-[10.5px] font-medium text-[var(--color-ink-faint)]">
+              Tools for Thought
+            </span>
+          </div>
           <button
+            type="button"
             className="mobile-drawer-close close-btn"
             onClick={onClose}
             aria-label="Close menu"
@@ -55,7 +107,7 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
         </div>
 
         <nav className="mobile-drawer-nav" role="navigation" aria-label="mobile">
-          {[...workspaceItems, ...studyItems].map((item) => {
+          {workspaceItems.map((item) => {
             const Icon = item.icon
             return (
               <NavLink
@@ -63,9 +115,8 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
                 to={item.to}
                 end={Boolean(item.exact)}
                 onClick={onClose}
-                className={({ isActive }) =>
-                  `mobile-drawer-link${isActive ? ' active' : ''}`
-                }
+                className={({ isActive }) => `mobile-drawer-link${isActive ? ' active' : ''}`}
+                style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
                 id={`drawer-${item.navId}`}
               >
                 <Icon size={18} />
@@ -74,90 +125,75 @@ export default function MobileDrawer({ open, onClose }: MobileDrawerProps) {
             )
           })}
 
-          <div
-            style={{
-              marginTop: 'auto',
-              paddingTop: 'var(--space-4)',
-              borderTop: '1px solid var(--color-border)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 'var(--space-4)',
-            }}
-          >
-            <div style={{ padding: '0 var(--space-4)' }}>
-              <div
-                className="sidebar-section-label"
-                style={{
-                  marginBottom: '4px',
-                  fontSize: '11px',
-                  textTransform: 'uppercase',
-                  color: 'var(--color-text-tertiary)',
-                  fontWeight: 600,
-                }}
-              >
-                Model
-              </div>
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                style={{
-                  width: '100%',
-                  background: 'var(--color-surface)',
-                  color: 'var(--color-text-secondary)',
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--radius-sm)',
-                  padding: '6px 8px',
-                  fontSize: '13px',
-                  outline: 'none',
-                  cursor: 'pointer',
-                }}
-              >
-                {availableModels.length > 0 ? (
-                  availableModels.map((group) => (
-                    <optgroup key={group.provider.id} label={group.provider.name}>
-                      {group.models.map((m) => (
-                        <option key={m.id} value={m.id}>
-                          {m.name}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))
-                ) : (
-                  <option value={model}>{model}</option>
-                )}
-              </select>
+          {(kits.length > 0 || Boolean(urlSlug)) && (
+            <div className="px-2 pt-2 pb-1">
+              <ActiveKitSwitcher onAfterSelect={onClose} />
             </div>
+          )}
 
+          <div className="px-3 pt-3 pb-1 text-[11px] font-semibold tracking-wider text-[var(--color-ink-faint)] uppercase">
+            {urlSlug ? skeleton.identity.name : 'Study'}
+          </div>
+
+          {studyItems.map((item) => {
+            const Icon = item.icon
+            return (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={Boolean(item.exact)}
+                onClick={onClose}
+                className={({ isActive }) => `mobile-drawer-link${isActive ? ' active' : ''}`}
+                style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
+                id={`drawer-${item.navId}`}
+              >
+                <Icon size={18} />
+                <span>{item.label}</span>
+              </NavLink>
+            )
+          })}
+
+          <div className="mt-auto flex flex-col gap-2 border-t border-[var(--color-line)] pt-4">
             <PomodoroWidget />
 
             <button
+              type="button"
               onClick={toggleTheme}
-              className="mobile-drawer-link"
+              className="mobile-drawer-link w-full cursor-pointer border-0 bg-transparent text-left"
               id="drawer-nav-theme"
-              style={{
-                background: 'none',
-                border: 'none',
-                width: '100%',
-                cursor: 'pointer',
-                textAlign: 'left',
-                font: 'inherit',
-              }}
             >
               {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
-              <span>{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+              <span>{theme === 'dark' ? 'Light mode' : 'Dark mode'}</span>
             </button>
 
-            <NavLink
-              to="/settings"
-              onClick={onClose}
-              className={({ isActive }) =>
-                `mobile-drawer-link${isActive ? ' active' : ''}`
-              }
-              id="drawer-nav-settings"
-            >
-              <Settings size={18} />
-              <span>Settings</span>
-            </NavLink>
+            {bottomItems.map((item) => {
+              const Icon = item.icon
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  onClick={onClose}
+                  className={({ isActive }) => `mobile-drawer-link${isActive ? ' active' : ''}`}
+                  style={({ isActive }) => (isActive ? activeLinkStyle : undefined)}
+                  id={`drawer-${item.navId}`}
+                >
+                  <Icon size={18} />
+                  <span>{item.label}</span>
+                </NavLink>
+              )
+            })}
+
+            {authRequired && user && (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className="mobile-drawer-link w-full cursor-pointer border-0 bg-transparent text-left"
+                id="drawer-nav-signout"
+              >
+                <LogOut size={18} />
+                <span>@{user.username} · Sign out</span>
+              </button>
+            )}
           </div>
         </nav>
       </div>

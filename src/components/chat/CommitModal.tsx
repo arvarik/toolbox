@@ -1,13 +1,120 @@
 import { useEffect, useCallback } from 'react'
-import { GitCommit, Check, Loader2, X, Sparkles, Eye, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
-import MarkdownRenderer from '../shared/MarkdownRenderer'
+import { GitCommit, Check, Loader2, X, Sparkles, AlertCircle } from 'lucide-react'
 import { chatApi, type CommitSectionUpdate } from '../../utils/api'
+import { KitAvatar, NoteUpdateCard } from '../ui'
 import useAppStore from '../../stores/appStore'
 import useCommitStore from '../../stores/useCommitStore'
 import { useActiveKit } from '../../stores/useKitStore'
 
+type DiffHunk = { type: 'ctx' | 'del' | 'add'; line: string }
+
+function extractSummaryBullets(update: CommitSectionUpdate): string[] {
+  const bullets: string[] = []
+  if (update.reason?.trim()) {
+    bullets.push(update.reason.trim())
+  }
+  const lines = update.newContent
+    .split('\n')
+    .map((raw) =>
+      raw
+        .replace(/^#{1,6}\s+/, '')
+        .replace(/^[-*+]\s+/, '')
+        .replace(/^\d+\.\s+/, '')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .trim(),
+    )
+    .filter((l) => l.length >= 16 && !l.startsWith('```') && !l.startsWith('|'))
+
+  for (const line of lines) {
+    if (bullets.length >= 3) break
+    if (!bullets.some((b) => b.toLowerCase() === line.toLowerCase())) {
+      bullets.push(line.length > 140 ? `${line.slice(0, 137)}…` : line)
+    }
+  }
+  return bullets
+}
+
+function buildLineDiff(existingRaw: string | undefined, nextRaw: string): DiffHunk[] {
+  const oldLines = (existingRaw || '')
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0)
+  const newLines = nextRaw
+    .split('\n')
+    .map((l) => l.trimEnd())
+    .filter((l) => l.trim().length > 0)
+
+  if (oldLines.length === 0) {
+    return newLines.map((line) => ({ type: 'add', line }))
+  }
+
+  const m = oldLines.length
+  const n = newLines.length
+
+  // ponytail: exact LCS up to 250k cells (~500x500 lines); above that, anchor common prefix/suffix so 100% of lines still show without quadratic lag
+  if (m * n > 250_000) {
+    let prefixLen = 0
+    while (
+      prefixLen < m &&
+      prefixLen < n &&
+      oldLines[prefixLen].trim() === newLines[prefixLen].trim()
+    ) {
+      prefixLen++
+    }
+    let suffixLen = 0
+    while (
+      suffixLen < m - prefixLen &&
+      suffixLen < n - prefixLen &&
+      oldLines[m - 1 - suffixLen].trim() === newLines[n - 1 - suffixLen].trim()
+    ) {
+      suffixLen++
+    }
+    const fallback: DiffHunk[] = []
+    for (let i = 0; i < prefixLen; i++) fallback.push({ type: 'ctx', line: newLines[i] })
+    for (let i = prefixLen; i < m - suffixLen; i++) {
+      fallback.push({ type: 'del', line: oldLines[i] })
+    }
+    for (let j = prefixLen; j < n - suffixLen; j++) {
+      fallback.push({ type: 'add', line: newLines[j] })
+    }
+    for (let j = n - suffixLen; j < n; j++) fallback.push({ type: 'ctx', line: newLines[j] })
+    return fallback
+  }
+
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] =
+        oldLines[i].trim() === newLines[j].trim()
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+
+  const hunks: DiffHunk[] = []
+  let i = 0
+  let j = 0
+  while (i < m && j < n) {
+    if (oldLines[i].trim() === newLines[j].trim()) {
+      hunks.push({ type: 'ctx', line: newLines[j] })
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      hunks.push({ type: 'del', line: oldLines[i] })
+      i++
+    } else {
+      hunks.push({ type: 'add', line: newLines[j] })
+      j++
+    }
+  }
+  while (i < m) hunks.push({ type: 'del', line: oldLines[i++] })
+  while (j < n) hunks.push({ type: 'add', line: newLines[j++] })
+  return hunks
+}
+
 /**
- * CommitModal — Intelligent session-to-guide commit.
+ * CommitModal — Clean Note Update review modal with progressive diff disclosure.
  *
  * Uses global useCommitStore so background processes can run
  * when minimized into the TaskWorkingBar.
@@ -23,7 +130,6 @@ export default function CommitModal() {
     errorMsg,
     updates,
     enabledSections,
-    expandedSections,
     savedCount,
     messages,
     topicContext,
@@ -34,62 +140,80 @@ export default function CommitModal() {
     setUpdatesResult,
     mergeUpdatesResult,
     setEnabledSections,
-    setExpandedSections,
     setSavedCount,
   } = useCommitStore()
 
-  const analyze = useCallback(async (targetSectionIds: string[] = []) => {
-    if (!topicContext) return
-    const callId = Date.now()
-    useCommitStore.setState({ currentCallId: callId })
-    setPhase('analyzing')
+  const analyze = useCallback(
+    async (targetSectionIds: string[] = []) => {
+      if (!topicContext) return
+      const callId = Date.now()
+      useCommitStore.setState({ currentCallId: callId })
+      setPhase('analyzing')
 
-    try {
-      const payload: {
-        messages: Array<{ role: string; content: string }>
-        pillarId: string
-        topicId: string
-        topicName: string
-        model: string
-        targetSectionIds?: string[]
-      } = {
-        messages: messages.map((m) => ({ role: m.role, content: m.content })),
-        pillarId: topicContext.pillarId,
-        topicId: topicContext.topicId,
-        topicName: topicContext.topicName,
-        model: selectedModel,
-      }
-      if (targetSectionIds.length > 0) {
-        payload.targetSectionIds = targetSectionIds
-      }
-
-      const result = (await chatApi.commitAnalyze(payload)) as { updates?: CommitSectionUpdate[] }
-
-      if (callId !== useCommitStore.getState().currentCallId) return
-
-      if (!result.updates || result.updates.length === 0) {
-        if (targetSectionIds.length === 0) {
-          setUpdatesResult([], new Set(), new Set())
-        } else {
-          setError('Failed to generate content for the selected sections.')
+      try {
+        const payload: {
+          messages: Array<{ role: string; content: string }>
+          pillarId: string
+          topicId: string
+          topicName: string
+          model: string
+          targetSectionIds?: string[]
+        } = {
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+          pillarId: topicContext.pillarId,
+          topicId: topicContext.topicId,
+          topicName: topicContext.topicName,
+          model: selectedModel,
         }
-        return
-      }
+        if (targetSectionIds.length > 0) {
+          payload.targetSectionIds = targetSectionIds
+        }
 
-      if (targetSectionIds.length > 0) {
-        mergeUpdatesResult(result.updates, targetSectionIds)
-      } else {
-        const initialEnabled = new Set(result.updates.map((u) => u.sectionId))
-        const initialExpanded = result.updates.length > 0 ? new Set([result.updates[0].sectionId]) : new Set<string>()
-        setUpdatesResult(result.updates, initialEnabled, initialExpanded)
+        const result = (await chatApi.commitAnalyze(payload)) as {
+          updates?: CommitSectionUpdate[]
+        }
+
+        if (callId !== useCommitStore.getState().currentCallId) return
+
+        if (!result.updates || result.updates.length === 0) {
+          if (targetSectionIds.length === 0) {
+            setUpdatesResult([], new Set())
+          } else {
+            setError('Failed to generate content for the selected sections.')
+          }
+          return
+        }
+
+        if (targetSectionIds.length > 0) {
+          mergeUpdatesResult(result.updates, targetSectionIds)
+        } else {
+          const initialEnabled = new Set(result.updates.map((u) => u.sectionId))
+          setUpdatesResult(result.updates, initialEnabled)
+        }
+      } catch (err) {
+        if (callId !== useCommitStore.getState().currentCallId) return
+        setError(err instanceof Error ? err.message : 'Failed to analyze session.')
       }
-    } catch (err) {
-      if (callId !== useCommitStore.getState().currentCallId) return
-      setError(err instanceof Error ? err.message : 'Failed to analyze session.')
+    },
+    [
+      messages,
+      topicContext,
+      selectedModel,
+      setPhase,
+      setUpdatesResult,
+      setError,
+      mergeUpdatesResult,
+    ],
+  )
+
+  const handleCloseOrMinimize = useCallback(() => {
+    if (phase === 'analyzing' || phase === 'saving' || phase === 'preview') {
+      setMinimized(true)
+    } else {
+      closeCompletely()
     }
-  }, [messages, topicContext, selectedModel, setPhase, setUpdatesResult, setError, mergeUpdatesResult])
+  }, [phase, setMinimized, closeCompletely])
 
-  // Auto-analyze when opened and in 'idle' phase
   useEffect(() => {
     if (isOpen && phase === 'idle' && topicContext?.pillarId) {
       const timer = setTimeout(() => {
@@ -102,19 +226,23 @@ export default function CommitModal() {
     }
   }, [isOpen, phase, topicContext?.pillarId, topicContext?.topicId, analyze])
 
+  useEffect(() => {
+    if (!isOpen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && phase !== 'saving') {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        handleCloseOrMinimize()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [isOpen, phase, handleCloseOrMinimize])
+
   if (!isOpen) return null
 
   const toggleSection = (sectionId: string) => {
     setEnabledSections((prev) => {
-      const next = new Set(prev)
-      if (next.has(sectionId)) next.delete(sectionId)
-      else next.add(sectionId)
-      return next
-    })
-  }
-
-  const toggleExpand = (sectionId: string) => {
-    setExpandedSections((prev) => {
       const next = new Set(prev)
       if (next.has(sectionId)) next.delete(sectionId)
       else next.add(sectionId)
@@ -142,138 +270,110 @@ export default function CommitModal() {
         message: `Committed ${count} section${toSave.length !== 1 ? 's' : ''} to "${topicContext.topicName}" guide`,
       })
 
-      // Dispatch custom event to update sidebar
       window.dispatchEvent(new Event('guide-progress-updated'))
 
       setTimeout(closeCompletely, 1500)
     } catch (err) {
-      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to save.' })
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to save.',
+      })
       setPhase('preview')
     }
   }
 
   const enabledCount = enabledSections.size
-  const allSections = topicContext ? (sectionsByPillar[topicContext.pillarId] || []) : []
+  const allSections = topicContext ? sectionsByPillar[topicContext.pillarId] || [] : []
   const updateMap = new Map(updates.map((u) => [u.sectionId, u]))
   const identifiedIds = new Set(updates.map((u) => u.sectionId))
   const requiresReanalysis = Array.from(enabledSections).some((id) => !identifiedIds.has(id))
 
-  const handleCloseOrMinimize = () => {
-    if (phase === 'analyzing' || phase === 'saving' || phase === 'preview') {
-      setMinimized(true)
-    } else {
-      closeCompletely()
-    }
-  }
+  const headerKitState =
+    phase === 'analyzing' || phase === 'saving'
+      ? 'thinking'
+      : phase === 'done'
+        ? 'done'
+        : 'idle'
 
   return (
     <div
-      style={{
-        position: 'fixed', inset: 0,
-        background: 'rgba(0,0,0,0.6)',
-        backdropFilter: 'blur(4px)',
-        zIndex: 1000,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: 'var(--space-4)',
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[3px]"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && phase !== 'saving') handleCloseOrMinimize()
       }}
-      onClick={(e) => { if (e.target === e.currentTarget && phase !== 'saving') handleCloseOrMinimize() }}
     >
       <div
-        style={{
-          background: 'var(--color-surface)',
-          borderRadius: 'var(--radius-xl)',
-          border: '1px solid var(--color-border)',
-          width: '100%',
-          maxWidth: 780,
-          maxHeight: '90vh',
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
-          boxShadow: '0 24px 60px rgba(0,0,0,0.4)',
-        }}
         id="commit-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="commit-modal-title"
+        className="flex max-h-[90vh] w-full max-w-[740px] flex-col overflow-hidden rounded-2xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] shadow-[var(--shadow-float)]"
       >
         {/* ── Header ── */}
-        <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          padding: 'var(--space-5) var(--space-6)',
-          borderBottom: '1px solid var(--color-border)',
-          flexShrink: 0,
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
-            <div style={{
-              width: 32, height: 32, borderRadius: 'var(--radius-md)',
-              background: 'var(--color-accent-subtle)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <GitCommit size={16} style={{ color: 'var(--color-accent)' }} />
-            </div>
+        <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] px-6 py-4">
+          <div className="flex items-center gap-3">
+            <KitAvatar size={20} state={headerKitState} />
             <div>
-              <div style={{ fontWeight: 700, fontSize: 'var(--text-md)' }}>Commit to Guide</div>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+              <h2
+                id="commit-modal-title"
+                className="font-serif text-[17px] leading-tight font-normal text-[var(--color-ink)]"
+              >
+                Commit to Guide
+              </h2>
+              <div className="text-[12px] text-[var(--color-ink-muted)]">
                 {topicContext?.topicName || 'Unknown topic'}
               </div>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-            <button className="btn btn-ghost btn-icon" onClick={handleCloseOrMinimize}>
-              <X size={16} />
-            </button>
-          </div>
+          <button
+            type="button"
+            aria-label="Close"
+            className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+            onClick={handleCloseOrMinimize}
+          >
+            <X size={16} />
+          </button>
         </div>
 
         {/* ── Analyzing Phase ── */}
         {phase === 'analyzing' && (
-          <div style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 'var(--space-10)',
-            minHeight: 280,
-          }}>
-            <div style={{ textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              <div style={{
-                width: 56, height: 56, borderRadius: '50%',
-                background: 'var(--color-accent-subtle)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                margin: '0 auto var(--space-4)',
-              }}>
-                <Sparkles size={24} style={{ color: 'var(--color-accent)', animation: 'pulse 1.5s ease-in-out infinite' }} />
+          <div className="flex min-h-[260px] flex-1 items-center justify-center p-10">
+            <div className="flex max-w-xs flex-col items-center text-center">
+              <div className="mb-3.5">
+                <KitAvatar size={28} state="thinking" />
               </div>
-              <div style={{ fontWeight: 700, fontSize: 'var(--text-md)', marginBottom: 'var(--space-2)' }}>
+              <div className="font-serif text-[17px] text-[var(--color-ink)]">
                 Analyzing Your Session
               </div>
-              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', maxWidth: 320, margin: '0 auto', lineHeight: 1.6 }}>
-                AI is reading through your conversation, identifying which guide sections were covered, and reconciling with existing content…
-              </div>
-              <div style={{ marginTop: 'var(--space-4)', display: 'flex', justifyContent: 'center' }}>
-                <Loader2 size={20} style={{ color: 'var(--color-accent)', animation: 'spin 1s linear infinite' }} />
-              </div>
+              <p className="mt-1.5 text-[13px] leading-relaxed text-[var(--color-ink-muted)]">
+                Kit is reconciling your discussion against existing Guide sections.
+              </p>
+              <Loader2
+                size={18}
+                className="mt-4 animate-spin text-[var(--color-ink-faint)]"
+              />
             </div>
           </div>
         )}
 
         {/* ── Error Phase ── */}
         {phase === 'error' && (
-          <div style={{
-            flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
-            padding: 'var(--space-8)',
-            minHeight: 240,
-          }}>
-            <div style={{ textAlign: 'center', maxWidth: 400 }}>
-              <div style={{
-                width: 48, height: 48, borderRadius: '50%',
-                background: 'rgba(239,68,68,0.12)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                margin: '0 auto var(--space-3)',
-              }}>
-                <AlertCircle size={22} style={{ color: '#ef4444' }} />
+          <div className="flex min-h-[240px] flex-1 items-center justify-center p-8">
+            <div className="max-w-sm text-center">
+              <div className="mx-auto mb-3 inline-flex h-11 w-11 items-center justify-center rounded-full border border-[var(--color-err)]/30 bg-[var(--color-diff-del-bg)] text-[var(--color-err)]">
+                <AlertCircle size={20} />
               </div>
-              <div style={{ fontWeight: 600, fontSize: 'var(--text-md)', marginBottom: 'var(--space-2)' }}>
+              <div className="font-serif text-[17px] text-[var(--color-ink)]">
                 Nothing to Commit
               </div>
-              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', lineHeight: 1.6 }}>
+              <div className="mt-1.5 text-[13px] leading-relaxed text-[var(--color-ink-muted)]">
                 {errorMsg}
               </div>
-              <button className="btn btn-secondary" style={{ marginTop: 'var(--space-4)' }} onClick={closeCompletely}>
+              <button
+                type="button"
+                className="mt-4 inline-flex h-8 cursor-pointer items-center rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-3.5 text-[13px] font-medium text-[var(--color-ink)] hover:bg-[var(--color-surface-hover)]"
+                onClick={closeCompletely}
+              >
                 Close
               </button>
             </div>
@@ -282,19 +382,15 @@ export default function CommitModal() {
 
         {/* ── Done Phase ── */}
         {phase === 'done' && (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--space-8)' }}>
-            <div style={{ textAlign: 'center' }}>
-              <div style={{
-                width: 56, height: 56, borderRadius: '50%',
-                background: 'rgba(34,197,94,0.15)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                margin: '0 auto var(--space-3)',
-              }}>
-                <Check size={28} style={{ color: '#22c55e' }} />
+          <div className="flex min-h-[240px] flex-1 items-center justify-center p-8">
+            <div className="flex flex-col items-center text-center">
+              <div className="mb-3">
+                <KitAvatar size={28} state="done" />
               </div>
-              <div style={{ fontWeight: 700, fontSize: 'var(--text-lg)' }}>Committed!</div>
-              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-text-secondary)', marginTop: 'var(--space-1)' }}>
-                {savedCount} section{savedCount !== 1 ? 's' : ''} saved to {topicContext?.topicName}
+              <div className="font-serif text-[19px] text-[var(--color-ink)]">Committed!</div>
+              <div className="mt-1 text-[13px] text-[var(--color-ink-muted)]">
+                {savedCount} section{savedCount !== 1 ? 's' : ''} saved to{' '}
+                {topicContext?.topicName}
               </div>
             </div>
           </div>
@@ -303,167 +399,111 @@ export default function CommitModal() {
         {/* ── Preview Phase ── */}
         {(phase === 'preview' || phase === 'saving') && (
           <>
-            <div style={{
-              padding: 'var(--space-3) var(--space-6)',
-              borderBottom: '1px solid var(--color-border)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              flexShrink: 0,
-              background: 'var(--color-bg-secondary)',
-            }}>
-              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
-                <strong style={{ color: 'var(--color-text-primary)' }}>{updates.length}</strong> section{updates.length !== 1 ? 's' : ''} identified
-                {' · '}
-                <strong style={{ color: 'var(--color-accent)' }}>{enabledCount}</strong> enabled for commit
+            <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-line)] bg-[var(--color-surface-low)] px-6 py-2.5 text-[12px] text-[var(--color-ink-muted)]">
+              <div className="tabular-nums">
+                <strong className="font-semibold text-[var(--color-ink)]">
+                  {updates.length}
+                </strong>{' '}
+                section{updates.length !== 1 ? 's' : ''} identified ·{' '}
+                <strong className="font-semibold text-[var(--color-brand)]">
+                  {enabledCount}
+                </strong>{' '}
+                enabled for commit
               </div>
-              <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-                <button
-                  className="btn btn-ghost"
-                  style={{ fontSize: '11px', padding: '3px 8px' }}
-                  onClick={() => {
-                    if (enabledCount === allSections.length) {
-                      setEnabledSections(new Set())
-                    } else {
-                      setEnabledSections(new Set(allSections.map((s) => s.id)))
-                    }
-                  }}
-                >
-                  {enabledCount === allSections.length ? 'Deselect All' : 'Select All'}
-                </button>
-              </div>
+              <button
+                type="button"
+                className="cursor-pointer rounded px-2 py-1 text-[11.5px] font-medium text-[var(--color-ink-muted)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-ink)]"
+                onClick={() => {
+                  if (enabledCount === allSections.length) {
+                    setEnabledSections(new Set())
+                  } else {
+                    setEnabledSections(new Set(allSections.map((s) => s.id)))
+                  }
+                }}
+              >
+                {enabledCount === allSections.length ? 'Deselect All' : 'Select All'}
+              </button>
             </div>
 
-            {/* Section cards */}
-            <div style={{ flex: 1, overflow: 'auto', padding: 'var(--space-4) var(--space-6)' }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-                {allSections.map((sec) => {
-                  const update = updateMap.get(sec.id)
-                  const isEnabled = enabledSections.has(sec.id)
-                  const isExpanded = expandedSections.has(sec.id)
-                  const isIdentified = !!update
+            {/* Section cards using shared NoteUpdateCard primitive */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {allSections.map((sec) => {
+                const update = updateMap.get(sec.id)
+                const isEnabled = enabledSections.has(sec.id)
+                const isIdentified = Boolean(update)
+                const bullets = update ? extractSummaryBullets(update) : []
+                const hunks = update
+                  ? buildLineDiff(update.existingContent, update.newContent)
+                  : []
 
-                  return (
-                    <div
-                      key={sec.id}
-                      style={{
-                        borderRadius: 'var(--radius-lg)',
-                        border: `1px solid ${isEnabled ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                        background: isEnabled ? 'var(--color-accent-subtle)' : 'var(--color-bg-secondary)',
-                        overflow: 'hidden',
-                        transition: 'all 0.2s ease',
-                        opacity: isEnabled ? 1 : 0.6,
-                      }}
-                    >
-                      {/* Section header */}
-                      <div
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 'var(--space-3)',
-                          padding: 'var(--space-3) var(--space-4)',
-                          cursor: isIdentified ? 'pointer' : 'default',
-                        }}
-                        onClick={() => { if (isIdentified) toggleExpand(sec.id) }}
+                return (
+                  <NoteUpdateCard
+                    key={sec.id}
+                    sectionName={sec.name}
+                    summaryBullets={isIdentified ? bullets : undefined}
+                    hunks={isIdentified ? hunks : []}
+                    className={`transition-opacity ${isEnabled ? 'opacity-100' : 'opacity-60'}`}
+                    headerLeft={
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={isEnabled}
+                        aria-label={`Include ${sec.name}`}
+                        onClick={() => toggleSection(sec.id)}
+                        className={`flex h-5 w-5 shrink-0 cursor-pointer items-center justify-center rounded border transition-colors ${
+                          isEnabled
+                            ? 'border-[var(--color-accent-fill)] bg-[var(--color-accent-fill)] text-[var(--color-accent-ink)]'
+                            : 'border-[var(--color-line-strong)] bg-[var(--color-surface-low)]'
+                        }`}
                       >
-                        {/* Checkbox */}
-                        <div
-                          onClick={(e) => { e.stopPropagation(); toggleSection(sec.id) }}
-                          style={{
-                            width: 20, height: 20, flexShrink: 0,
-                            border: `2px solid ${isEnabled ? 'var(--color-accent)' : 'var(--color-border)'}`,
-                            borderRadius: 'var(--radius-sm)',
-                            background: isEnabled ? 'var(--color-accent)' : 'transparent',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            cursor: 'pointer',
-                            transition: 'all 0.15s ease',
-                          }}
+                        {isEnabled && <Check size={12} strokeWidth={2.5} />}
+                      </button>
+                    }
+                    badge={
+                      update ? (
+                        <span
+                          className={`rounded px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase ${
+                            update.isNew
+                              ? 'bg-[var(--color-diff-add-bg)] text-[var(--color-diff-add-ink)]'
+                              : 'border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink-muted)]'
+                          }`}
                         >
-                          {isEnabled && <Check size={12} color="white" />}
-                        </div>
-
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{
-                            fontWeight: 600, fontSize: 'var(--text-sm)',
-                            color: 'var(--color-text-primary)',
-                            display: 'flex', alignItems: 'center', gap: 'var(--space-2)',
-                          }}>
-                            {sec.name}
-                            {isIdentified ? (
-                              <span style={{
-                                fontSize: '10px', fontWeight: 600,
-                                padding: '1px 6px', borderRadius: 'var(--radius-full)',
-                                background: update.isNew ? 'rgba(34,197,94,0.15)' : 'rgba(59,130,246,0.15)',
-                                color: update.isNew ? '#22c55e' : '#3b82f6',
-                              }}>
-                                {update.isNew ? 'NEW' : 'MERGE'}
-                              </span>
-                            ) : (
-                              <span style={{
-                                fontSize: '10px', fontWeight: 600,
-                                padding: '1px 6px', borderRadius: 'var(--radius-full)',
-                                background: 'rgba(156,163,175,0.15)',
-                                color: '#9ca3af',
-                              }}>
-                                MISSING
-                              </span>
-                            )}
-                          </div>
-                          <div style={{
-                            fontSize: '11px', color: 'var(--color-text-tertiary)',
-                            marginTop: 2,
-                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                          }}>
-                            {isIdentified ? update.reason : 'Select to force analysis of this section'}
-                          </div>
-                        </div>
-
-                        {isIdentified && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-1)', flexShrink: 0 }}>
-                            <Eye size={12} style={{ color: 'var(--color-text-tertiary)' }} />
-                            {isExpanded
-                              ? <ChevronDown size={14} style={{ color: 'var(--color-text-tertiary)' }} />
-                              : <ChevronRight size={14} style={{ color: 'var(--color-text-tertiary)' }} />}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Expanded preview */}
-                      {isExpanded && isIdentified && (
-                        <div style={{
-                          borderTop: '1px solid var(--color-border)',
-                          padding: 'var(--space-4)',
-                          maxHeight: 360,
-                          overflow: 'auto',
-                        }}>
-                          <div style={{
-                            background: 'var(--color-surface)',
-                            borderRadius: 'var(--radius-md)',
-                            padding: 'var(--space-4)',
-                            border: '1px solid var(--color-border)',
-                            fontSize: 'var(--text-sm)',
-                            lineHeight: 'var(--leading-relaxed)',
-                          }}>
-                            <MarkdownRenderer content={update.newContent} />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
+                          {update.isNew ? 'NEW' : 'MERGE'}
+                        </span>
+                      ) : (
+                        <span className="rounded border border-[var(--color-line)] bg-[var(--color-surface-low)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--color-ink-faint)] uppercase">
+                          MISSING
+                        </span>
+                      )
+                    }
+                  >
+                    {!isIdentified && (
+                      <p className="mt-1 text-[12px] text-[var(--color-ink-faint)]">
+                        Select to force analysis of this section.
+                      </p>
+                    )}
+                  </NoteUpdateCard>
+                )
+              })}
             </div>
 
             {/* Footer */}
-            <div style={{
-              padding: 'var(--space-4) var(--space-6)',
-              borderTop: '1px solid var(--color-border)',
-              display: 'flex', gap: 'var(--space-3)', justifyContent: 'flex-end',
-              alignItems: 'center', flexShrink: 0,
-            }}>
-              <button className="btn btn-secondary" onClick={closeCompletely} disabled={phase === 'saving'}>
+            <div className="flex shrink-0 items-center justify-end gap-2.5 border-t border-[var(--color-line)] bg-[var(--color-surface-low)] px-6 py-3.5">
+              <button
+                type="button"
+                className="inline-flex h-9 cursor-pointer items-center rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-3.5 text-[13px] font-medium text-[var(--color-ink)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:opacity-45"
+                onClick={closeCompletely}
+                disabled={phase === 'saving'}
+              >
                 Cancel
               </button>
               {requiresReanalysis ? (
                 <button
-                  className="btn btn-primary"
-                  onClick={() => { void analyze(Array.from(enabledSections)) }}
+                  type="button"
+                  className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-4 text-[13px] font-semibold text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-45"
+                  onClick={() => {
+                    void analyze(Array.from(enabledSections))
+                  }}
                   disabled={phase === 'saving' || enabledCount === 0}
                   id="confirm-commit-btn"
                 >
@@ -471,15 +511,23 @@ export default function CommitModal() {
                 </button>
               ) : (
                 <button
-                  className="btn btn-primary"
-                  onClick={() => { void handleSave() }}
+                  type="button"
+                  className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg bg-[var(--color-accent-fill)] px-4 text-[13px] font-semibold text-[var(--color-accent-ink)] transition-colors hover:bg-[var(--color-accent-fill-hover)] disabled:opacity-45"
+                  onClick={() => {
+                    void handleSave()
+                  }}
                   disabled={phase === 'saving' || enabledCount === 0}
                   id="confirm-commit-btn"
                 >
                   {phase === 'saving' ? (
-                    <><Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> Saving…</>
+                    <>
+                      <Loader2 size={14} className="animate-spin" /> Saving…
+                    </>
                   ) : (
-                    <><GitCommit size={14} /> Commit {enabledCount} Section{enabledCount !== 1 ? 's' : ''}</>
+                    <>
+                      <GitCommit size={14} /> Commit {enabledCount} Section
+                      {enabledCount !== 1 ? 's' : ''}
+                    </>
                   )}
                 </button>
               )}

@@ -1,8 +1,9 @@
-import { useEffect } from 'react'
-import { CheckCircle, AlertCircle, Info, X } from 'lucide-react'
+import { useEffect, useMemo } from 'react'
+import { CheckCircle, AlertCircle, Info } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
-import type { ToastItem, ToastType } from '../../stores/appStore'
+import type { ToastType } from '../../stores/appStore'
+import { ToastStack, type ToastMessage } from '../ui/Controls'
 
 const icons: Record<ToastType, LucideIcon> = {
   success: CheckCircle,
@@ -11,60 +12,37 @@ const icons: Record<ToastType, LucideIcon> = {
   info: Info,
 }
 
-function Toast({ toast, onDismiss }: { toast: ToastItem; onDismiss: (id: string) => void }) {
-  const type: ToastType = toast.type ?? 'info'
-  const Icon = icons[type]
-
-  useEffect(() => {
-    const timer = setTimeout(() => onDismiss(toast.id), 4000)
-    return () => clearTimeout(timer)
-  }, [toast.id, onDismiss])
-
-  return (
-    <div className={`toast toast-${type}`}>
-      <Icon className="toast-icon" size={18} />
-      <span style={{ flex: 1 }}>{toast.message}</span>
-      {toast.action && (
-        <button
-          className="btn btn-ghost btn-sm"
-          style={{
-            marginRight: 8,
-            padding: '2px 8px',
-            minHeight: 'unset',
-            height: 24,
-            fontSize: '0.8rem',
-          }}
-          onClick={() => {
-            toast.action?.onClick()
-            onDismiss(toast.id)
-          }}
-        >
-          {toast.action.label}
-        </button>
-      )}
-      <button
-        className="btn btn-ghost btn-icon"
-        onClick={() => onDismiss(toast.id)}
-        aria-label="Dismiss"
-        style={{ width: 24, height: 24 }}
-      >
-        <X size={14} />
-      </button>
-    </div>
-  )
+const iconColorByType: Record<ToastType, string> = {
+  success: 'var(--color-ok)',
+  error: 'var(--color-err)',
+  warning: 'var(--color-brand)',
+  info: 'var(--color-ink-muted)',
 }
 
 export default function ToastContainer() {
   const toasts = useAppStore((s) => s.toasts)
   const removeToast = useAppStore((s) => s.removeToast)
 
-  if (toasts.length === 0) return null
+  useEffect(() => {
+    if (toasts.length === 0) return
+    const timers = toasts.map((t) => setTimeout(() => removeToast(t.id), 4000))
+    return () => timers.forEach(clearTimeout)
+  }, [toasts, removeToast])
 
-  return (
-    <div className="toast-container">
-      {toasts.map((toast) => (
-        <Toast key={toast.id} toast={toast} onDismiss={removeToast} />
-      ))}
-    </div>
+  const stackItems = useMemo<ToastMessage[]>(
+    () =>
+      toasts.map((t) => {
+        const type: ToastType = t.type ?? 'info'
+        const Icon = icons[type]
+        return {
+          id: t.id,
+          title: t.message,
+          icon: <Icon size={15} style={{ color: iconColorByType[type] }} />,
+          action: t.action,
+        }
+      }),
+    [toasts],
   )
+
+  return <ToastStack toasts={stackItems} onDismiss={removeToast} />
 }

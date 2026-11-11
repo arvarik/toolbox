@@ -59,15 +59,12 @@ export default function Layout() {
 
   useEffect(() => {
     const slug = extractKitSlugFromPathname(location.pathname)
-    if (slug) {
-      void selectKitBySlug(slug)
-    } else if (
-      location.pathname === '/' ||
-      location.pathname.startsWith('/shared')
-    ) {
-      void selectKitBySlug(null)
-    }
+    void selectKitBySlug(slug)
   }, [location.pathname, selectKitBySlug])
+
+  useEffect(() => {
+    if (searchOpen) setShortcutsOpen(false)
+  }, [searchOpen])
 
   // Pomodoro timer state
   const tick = useTimerStore((s) => s.tick)
@@ -106,12 +103,16 @@ export default function Layout() {
       const mod = e.metaKey || e.ctrlKey
       if (mod && (e.key === '?' || (e.key === '/' && e.shiftKey))) {
         e.preventDefault()
-        setShortcutsOpen((prev) => !prev)
+        setShortcutsOpen((prev) => {
+          const next = !prev
+          if (next) setSearchOpen(false)
+          return next
+        })
       }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [])
+  }, [setSearchOpen])
 
   useEffect(() => {
     configApi

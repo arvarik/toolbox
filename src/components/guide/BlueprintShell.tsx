@@ -1,10 +1,27 @@
-import { useState, useEffect, useCallback, type CSSProperties } from 'react'
-import { useParams, useNavigate } from 'react-router'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useParams, useNavigate, useLocation } from 'react-router'
 import {
-  Cpu, Scale, TrendingUp, Shield, Box,
-  Radio, Target, Link, SlidersHorizontal,
-  AlertTriangle, DollarSign, Layers, GitBranch, Filter, RefreshCw,
-  Edit3, Save, X, Trash2, BookOpen, Sparkles,
+  Cpu,
+  Scale,
+  TrendingUp,
+  Shield,
+  Box,
+  Radio,
+  Target,
+  Link,
+  SlidersHorizontal,
+  AlertTriangle,
+  DollarSign,
+  Layers,
+  GitBranch,
+  Filter,
+  RefreshCw,
+  Edit3,
+  Save,
+  X,
+  Trash2,
+  BookOpen,
+  Sparkles,
   type LucideIcon,
 } from 'lucide-react'
 import type { SectionLens } from '../../../shared/kits/kitSkeleton'
@@ -12,9 +29,17 @@ import MarkdownRenderer from '../shared/MarkdownRenderer'
 import FlashcardReviewModal from '../shared/FlashcardReviewModal'
 import Skeleton from '../shared/Skeleton'
 import PullToRefresh from '../shared/PullToRefresh'
-import { guideContentApi, chatApi, type GeneratedFlashcardDraft } from '../../utils/api'
+import { DomainGlyph, HighlightableProse, NotebookSheet, resolveKitGlyph } from '../ui'
+import {
+  guideContentApi,
+  chatApi,
+  type GeneratedFlashcardDraft,
+  type GuideDogearItem,
+  type GuideHighlightItem,
+  type HighlightColor,
+} from '../../utils/api'
 import useAppStore from '../../stores/appStore'
-import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
+import useKitStore, { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 import useIsMobile from '../../hooks/useIsMobile'
 
 const EMPTY_SECTIONS: SectionLens[] = []
@@ -43,14 +68,37 @@ interface CommittedSection {
   committedAt: string | null
 }
 
+function openGuideCompanionChat() {
+  const state = useAppStore.getState() as unknown as {
+    chatOpen?: Record<string, boolean>
+    toggleChat?: (page: string) => void
+    setChatOpen?: (page: string, open: boolean) => void
+  }
+  if (typeof state.setChatOpen === 'function') {
+    state.setChatOpen('guide', true)
+  } else if (!state.chatOpen?.guide && typeof state.toggleChat === 'function') {
+    state.toggleChat('guide')
+  }
+}
+
+export interface BlueprintShellProps {
+  dogears?: GuideDogearItem[]
+  onToggleDogear?: (pillarId: string, topicId: string, sectionId?: string) => void
+  onAskKit?: (quote: string) => void
+}
+
 /**
- * Blueprint content shell — displays section structure for a selected topic.
- * When a section has committed content it renders the markdown; otherwise shows a placeholder.
- * Each section can be edited in-place via a simple textarea.
+ * Blueprint content shell — displays living textbook pages for a selected topic
+ * with folded dogears, 3-ink highlights, and inline note editing.
  */
-export default function BlueprintShell() {
+export default function BlueprintShell({
+  dogears: controlledDogears,
+  onToggleDogear: controlledToggleDogear,
+  onAskKit: controlledAskKit,
+}: BlueprintShellProps = {}) {
   const { pillarId, topicId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
   const addToast = useAppStore((s) => s.addToast)
   const { kitSlug, skeleton, pillars, sectionsByPillar } = useActiveKit()
   const prefix = useKitRoutePrefix()
@@ -59,18 +107,29 @@ export default function BlueprintShell() {
   const topic = pillar?.topics.find((t) => t.id === topicId)
   const sections = (pillarId && sectionsByPillar[pillarId]) || EMPTY_SECTIONS
 
+  const hashSectionId = location.hash.startsWith('#blueprint-')
+    ? decodeURIComponent(location.hash.slice('#blueprint-'.length))
+    : ''
+
   const contextKey = `${prefix}:${kitSlug ?? ''}:${pillarId ?? ''}:${topicId ?? ''}`
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() =>
-    sections.length > 0 ? { [sections[0].id]: true } : {},
-  )
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = sections.length > 0 ? { [sections[0].id]: true } : {}
+    if (hashSectionId) init[hashSectionId] = true
+    return init
+  })
   const [prevContextKey, setPrevContextKey] = useState(contextKey)
 
   // Progress data for library landing page: { 'pillarId__topicId__sectionId': true }
   const [progress, setProgress] = useState<Record<string, boolean>>({})
 
-  // Content per sectionId: { content: string, committedAt: string | null }
+  // Content per sectionId
   const [sectionContent, setSectionContent] = useState<Record<string, CommittedSection>>({})
   const [isLoadingContent, setIsLoadingContent] = useState(false)
+
+  // Highlights & fallback local dogears (when rendered standalone outside GuidePage)
+  const [highlights, setHighlights] = useState<GuideHighlightItem[]>([])
+  const [localDogears, setLocalDogears] = useState<GuideDogearItem[]>([])
+  const effectiveDogears = controlledDogears ?? localDogears
 
   // Edit mode state
   const [editingSection, setEditingSection] = useState<string | null>(null)
@@ -83,19 +142,56 @@ export default function BlueprintShell() {
   const [showReviewModal, setShowReviewModal] = useState(false)
   const [generatedCards, setGeneratedCards] = useState<GeneratedFlashcardDraft[]>([])
   const [isGeneratingCards, setIsGeneratingCards] = useState(false)
+  const [pendingHighlightIdForCard, setPendingHighlightIdForCard] = useState<string | null>(null)
+  const userInteractedContextRef = useRef<string>('')
 
   // Reset expanded/edit state when Kit, pillar, or topic changes
   if (contextKey !== prevContextKey) {
     setPrevContextKey(contextKey)
-    setExpandedSections(sections.length > 0 ? { [sections[0].id]: true } : {})
+    const nextInit: Record<string, boolean> =
+      sections.length > 0 ? { [sections[0].id]: true } : {}
+    if (hashSectionId) nextInit[hashSectionId] = true
+    setExpandedSections(nextInit)
     setEditingSection(null)
   }
+
+  // Deep-linked #blueprint-<section> hash: open target section and scroll only when topic/hash changes
+  useEffect(() => {
+    if (!pillarId || !topicId || !hashSectionId) return
+    setExpandedSections((prev) =>
+      prev[hashSectionId] ? prev : { ...prev, [hashSectionId]: true },
+    )
+    const el = document.getElementById(`blueprint-${hashSectionId}`)
+    el?.scrollIntoView?.({ behavior: 'smooth', block: 'start' })
+  }, [pillarId, topicId, contextKey, hashSectionId])
+
+  // Auto-expand dogeared sections on initial topic arrival (never re-open after user collapses/toggles)
+  useEffect(() => {
+    if (!pillarId || !topicId) return
+    if (userInteractedContextRef.current === contextKey) return
+    const sectionIdsToOpen = effectiveDogears
+      .filter((d) => d.pillarId === pillarId && d.topicId === topicId && Boolean(d.sectionId))
+      .map((d) => d.sectionId)
+    if (sectionIdsToOpen.length > 0) {
+      setExpandedSections((prev) => {
+        let changed = false
+        const next = { ...prev }
+        for (const sId of sectionIdsToOpen) {
+          if (!next[sId]) {
+            next[sId] = true
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    }
+  }, [pillarId, topicId, contextKey, effectiveDogears])
 
   // Fetch committed content when pillar+topic+Kit are selected
   const fetchContent = useCallback(() => {
     if (!pillarId || !topicId) return
     setIsLoadingContent(true)
-    guideContentApi.getForTopic(pillarId, topicId)
+    Promise.resolve(guideContentApi?.getForTopic?.(pillarId, topicId))
       .then((data) => setSectionContent((data as Record<string, CommittedSection>) || {}))
       .catch(() => setSectionContent({}))
       .finally(() => setIsLoadingContent(false))
@@ -109,10 +205,48 @@ export default function BlueprintShell() {
     return () => window.removeEventListener('guide-progress-updated', onUpdated)
   }, [fetchContent, prefix, kitSlug])
 
+  // Load 3-ink textbook highlights for the active topic
+  useEffect(() => {
+    if (!pillarId || !topicId) {
+      setHighlights([])
+      return
+    }
+    let active = true
+    Promise.resolve(guideContentApi?.listHighlights?.(pillarId, topicId))
+      .then((items) => {
+        if (active) setHighlights(Array.isArray(items) ? items : [])
+      })
+      .catch(() => {
+        if (active) setHighlights([])
+      })
+    return () => {
+      active = false
+    }
+  }, [pillarId, topicId, prefix, kitSlug])
+
+  // Load fallback dogears if not controlled by GuidePage
+  useEffect(() => {
+    if (controlledDogears !== undefined) return
+    let active = true
+    Promise.resolve(guideContentApi?.listDogears?.())
+      .then((items) => {
+        if (active) setLocalDogears(Array.isArray(items) ? items : [])
+      })
+      .catch(() => {
+        if (active) setLocalDogears([])
+      })
+    return () => {
+      active = false
+    }
+  }, [controlledDogears, prefix, kitSlug])
+
   // Fetch progress map for the library landing page
   const fetchProgress = useCallback(async () => {
     try {
-      const data = (await guideContentApi.progress()) as Record<string, boolean> | null
+      const data = (await Promise.resolve(guideContentApi?.progress?.())) as Record<
+        string,
+        boolean
+      > | null
       setProgress(data || {})
     } catch {
       setProgress({})
@@ -122,23 +256,198 @@ export default function BlueprintShell() {
   useEffect(() => {
     if (!pillarId) {
       void fetchProgress()
-      const onUpdated = () => { void fetchProgress() }
+      const onUpdated = () => {
+        void fetchProgress()
+      }
       window.addEventListener('guide-progress-updated', onUpdated)
       return () => window.removeEventListener('guide-progress-updated', onUpdated)
     }
   }, [pillarId, prefix, kitSlug, fetchProgress])
 
+  const handleToggleDogear = useCallback(
+    (pId: string, tId: string, secId = '') => {
+      userInteractedContextRef.current = contextKey
+      if (controlledToggleDogear) {
+        controlledToggleDogear(pId, tId, secId)
+        return
+      }
+      const flip = (list: GuideDogearItem[]) => {
+        const exists = list.some(
+          (d) => d.pillarId === pId && d.topicId === tId && (d.sectionId || '') === secId,
+        )
+        return exists
+          ? list.filter(
+              (d) =>
+                !(d.pillarId === pId && d.topicId === tId && (d.sectionId || '') === secId),
+            )
+          : [
+              ...list,
+              { pillarId: pId, topicId: tId, sectionId: secId, createdAt: new Date().toISOString() },
+            ]
+      }
+      setLocalDogears(flip)
+      void Promise.resolve(guideContentApi?.toggleDogear?.(pId, tId, secId))
+        .then(() => window.dispatchEvent(new Event('guide-dogears-updated')))
+        .catch(() => setLocalDogears(flip))
+    },
+    [contextKey, controlledToggleDogear],
+  )
+
+  const handleAddHighlight = useCallback(
+    (
+      sectionId: string,
+      quote: string,
+      color: HighlightColor,
+      prefixText = '',
+      suffixText = '',
+    ) => {
+      if (!pillarId || !topicId) return
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+      const optimistic: GuideHighlightItem = {
+        id: tempId,
+        pillarId,
+        topicId,
+        sectionId,
+        quote,
+        prefix: prefixText,
+        suffix: suffixText,
+        color,
+        note: '',
+        cardId: null,
+        createdAt: new Date().toISOString(),
+        updatedAt: null,
+      }
+      setHighlights((prev) => [...prev, optimistic])
+
+      void Promise.resolve(
+        guideContentApi?.createHighlight?.({
+          pillarId,
+          topicId,
+          sectionId,
+          quote,
+          prefix: prefixText,
+          suffix: suffixText,
+          color,
+        }),
+      )
+        .then((saved) => {
+          if (saved?.id) {
+            setHighlights((prev) => prev.map((h) => (h.id === tempId ? saved : h)))
+          }
+        })
+        .catch(() => null)
+    },
+    [pillarId, topicId],
+  )
+
+  const handleRemoveHighlight = useCallback((id: string) => {
+    setHighlights((prev) => prev.filter((h) => h.id !== id))
+    if (!id.startsWith('temp-')) {
+      void Promise.resolve(guideContentApi?.deleteHighlight?.(id)).catch(() => null)
+    }
+  }, [])
+
+  const handleAskKit = useCallback(
+    (quote: string) => {
+      try {
+        localStorage.setItem('toolbox_chat_quote', quote)
+      } catch {
+        /* ignore */
+      }
+      window.dispatchEvent(new CustomEvent('toolbox:ask-kit', { detail: { quote } }))
+      if (controlledAskKit) {
+        controlledAskKit(quote)
+      } else {
+        openGuideCompanionChat()
+      }
+    },
+    [controlledAskKit],
+  )
+
+  const handleMakeCardFromQuote = useCallback(
+    async (
+      sectionId: string,
+      sectionName: string,
+      quote: string,
+      ctx?: { prefix: string; suffix: string; highlightId?: string },
+    ) => {
+      const clipped = quote.length > 88 ? `${quote.slice(0, 85)}…` : quote
+      const frontPrompt = `Explain in ${topic?.name || 'this topic'} (${sectionName}): “${clipped}”`
+
+      let linkedHighlightId: string | null =
+        ctx?.highlightId && !ctx.highlightId.startsWith('temp-') ? ctx.highlightId : null
+
+      if (!linkedHighlightId && pillarId && topicId && guideContentApi?.createHighlight) {
+        try {
+          const saved = await Promise.resolve(
+            guideContentApi.createHighlight({
+              pillarId,
+              topicId,
+              sectionId,
+              quote,
+              prefix: ctx?.prefix ?? '',
+              suffix: ctx?.suffix ?? '',
+              color: 'amber',
+            }),
+          )
+          if (saved?.id) {
+            linkedHighlightId = saved.id
+            setHighlights((prev) =>
+              prev.some((h) => h.id === saved.id) ? prev : [...prev, saved],
+            )
+          }
+        } catch {
+          // Proceed with review modal even if highlight persistence fails
+        }
+      }
+
+      setPendingHighlightIdForCard(linkedHighlightId)
+      setGeneratedCards([
+        {
+          front: frontPrompt,
+          back: quote,
+          sourceSectionId: sectionId,
+          sourceSectionName: sectionName,
+          sourcePillarId: pillarId ?? null,
+          sourceTopicId: topicId ?? null,
+        },
+      ])
+      setShowReviewModal(true)
+    },
+    [topic?.name, pillarId, topicId],
+  )
+
+  const recordSectionResume = useCallback(
+    (sectionId: string) => {
+      if (!pillarId || !topicId) return
+      const nextRef = {
+        pillarId,
+        topicId,
+        sectionId,
+        updatedAt: new Date().toISOString(),
+      }
+      useKitStore.getState().updateActiveKitNotebookMeta({ lastGuideRef: nextRef })
+      void Promise.resolve(guideContentApi?.putResume?.(pillarId, topicId, sectionId)).catch(
+        () => null,
+      )
+    },
+    [pillarId, topicId],
+  )
+
   const toggleSection = (sectionId: string) => {
-    setExpandedSections((prev) => ({
-      ...prev,
-      [sectionId]: !prev[sectionId],
-    }))
+    userInteractedContextRef.current = contextKey
+    setExpandedSections((prev) => {
+      const nextOpen = !prev[sectionId]
+      if (nextOpen) recordSectionResume(sectionId)
+      return { ...prev, [sectionId]: nextOpen }
+    })
   }
 
   const startEdit = (sectionId: string) => {
     const existing = sectionContent[sectionId]?.content || ''
     setEditDraft(existing)
     setEditingSection(sectionId)
+    recordSectionResume(sectionId)
   }
 
   const cancelEdit = () => {
@@ -177,17 +486,21 @@ export default function BlueprintShell() {
     })
 
     const actionId = `clear-section-${pillarId}-${topicId}-${sectionId}`
-    useAppStore.getState().scheduleAction(actionId, async () => {
-      try {
-        await guideContentApi.clear(pillarId, topicId, sectionId)
-        window.dispatchEvent(new Event('guide-progress-updated'))
-      } catch (err) {
-        useAppStore.getState().addToast({
-          type: 'error',
-          message: err instanceof Error ? err.message : 'Failed to clear',
-        })
-      }
-    }, 5000)
+    useAppStore.getState().scheduleAction(
+      actionId,
+      async () => {
+        try {
+          await guideContentApi.clear(pillarId, topicId, sectionId)
+          window.dispatchEvent(new Event('guide-progress-updated'))
+        } catch (err) {
+          useAppStore.getState().addToast({
+            type: 'error',
+            message: err instanceof Error ? err.message : 'Failed to clear',
+          })
+        }
+      },
+      5000,
+    )
 
     addToast({
       type: 'info',
@@ -212,7 +525,6 @@ export default function BlueprintShell() {
         content: sectionContent[s.id].content,
       }))
 
-    // If topic has no saved notes yet, synthesize from active Kit's blueprint curriculum
     if (sectionEntries.length === 0) {
       sectionEntries = sections.map((s) => ({
         sectionId: s.id,
@@ -237,7 +549,10 @@ export default function BlueprintShell() {
         addToast({ type: 'info', message: 'No flashcards generated.' })
       }
     } catch (err) {
-      addToast({ type: 'error', message: err instanceof Error ? err.message : 'Failed to generate flashcards' })
+      addToast({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Failed to generate flashcards',
+      })
     } finally {
       setIsGeneratingCards(false)
     }
@@ -251,92 +566,94 @@ export default function BlueprintShell() {
       const filled = p.topics.reduce((acc, t) => {
         return acc + bpSections.filter((s) => progress[`${p.id}__${t.id}__${s.id}`]).length
       }, 0)
-      return { ...p, filled, total, percent: total > 0 ? Math.round((filled / total) * 100) : 0 }
+      return {
+        ...p,
+        filled,
+        total,
+        percent: total > 0 ? Math.round((filled / total) * 100) : 0,
+      }
     })
 
     const totalSections = pillarStats.reduce((a, p) => a + p.total, 0)
     const totalFilled = pillarStats.reduce((a, p) => a + p.filled, 0)
-    const overallPercent = totalSections > 0 ? Math.round((totalFilled / totalSections) * 100) : 0
+    const overallPercent =
+      totalSections > 0 ? Math.round((totalFilled / totalSections) * 100) : 0
 
     const heroDescription =
       skeleton.identity.slug === 'system-design'
-        ? 'Your authoritative library of system design knowledge across seven pillars. Study through chat, then commit insights here for reference.'
+        ? 'Reference notes organized across seven foundational pillars.'
         : skeleton.identity.description ||
-          `Your authoritative library of ${skeleton.identity.name} knowledge across ${pillars.length} pillars. Study through chat, then commit insights here for reference.`
+          `Reference notes across ${pillars.length} pillars for ${skeleton.identity.name}.`
 
     return (
       <PullToRefresh onRefresh={fetchProgress}>
         <div className="page-wrapper blueprint-library-wrapper">
           {/* Hero header */}
           <div className="blueprint-library-hero">
-            <div className="blueprint-hero-icon">
-              <BookOpen size={28} style={{ color: 'var(--color-accent)' }} />
+            <div className="blueprint-hero-icon border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink)]">
+              <DomainGlyph
+                kind={resolveKitGlyph(skeleton.identity.slug)}
+                size={24}
+              />
             </div>
-            <h1 className="page-title blueprint-hero-title">
+            <h1 className="page-title blueprint-hero-title font-serif">
               {skeleton.identity.name} Guide
             </h1>
-            <p className="page-description blueprint-hero-desc">
-              {heroDescription}
-            </p>
+            <p className="page-description blueprint-hero-desc">{heroDescription}</p>
           </div>
 
           {/* Overall progress card */}
-          <div className="blueprint-progress-card">
+          <div className="blueprint-progress-card rounded-xl border border-[var(--color-line-strong)] bg-[var(--color-surface-card)] p-5 shadow-[var(--shadow-hairline)]">
             <div className="blueprint-progress-header">
               <div>
-                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-1)' }}>
+                <div className="mb-1 text-[14px] font-medium text-[var(--color-ink)]">
                   Library Progress
                 </div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--color-text-secondary)' }}>
+                <div className="text-[12px] text-[var(--color-ink-muted)] tabular-nums">
                   {totalFilled} of {totalSections} sections filled across all pillars
                 </div>
               </div>
-              <div style={{
-                fontSize: 'var(--text-2xl)', fontWeight: 700,
-                color: overallPercent > 0 ? 'var(--color-accent)' : 'var(--color-text-tertiary)',
-              }}>
+              <div className="font-mono text-[22px] font-semibold text-[var(--color-ink)] tabular-nums">
                 {overallPercent}%
               </div>
             </div>
 
             <div className="blueprint-progress-bar-bg">
-              <div className="blueprint-progress-bar-fill" style={{ width: `${overallPercent}%` }} />
+              <div
+                className="blueprint-progress-bar-fill !bg-[var(--color-ink)]"
+                style={{ width: `${overallPercent}%` }}
+              />
             </div>
 
             <button
-              className="btn btn-primary"
-              style={{ width: '100%', justifyContent: 'center', fontSize: 'var(--text-sm)' }}
+              type="button"
+              className="btn btn-primary w-full justify-center text-[13.5px]"
               onClick={() => navigate(`${prefix}/chat`)}
             >
-              <Sparkles size={15} />
+              <Sparkles size={14} />
               {totalFilled > 0 ? 'Continue Studying →' : 'Start Studying →'}
             </button>
           </div>
 
           {/* Pillar cards grid */}
-          <div className="blueprint-pillar-list-header">
-            Pillars
-          </div>
+          <div className="blueprint-pillar-list-header">Pillars</div>
 
           <div className="guide-grid">
             {pillarStats.map((p) => (
               <div
                 key={p.id}
-                className="blueprint-pillar-card"
+                className="blueprint-pillar-card notebook-sheet cursor-pointer"
                 onClick={() => navigate(`${prefix}/guide/${p.id}`)}
-                style={{ '--dynamic-color': p.color } as CSSProperties}
               >
                 <div className="blueprint-pillar-card-header">
-                  <div className="blueprint-pillar-icon-wrap">
-                    <Cpu size={20} className="blueprint-pillar-icon" />
+                  <div className="blueprint-pillar-icon-wrap border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink-muted)]">
+                    <span className="font-mono text-[12px] font-semibold tabular-nums">
+                      {p.number}
+                    </span>
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div className="blueprint-card-title">
-                      {p.shortName}
-                    </div>
-                    <div className="blueprint-card-subtitle">
-                      {p.topics.length} topics
-                    </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="blueprint-card-title font-serif">{p.shortName}</div>
+                    <div className="blueprint-card-subtitle">{p.topics.length} topics</div>
                   </div>
                 </div>
 
@@ -345,17 +662,14 @@ export default function BlueprintShell() {
                     <span className="blueprint-card-progress-label">
                       {p.percent === 100 ? 'Complete' : 'Progress'}
                     </span>
-                    <span
-                      className="blueprint-card-progress-value"
-                      style={{ '--dynamic-color': p.percent > 0 ? p.color : 'var(--color-text-tertiary)' } as CSSProperties}
-                    >
+                    <span className="blueprint-card-progress-value font-mono text-[var(--color-ink-muted)] tabular-nums">
                       {p.filled}/{p.total}
                     </span>
                   </div>
                   <div className="blueprint-card-progress-bg">
                     <div
-                      className="blueprint-card-progress-fill"
-                      style={{ width: `${Math.max(p.percent, 0)}%`, '--dynamic-color': p.color } as CSSProperties}
+                      className="blueprint-card-progress-fill !bg-[var(--color-ink-muted)]"
+                      style={{ width: `${Math.max(p.percent, 0)}%` }}
                     />
                   </div>
                 </div>
@@ -371,16 +685,13 @@ export default function BlueprintShell() {
   if (!topic) {
     return (
       <div className="page-wrapper blueprint-topic-wrapper">
-        <div style={{ marginBottom: 'var(--space-6)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-2)' }}>
-            <span
-              className="badge"
-              style={{ background: `${pillar.color}20`, color: pillar.color }}
-            >
+        <div className="mb-6">
+          <div className="mb-2 flex items-center gap-3">
+            <span className="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2.5 py-0.5 font-mono text-[11px] font-medium text-[var(--color-ink-muted)]">
               Pillar {pillar.number}
             </span>
           </div>
-          <h1 className="page-title">{pillar.name}</h1>
+          <h1 className="page-title font-serif">{pillar.name}</h1>
           <p className="page-description">
             Select a topic below to view its study blueprint.
           </p>
@@ -390,16 +701,15 @@ export default function BlueprintShell() {
           {pillar.topics.map((t) => (
             <div
               key={t.id}
-              className="blueprint-pillar-card"
+              className="blueprint-pillar-card notebook-sheet cursor-pointer"
               onClick={() => navigate(`${prefix}/guide/${pillar.id}/${t.id}`)}
-              style={{ '--dynamic-color': pillar.color } as CSSProperties}
             >
               <div className="blueprint-pillar-card-header">
-                <div className="blueprint-pillar-icon-wrap">
-                  <Cpu size={20} className="blueprint-pillar-icon" />
+                <div className="blueprint-pillar-icon-wrap border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink-muted)]">
+                  <BookOpen size={16} />
                 </div>
                 <div>
-                  <div className="blueprint-card-title" style={{ fontSize: 'var(--text-md)' }}>
+                  <div className="blueprint-card-title font-serif text-[16px]">
                     {t.name}
                   </div>
                   <div className="blueprint-card-subtitle">
@@ -414,62 +724,103 @@ export default function BlueprintShell() {
     )
   }
 
-  // ── Full blueprint view for selected topic ────────────────────────────────
+  const isTopicDogeared = effectiveDogears.some(
+    (d) =>
+      d.pillarId === pillar.id &&
+      d.topicId === topic.id &&
+      (d.sectionId || '') === '',
+  )
+
+  // ── Full notebook view for selected topic ────────────────────────────────
   return (
     <div className="page-wrapper blueprint-topic-wrapper">
-      <div className="blueprint-topic-header">
-        <div className="blueprint-badge-wrap">
-          <span
-            className="badge blueprint-badge"
-            style={{ '--dynamic-color': pillar.color } as CSSProperties}
-          >
+      <NotebookSheet
+        dogeared={isTopicDogeared}
+        onToggleDogear={() => handleToggleDogear(pillar.id, topic.id, '')}
+        dogearTestId="topic-dogear-btn"
+        className="blueprint-topic-header mb-6 p-5 sm:p-6"
+      >
+        <div className="blueprint-badge-wrap pr-8">
+          <span className="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] px-2.5 py-0.5 font-mono text-[11px] font-medium text-[var(--color-ink-muted)]">
             Pillar {pillar.number}: {pillar.shortName}
           </span>
         </div>
-        <h1 className="page-title">{topic.name}</h1>
-        <div className="blueprint-topic-actions">
-          <p className="page-description" style={{ margin: 0 }}>
-            Study blueprint — deep dive into every dimension of this component.
+        <h1 className="page-title mt-2 pr-8 font-serif">{topic.name}</h1>
+        <div className="blueprint-topic-actions mt-2">
+          <p className="page-description m-0 text-[var(--color-ink-muted)]">
+            Highlight key passages, fold dogears, or study with Kit.
           </p>
           <button
-            className="btn btn-secondary btn-sm"
-            style={{ fontSize: 'var(--text-xs)', whiteSpace: 'nowrap' }}
-            onClick={() => { void handleGenerateFlashcards() }}
+            type="button"
+            className="btn btn-secondary btn-sm whitespace-nowrap"
+            onClick={() => {
+              void handleGenerateFlashcards()
+            }}
             disabled={isGeneratingCards}
           >
-            {isGeneratingCards ? <Sparkles size={12} style={{ animation: 'pulse 1.5s infinite' }} /> : <Layers size={12} />}
+            <Layers size={12} />
             {isGeneratingCards ? 'Generating...' : 'Generate Flashcards'}
           </button>
           <button
-            className="btn btn-primary btn-sm"
-            style={{ fontSize: 'var(--text-xs)', color: 'var(--color-bg-primary)', whiteSpace: 'nowrap' }}
-            onClick={() => navigate(`${prefix}/chat`)}
+            type="button"
+            className="btn btn-primary btn-sm whitespace-nowrap"
+            onClick={() =>
+              navigate(
+                `${prefix}/chat?pillar=${encodeURIComponent(pillar.id)}&topic=${encodeURIComponent(topic.id)}`,
+              )
+            }
           >
             <Sparkles size={12} />
             Study in Chat
           </button>
         </div>
-      </div>
+      </NotebookSheet>
 
       <FlashcardReviewModal
         open={showReviewModal}
-        onClose={() => setShowReviewModal(false)}
+        onClose={() => {
+          setShowReviewModal(false)
+          setPendingHighlightIdForCard(null)
+        }}
+        onSaved={(createdIds) => {
+          const cardId = createdIds[0]
+          if (cardId && pendingHighlightIdForCard) {
+            setHighlights((prev) =>
+              prev.map((h) => (h.id === pendingHighlightIdForCard ? { ...h, cardId } : h)),
+            )
+            void Promise.resolve(
+              guideContentApi?.updateHighlight?.(pendingHighlightIdForCard, { cardId }),
+            ).catch(() => null)
+          }
+          setPendingHighlightIdForCard(null)
+        }}
         cards={generatedCards}
         topicName={topic.name}
         pillarId={pillarId}
         topicId={topicId}
       />
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+      <div className="flex flex-col gap-4">
         {sections.map((section) => {
           const Icon = iconMap[section.icon] || Cpu
-          const isExpanded = !!expandedSections[section.id]
+          const isExpanded = Boolean(expandedSections[section.id])
           const committed = sectionContent[section.id]
-          const hasContent = Boolean(committed?.content && committed.content.trim().length > 0)
+          const hasContent = Boolean(
+            committed?.content && committed.content.trim().length > 0,
+          )
           const isEditing = editingSection === section.id
+          const isSectionDogeared = effectiveDogears.some(
+            (d) =>
+              d.pillarId === pillar.id &&
+              d.topicId === topic.id &&
+              d.sectionId === section.id,
+          )
+          const sectionHighlights = highlights.filter((h) => h.sectionId === section.id)
+
           const editActions = isEditing && (
             <div className="blueprint-edit-actions-bottom">
               <button
+                type="button"
                 className="btn btn-ghost btn-sm"
                 onClick={cancelEdit}
                 disabled={isSaving}
@@ -478,8 +829,11 @@ export default function BlueprintShell() {
                 Cancel
               </button>
               <button
+                type="button"
                 className="btn btn-primary btn-sm"
-                onClick={() => { void saveEdit(section.id) }}
+                onClick={() => {
+                  void saveEdit(section.id)
+                }}
                 disabled={isSaving || !editDraft.trim()}
               >
                 {isSaving ? <RefreshCw size={12} className="spin" /> : <Save size={12} />}
@@ -489,33 +843,42 @@ export default function BlueprintShell() {
           )
 
           return (
-            <div
+            <NotebookSheet
               key={section.id}
-              className="card"
               id={`blueprint-${section.id}`}
+              dogeared={isSectionDogeared}
+              onToggleDogear={() => handleToggleDogear(pillar.id, topic.id, section.id)}
+              dogearTestId={`dogear-${section.id}`}
+              className="card p-5"
             >
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: isMobile ? 'var(--space-2)' : 'var(--space-4)' }}>
+              <div
+                className={`flex items-start ${
+                  isMobile ? 'gap-2.5' : 'gap-4'
+                }`}
+              >
                 <div
-                  className="blueprint-section-icon-wrap"
-                  style={{
-                    width: isMobile ? 28 : 40, height: isMobile ? 28 : 40,
-                    borderRadius: 'var(--radius-md)',
-                    background: hasContent ? `color-mix(in srgb, ${pillar.color} 15%, transparent)` : 'var(--color-accent-subtle)',
-                  }}
+                  className={`blueprint-section-icon-wrap border border-[var(--color-line-strong)] bg-[var(--color-surface-elevated)] text-[var(--color-ink-muted)] ${
+                    isMobile ? 'h-7 w-7' : 'h-9 w-9'
+                  }`}
                 >
-                  <Icon size={isMobile ? 14 : 18} style={{ color: hasContent ? pillar.color : 'var(--color-accent)' }} />
+                  <Icon size={isMobile ? 14 : 16} />
                 </div>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div className="blueprint-section-header-row">
+
+                <div className="min-w-0 flex-1">
+                  <div className="blueprint-section-header-row pr-6">
                     <h3
-                      className="blueprint-section-title"
+                      className="blueprint-section-title font-serif"
                       onClick={() => toggleSection(section.id)}
                     >
                       {section.name}
                     </h3>
 
                     {!isLoadingContent && (
-                      <span className={`blueprint-status-badge ${hasContent ? 'filled' : 'empty'}`}>
+                      <span
+                        className={`blueprint-status-badge ${
+                          hasContent ? 'filled' : 'empty'
+                        }`}
+                      >
                         {hasContent ? '✓ Filled' : 'Empty'}
                       </span>
                     )}
@@ -523,18 +886,18 @@ export default function BlueprintShell() {
                     {hasContent && !isEditing && (
                       <div className="blueprint-edit-actions">
                         <button
-                          className="btn btn-ghost btn-icon btn-sm"
+                          type="button"
+                          className="btn btn-ghost btn-icon btn-sm h-[26px] w-[26px]"
                           onClick={() => startEdit(section.id)}
                           title="Edit content"
-                          style={{ width: 26, height: 26 }}
                         >
                           <Edit3 size={12} />
                         </button>
                         <button
-                          className="btn btn-ghost btn-icon btn-sm"
+                          type="button"
+                          className="btn btn-ghost btn-icon btn-sm h-[26px] w-[26px] text-[var(--color-err)]"
                           onClick={() => clearSection(section.id)}
                           title="Clear section"
-                          style={{ width: 26, height: 26, color: 'var(--color-error)' }}
                         >
                           <Trash2 size={12} />
                         </button>
@@ -543,6 +906,7 @@ export default function BlueprintShell() {
 
                     {!hasContent && !isEditing && (
                       <button
+                        type="button"
                         className="btn btn-ghost btn-sm blueprint-add-notes-btn"
                         onClick={() => startEdit(section.id)}
                         title="Add notes manually"
@@ -554,7 +918,7 @@ export default function BlueprintShell() {
                   </div>
 
                   {!isMobile && isEditing && (
-                    <div style={{ marginTop: 'var(--space-2)' }}>
+                    <div className="mt-2">
                       <textarea
                         value={editDraft}
                         onChange={(e) => setEditDraft(e.target.value)}
@@ -570,23 +934,67 @@ export default function BlueprintShell() {
                     <div>
                       {isLoadingContent ? (
                         <div className="blueprint-content blueprint-content-box blueprint-content-text">
-                          <Skeleton style={{ width: '60%', height: 24, marginBottom: 'var(--space-4)' }} />
-                          <Skeleton style={{ width: '100%', height: 16, marginBottom: 'var(--space-2)' }} />
-                          <Skeleton style={{ width: '95%', height: 16, marginBottom: 'var(--space-2)' }} />
+                          <Skeleton
+                            style={{
+                              width: '60%',
+                              height: 24,
+                              marginBottom: 'var(--space-4)',
+                            }}
+                          />
+                          <Skeleton
+                            style={{
+                              width: '100%',
+                              height: 16,
+                              marginBottom: 'var(--space-2)',
+                            }}
+                          />
+                          <Skeleton
+                            style={{
+                              width: '95%',
+                              height: 16,
+                              marginBottom: 'var(--space-2)',
+                            }}
+                          />
                           <Skeleton style={{ width: '80%', height: 16 }} />
                         </div>
                       ) : hasContent && committed ? (
                         <div className="blueprint-content blueprint-content-box blueprint-content-text">
-                          <MarkdownRenderer content={committed.content} />
+                          <HighlightableProse
+                            contentKey={committed.content}
+                            highlights={sectionHighlights}
+                            onAddHighlight={(quote, color, prefixText, suffixText) =>
+                              handleAddHighlight(
+                                section.id,
+                                quote,
+                                color,
+                                prefixText,
+                                suffixText,
+                              )
+                            }
+                            onRemoveHighlight={handleRemoveHighlight}
+                            onAskKit={handleAskKit}
+                            onMakeCard={(quote, ctx) => {
+                              void handleMakeCardFromQuote(
+                                section.id,
+                                section.name,
+                                quote,
+                                ctx,
+                              )
+                            }}
+                          >
+                            <MarkdownRenderer content={committed.content} />
+                          </HighlightableProse>
                           {committed.committedAt && (
                             <div className="blueprint-content-timestamp">
-                              Last updated {new Date(committed.committedAt).toLocaleDateString()}
+                              Last updated{' '}
+                              {new Date(committed.committedAt).toLocaleDateString()}
                             </div>
                           )}
                         </div>
                       ) : (
                         <div className="blueprint-content-box empty">
-                          No notes yet. Start a learning session, then commit insights here, or click &quot;Add notes&quot; to write manually.
+                          No notes yet. Start a learning session, then commit insights
+                          here, or click &quot;Add notes&quot; to write manually.
                         </div>
                       )}
                     </div>
@@ -595,7 +1003,7 @@ export default function BlueprintShell() {
               </div>
 
               {isMobile && isEditing && (
-                <div style={{ marginTop: 'var(--space-3)', marginLeft: '-2px', marginRight: '-2px' }}>
+                <div className="mt-3 -mx-0.5">
                   <textarea
                     value={editDraft}
                     onChange={(e) => setEditDraft(e.target.value)}
@@ -606,7 +1014,7 @@ export default function BlueprintShell() {
                   {editActions}
                 </div>
               )}
-            </div>
+            </NotebookSheet>
           )
         })}
       </div>

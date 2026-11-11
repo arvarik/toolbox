@@ -12,31 +12,27 @@ import { useNavigate } from 'react-router'
 import { Search, Check, RefreshCw, ChevronsUpDown, Settings2, Boxes } from 'lucide-react'
 import useAppStore from '../../stores/appStore'
 import type { ModelCatalogItem, ModelGroup } from '../../utils/api'
+import { Button, Kbd } from '../ui/Controls'
 
 export type ModelPickerVariant = 'sidebar' | 'header' | 'settings'
 
 export interface ModelPickerProps {
   variant?: ModelPickerVariant
+  triggerId?: string
 }
 
-interface ResolvedModel extends ModelCatalogItem {
-  providerColor?: string
-}
-
-function findModel(groups: readonly ModelGroup[], id: string): ResolvedModel | null {
+function findModel(groups: readonly ModelGroup[], id: string): ModelCatalogItem | null {
   for (const group of groups) {
     const m = group.models.find((entry) => entry.id === id)
-    if (m) {
-      return {
-        ...m,
-        providerColor: group.provider.color,
-      }
-    }
+    if (m) return m
   }
   return null
 }
 
-export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
+export default function ModelPicker({
+  variant = 'sidebar',
+  triggerId = 'model-picker-trigger',
+}: ModelPickerProps) {
   const model = useAppStore((s) => s.model)
   const setModel = useAppStore((s) => s.setModel)
   const availableModels = useAppStore((s) => s.availableModels)
@@ -46,11 +42,13 @@ export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
 
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
+  const [activeIndex, setActiveIndex] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const searchRef = useRef<HTMLInputElement | null>(null)
 
   const openPicker = () => {
     setQuery('')
+    setActiveIndex(0)
     setOpen(true)
   }
 
@@ -64,7 +62,10 @@ export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key === 'Escape') {
+        e.stopImmediatePropagation()
+        setOpen(false)
+      }
     }
     document.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
@@ -94,6 +95,11 @@ export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
       }))
       .filter((group) => group.models.length > 0)
   }, [availableModels, query])
+
+  const flatFilteredModels = useMemo(
+    () => filteredGroups.flatMap((g) => g.models),
+    [filteredGroups],
+  )
 
   const hasAnyModels = availableModels.some((g) => g.models.length > 0)
 
@@ -130,29 +136,47 @@ export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
   }
 
   const triggerLabel = activeModel ? activeModel.name : model
-  const triggerColor = activeModel?.providerColor || 'var(--color-text-tertiary)'
+  const triggerDotColor = activeModel ? 'var(--color-brand)' : 'var(--color-ink-faint)'
 
   const trigger =
     variant === 'settings' ? (
-      <button className="btn btn-secondary" id="model-picker-trigger" onClick={openPicker}>
+      <Button variant="secondary" size="sm" id={triggerId} onClick={openPicker}>
         <ChevronsUpDown size={14} />
         Change model
-      </button>
+      </Button>
     ) : (
       <button
+        type="button"
         className={`model-trigger model-trigger-${variant}`}
-        id="model-picker-trigger"
+        id={triggerId}
         onClick={openPicker}
         title={`Change model (${triggerLabel})`}
+        style={{
+          background: 'var(--color-surface-elevated)',
+          borderColor: 'var(--color-line-strong)',
+          color: 'var(--color-ink)',
+          boxShadow: 'var(--shadow-hairline)',
+        }}
       >
-        <span className="model-trigger-dot" style={{ background: triggerColor }} />
-        <span className="model-trigger-label">{triggerLabel}</span>
+        <span className="model-trigger-dot" style={{ background: triggerDotColor }} />
+        <span className="model-trigger-label" style={{ color: 'var(--color-ink)' }}>
+          {triggerLabel}
+        </span>
         {variant === 'sidebar' && activeModel?.family && (
-          <span className="model-trigger-family">{activeModel.family}</span>
+          <span
+            className="model-trigger-family"
+            style={{
+              color: 'var(--color-ink-faint)',
+              borderColor: 'var(--color-line-strong)',
+              background: 'var(--color-surface-low)',
+            }}
+          >
+            {activeModel.family}
+          </span>
         )}
         <ChevronsUpDown
           size={variant === 'header' ? 11 : 13}
-          style={{ flexShrink: 0, opacity: 0.6 }}
+          style={{ flexShrink: 0, color: 'var(--color-ink-faint)' }}
         />
       </button>
     )
@@ -166,30 +190,62 @@ export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
             aria-modal="true"
             aria-label="Select AI model"
             onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'var(--color-surface-card)',
+              borderColor: 'var(--color-line-strong)',
+              boxShadow: 'var(--shadow-float)',
+            }}
           >
             <div className="model-picker-handle" aria-hidden="true" />
 
-            <div className="model-picker-search">
+            <div
+              className="model-picker-search"
+              style={{
+                background: 'var(--color-surface-low)',
+                borderColor: 'var(--color-line-strong)',
+                color: 'var(--color-ink-faint)',
+              }}
+            >
               <Search size={15} aria-hidden="true" />
               <input
                 ref={searchRef}
                 id="model-picker-search"
                 placeholder="Search models…"
                 value={query}
-                onChange={(e) => setQuery(e.target.value)}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  setActiveIndex(0)
+                }}
+                onKeyDown={(e) => {
+                  if (flatFilteredModels.length === 0) return
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault()
+                    setActiveIndex((i) => (i + 1) % flatFilteredModels.length)
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault()
+                    setActiveIndex(
+                      (i) => (i - 1 + flatFilteredModels.length) % flatFilteredModels.length,
+                    )
+                  } else if (e.key === 'Enter') {
+                    e.preventDefault()
+                    const picked = flatFilteredModels[activeIndex]
+                    if (picked) handleSelect(picked)
+                  }
+                }}
               />
+              <Kbd>Esc</Kbd>
             </div>
 
             <div className="model-picker-list">
               {!hasAnyModels ? (
                 <div className="model-picker-empty">
-                  <Boxes size={28} strokeWidth={1.5} aria-hidden="true" />
+                  <Boxes size={26} strokeWidth={1.5} aria-hidden="true" />
                   <p className="model-picker-empty-title">No models yet</p>
-                  <p>Connect a provider key or a local endpoint to unlock AI features.</p>
-                  <button className="btn btn-primary" onClick={goToSettings}>
+                  <p>Connect a provider key or local endpoint to enable Kit.</p>
+                  <Button variant="primary" size="sm" onClick={goToSettings} className="mt-2">
                     <Settings2 size={14} />
                     Set up providers
-                  </button>
+                  </Button>
                 </div>
               ) : filteredGroups.length === 0 ? (
                 <div className="model-picker-empty">
@@ -200,45 +256,77 @@ export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
                   <div key={group.provider.id} className="model-picker-group">
                     <div
                       className="model-picker-group-label"
-                      style={{ color: group.provider.color }}
+                      style={{ color: 'var(--color-ink-faint)' }}
                     >
                       <span
                         className="model-trigger-dot"
-                        style={{ background: group.provider.color }}
+                        style={{ background: 'var(--color-ink-faint)' }}
                       />
                       {group.provider.name}
                     </div>
-                    {group.models.map((m) => (
-                      <button
-                        key={m.id}
-                        className={`model-picker-option${m.id === model ? ' active' : ''}`}
-                        onClick={() => handleSelect(m)}
-                        aria-pressed={m.id === model}
-                      >
-                        <span className="model-picker-option-name">{m.name}</span>
-                        {m.family && (
-                          <span
-                            className="model-trigger-family"
-                            style={{
-                              color: group.provider.color,
-                              borderColor: group.provider.color,
-                            }}
-                          >
-                            {m.family}
-                          </span>
-                        )}
-                        {m.id === model && (
-                          <Check size={15} className="model-picker-check" aria-hidden="true" />
-                        )}
-                      </button>
-                    ))}
+                    {group.models.map((m) => {
+                      const isSelected = m.id === model
+                      const isKeyboardActive = flatFilteredModels[activeIndex]?.id === m.id
+                      return (
+                        <button
+                          type="button"
+                          key={m.id}
+                          className={`model-picker-option${isSelected ? ' active' : ''}`}
+                          onClick={() => handleSelect(m)}
+                          onMouseEnter={() => {
+                            const idx = flatFilteredModels.findIndex((item) => item.id === m.id)
+                            if (idx >= 0) setActiveIndex(idx)
+                          }}
+                          aria-pressed={isSelected}
+                          style={
+                            isSelected || isKeyboardActive
+                              ? {
+                                  background: isSelected
+                                    ? 'var(--color-surface-elevated)'
+                                    : 'var(--color-surface-hover)',
+                                  boxShadow: isSelected ? 'var(--shadow-hairline)' : undefined,
+                                }
+                              : undefined
+                          }
+                        >
+                          <span className="model-picker-option-name">{m.name}</span>
+                          {m.family && (
+                            <span
+                              className="model-trigger-family"
+                              style={{
+                                color: 'var(--color-ink-muted)',
+                                borderColor: 'var(--color-line-strong)',
+                                background: 'var(--color-surface-low)',
+                              }}
+                            >
+                              {m.family}
+                            </span>
+                          )}
+                          {isSelected && (
+                            <Check
+                              size={15}
+                              className="model-picker-check"
+                              style={{ color: 'var(--color-brand)' }}
+                              aria-hidden="true"
+                            />
+                          )}
+                        </button>
+                      )
+                    })}
                   </div>
                 ))
               )}
             </div>
 
-            <div className="model-picker-footer">
+            <div
+              className="model-picker-footer"
+              style={{
+                borderTopColor: 'var(--color-line)',
+                background: 'var(--color-surface-low)',
+              }}
+            >
               <button
+                type="button"
                 className="model-picker-footer-btn"
                 onClick={() => void handleRefresh()}
                 disabled={isRefreshing}
@@ -247,7 +335,11 @@ export default function ModelPicker({ variant = 'sidebar' }: ModelPickerProps) {
                 <RefreshCw size={12} className={isRefreshing ? 'spin' : undefined} />
                 {isRefreshing ? 'Syncing…' : 'Refresh catalog'}
               </button>
-              <button className="model-picker-footer-btn" onClick={goToSettings}>
+              <button
+                type="button"
+                className="model-picker-footer-btn"
+                onClick={goToSettings}
+              >
                 <Settings2 size={12} />
                 Manage providers
               </button>
