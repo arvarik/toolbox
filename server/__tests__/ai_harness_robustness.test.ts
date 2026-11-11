@@ -13,6 +13,7 @@ const { createApp, __resetAppRateLimits } = await import("../app.ts");
 const { __resetAuthRateLimits } = await import("../platform/routes/authRoutes.ts");
 const { __resetHostGuard } = await import("../platform/net/hostGuard.ts");
 const {
+  MAX_SINGLE_MESSAGE_CHARS,
   clampModelMessages,
   extractJsonPayload,
   redactAiErrorMessage,
@@ -214,6 +215,29 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
         `<think>Drafting {"draft": 1} with unclosed "quote</think>\nSure! <thinking>{"draft": 2}</thinking>\n${JSON.stringify(twoCardsObj)}\nScore in [0, 1].`,
       ),
     ).toEqual(twoCardsObj);
+
+    // Regression: closed {key} prose still skips cleanly to the valid JSON payload
+    expect(
+      extractJsonPayload(
+        'Note: use {key} format:\n{"cards":[{"front":"Q1","back":"A1"}]}',
+      ),
+    ).toEqual({ cards: [{ front: "Q1", back: "A1" }] });
+
+    // Regression: truncated outer JSON array or object (unclosed at EOF) MUST throw
+    // rather than stepping inward to return a partial inner object or array!
+    expect(() =>
+      extractJsonPayload('[{"front":"Q1","back":"A1"}, {"front":"Q2","ba'),
+    ).toThrow(/Model did not return valid JSON/);
+    expect(() =>
+      extractJsonPayload(
+        '{"cards":[{"front":"Q1","back":"A1"}], "summary": "trun',
+      ),
+    ).toThrow(/Model did not return valid JSON/);
+    expect(() =>
+      extractJsonPayload(
+        'Example {"demo":1}:\n```json\n[{"front":"Q1","back":"A1"}, {"front":"Q2","ba',
+      ),
+    ).toThrow(/Model did not return valid JSON/);
   });
 
   it("2. retries structured calls on finish_reason=length without poisoning structuredModeCache, and surfaces 422 AI_REASONING_EXHAUSTED when doubled budget still exhausts on thoughts", async () => {
@@ -224,8 +248,13 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
     const maxTokensSeen: number[] = [];
     let behavior:
       | "truncate_once"
+      | "length_then_throw_exhausted"
       | "exhaust_always"
       | "context_400"
+      | "invalid_api_key_400"
+      | "safety_block_400"
+      | "unrelated_422"
+      | "schema_unsupported_400"
       | "missing_404"
       | "retry_429" = "truncate_once";
 
@@ -234,7 +263,12 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
         sendJson(res, 200, {
           data: [
             { id: "reasoner-pro", created: 1_760_000_000 },
+            { id: "two-call-cap-model", created: 1_760_000_000 },
             { id: "ctx-model", created: 1_760_000_000 },
+            { id: "bad-key-model", created: 1_760_000_000 },
+            { id: "safety-model", created: 1_760_000_000 },
+            { id: "temp-422-model", created: 1_760_000_000 },
+            { id: "schema-fallback-model", created: 1_760_000_000 },
             { id: "missing-404-model", created: 1_760_000_000 },
             { id: "ratelimit-429-model", created: 1_760_000_000 },
           ],
@@ -263,6 +297,45 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
         return;
       }
 
+      if (behavior === "invalid_api_key_400") {
+        sendJson(res, 400, {
+          error: {
+            message: "API key not valid. Please pass a valid API key.",
+          },
+        });
+        return;
+      }
+
+      if (behavior === "safety_block_400") {
+        sendJson(res, 400, {
+          error: {
+            message: "Candidate was blocked due to SAFETY",
+          },
+        });
+        return;
+      }
+
+      if (behavior === "unrelated_422") {
+        sendJson(res, 422, {
+          error: {
+            message: "Invalid parameter: temperature must be between 0 and 2",
+          },
+        });
+        return;
+      }
+
+      if (
+        behavior === "schema_unsupported_400" &&
+        body.response_format?.type === "json_schema"
+      ) {
+        sendJson(res, 400, {
+          error: {
+            message: "response_format of type json_schema is not supported",
+          },
+        });
+        return;
+      }
+
       if (behavior === "missing_404") {
         sendJson(res, 404, {
           error: {
@@ -284,6 +357,44 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
           },
           { "retry-after-ms": "1" },
         );
+        return;
+      }
+
+      if (behavior === "length_then_throw_exhausted") {
+        // Call 1 returns valid JSON (so generateText resolves instead of throwing) with finish_reason="length",
+        // and Call 2 returns empty content with finish_reason="length" (so generateText throws NoObjectGeneratedError).
+        const isFirstAttempt = maxTokensSeen.length === 1;
+        sendJson(res, 200, {
+          id: isFirstAttempt ? "cmpl-len-1" : "cmpl-len-2",
+          object: "chat.completion",
+          created: 1,
+          model: body.model,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: isFirstAttempt
+                  ? JSON.stringify({
+                      verdict: "sound",
+                      summary: "Cut right at token ceiling",
+                      findings: [],
+                      omittedFactors: [],
+                    })
+                  : "",
+              },
+              finish_reason: "length",
+            },
+          ],
+          usage: {
+            prompt_tokens: 50,
+            completion_tokens: tok,
+            total_tokens: 50 + tok,
+            completion_tokens_details: {
+              reasoning_tokens: isFirstAttempt ? tok - 20 : tok,
+            },
+          },
+        });
         return;
       }
 
@@ -387,7 +498,31 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
         "json_schema",
       );
 
+      // Regression (Review #1): when Call 1 resolves with finishReason="length" and Call 2 throws
+      // NoObjectGeneratedError (finishReason="length"), provider is called EXACTLY 2 times (never 3!)
+      // and surfaces 422 AI_REASONING_EXHAUSTED.
+      wireFormats.length = 0;
+      maxTokensSeen.length = 0;
+      behavior = "length_then_throw_exhausted";
+      await expect(
+        runStructured({
+          model: `custom:${epId}:two-call-cap-model`,
+          prompt: "Audit estimate under tight budget",
+          schema,
+          maxOutputTokens: 2048,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        code: "AI_REASONING_EXHAUSTED",
+      });
+      expect(maxTokensSeen).toEqual([2048, 4096]);
+      expect(wireFormats).toEqual(["json_schema", "json_schema"]);
+      expect(
+        __getStructuredModeFor(`instance:${epId}`, "two-call-cap-model"),
+      ).toBeUndefined();
+
       // Context-length 400 must NOT poison structuredModeCache
+      wireFormats.length = 0;
       behavior = "context_400";
       await expect(
         runStructured({
@@ -396,9 +531,68 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
           schema,
         }),
       ).rejects.toThrow(/maximum context length/);
+      expect(wireFormats).toEqual(["json_schema"]);
       expect(
         __getStructuredModeFor(`instance:${epId}`, "ctx-model"),
       ).toBeUndefined();
+
+      // Regression (Review #4): HTTP 400 invalid API key, HTTP 400 SAFETY block, and unrelated HTTP 422
+      // make ONLY 1 call (zero rung downgrade, zero structuredModeCache poisoning), whereas HTTP 400
+      // "response_format of type json_schema is not supported" downgrades cleanly to Rung 2!
+      wireFormats.length = 0;
+      behavior = "invalid_api_key_400";
+      await expect(
+        runStructured({
+          model: `custom:${epId}:bad-key-model`,
+          prompt: "Check invalid key",
+          schema,
+        }),
+      ).rejects.toThrow(/API key not valid/);
+      expect(wireFormats).toEqual(["json_schema"]);
+      expect(
+        __getStructuredModeFor(`instance:${epId}`, "bad-key-model"),
+      ).toBeUndefined();
+
+      wireFormats.length = 0;
+      behavior = "safety_block_400";
+      await expect(
+        runStructured({
+          model: `custom:${epId}:safety-model`,
+          prompt: "Check safety block",
+          schema,
+        }),
+      ).rejects.toThrow(/SAFETY/);
+      expect(wireFormats).toEqual(["json_schema"]);
+      expect(
+        __getStructuredModeFor(`instance:${epId}`, "safety-model"),
+      ).toBeUndefined();
+
+      wireFormats.length = 0;
+      behavior = "unrelated_422";
+      await expect(
+        runStructured({
+          model: `custom:${epId}:temp-422-model`,
+          prompt: "Check unrelated 422",
+          schema,
+        }),
+      ).rejects.toThrow(/temperature/);
+      expect(wireFormats).toEqual(["json_schema"]);
+      expect(
+        __getStructuredModeFor(`instance:${epId}`, "temp-422-model"),
+      ).toBeUndefined();
+
+      wireFormats.length = 0;
+      behavior = "schema_unsupported_400";
+      const downgradedOk = await runStructured({
+        model: `custom:${epId}:schema-fallback-model`,
+        prompt: "Downgrade on explicit response_format rejection",
+        schema,
+      });
+      expect(downgradedOk).toMatchObject({ verdict: "sound" });
+      expect(wireFormats).toEqual(["json_schema", "json_object"]);
+      expect(
+        __getStructuredModeFor(`instance:${epId}`, "schema-fallback-model"),
+      ).toBe("json_object");
 
       // HTTP 404 & AI_RetryError (429/5xx) whose messages mention "structured"/"json_schema"
       // must NEVER downgrade rungs, fire Rung 2/3 requests, or poison structuredModeCache!
@@ -751,20 +945,64 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
     __resetAppRateLimits();
     __resetStructuredModeCache();
 
-    // Direct unit check on clampModelMessages
+    // Direct unit check on clampModelMessages (Review #2):
+    // (i) Current/final user message keeps trailing instructions 100% intact up to MAX_SINGLE_MESSAGE_CHARS
+    //     and throws 400 MESSAGE_TOO_LONG when exceeding MAX_SINGLE_MESSAGE_CHARS (never silently truncating!).
+    // (ii) Oversized historical turns preserve BOTH head and tail with middle-omission marker.
+    const trailingInstruction =
+      "\nFINAL_INSTRUCTION: Summarize ONLY the 3 root causes as bullet points.";
+    const longCurrentUserPrompt =
+      "Pasted trace:\n" + "e".repeat(85_000) + trailingInstruction;
     const hugeMessages: ModelMessage[] = [
-      { role: "user", content: "Old turn 0 " + "a".repeat(50_000) },
-      { role: "assistant", content: "Old reply 1 " + "b".repeat(50_000) },
-      { role: "user", content: "Recent user turn " + "c".repeat(20_000) },
-      { role: "assistant", content: "Recent assistant reply " + "d".repeat(20_000) },
-      { role: "user", content: "Latest question: " + "e".repeat(80_000) },
+      {
+        role: "user",
+        content: "HIST_USER_HEAD_0 " + "a".repeat(50_000) + " HIST_USER_TAIL_0",
+      },
+      {
+        role: "assistant",
+        content:
+          "HIST_ASST_HEAD_1 " + "b".repeat(80_000) + " HIST_ASST_TAIL_1",
+      },
+      {
+        role: "user",
+        content:
+          "HIST_USER_HEAD_2 " + "c".repeat(75_000) + " HIST_USER_TAIL_2",
+      },
+      {
+        role: "assistant",
+        content: "Recent assistant reply " + "d".repeat(15_000),
+      },
+      { role: "user", content: longCurrentUserPrompt },
     ];
-    const clamped = clampModelMessages(hugeMessages, 110_000);
+    const clamped = clampModelMessages(hugeMessages, 180_000);
     expect(clamped[0].role).toBe("user");
+
+    // Current user message (>64KB, <=120KB) is 100% intact including trailing instruction!
     const lastContent = String(clamped.at(-1)?.content ?? "");
-    expect(lastContent.startsWith("Latest question: ")).toBe(true);
-    expect(lastContent.endsWith("…[truncated]")).toBe(true);
-    expect(lastContent.length).toBeLessThan(65_000);
+    expect(lastContent).toBe(longCurrentUserPrompt);
+    expect(lastContent.endsWith(trailingInstruction)).toBe(true);
+
+    // Oversized historical turn (>64KB) preserves BOTH head and tail with omission marker
+    const shortenedHistUser = String(clamped[0]?.content ?? "");
+    expect(shortenedHistUser.startsWith("HIST_USER_HEAD_2 ")).toBe(true);
+    expect(shortenedHistUser.endsWith(" HIST_USER_TAIL_2")).toBe(true);
+    expect(shortenedHistUser).toContain(
+      "[... earlier turn middle omitted for context budget ...]",
+    );
+
+    // Over-limit current user message throws 400 MESSAGE_TOO_LONG instead of dropping the tail
+    const overLimitPrompt =
+      "Huge paste:\n" +
+      "z".repeat(MAX_SINGLE_MESSAGE_CHARS + 100) +
+      trailingInstruction;
+    expect(() =>
+      clampModelMessages([{ role: "user", content: overLimitPrompt }]),
+    ).toThrowError(
+      expect.objectContaining({
+        statusCode: 400,
+        code: "MESSAGE_TOO_LONG",
+      }),
+    );
 
     // Multi-kit end-to-end check: system-design vs bayesian-ml prompts, commit create+merge, and </untrusted_submission> escaping
     const capturedBodies: Array<{
@@ -937,9 +1175,26 @@ describe("AI Harness Robustness, Multi-Kit Isolation, Reasoning Resilience & SSE
       await aliceAgent
         .post("/api/chat")
         .set("X-Toolbox-Kit", "system-design")
-        .send({ message: "Explain consistent hashing", model })
+        .send({ message: longCurrentUserPrompt, model })
         .expect(200);
       expect(capturedBodies.at(-1)!.system).toContain('Active Study Kit: "System Design"');
+      expect(capturedBodies.at(-1)!.userPrompt.endsWith(trailingInstruction)).toBe(
+        true,
+      );
+
+      // Over-limit current user message returns 400 MESSAGE_TOO_LONG on both /api/chat & /api/chat/stream
+      __resetAppRateLimits();
+      const tooLongChat = await aliceAgent
+        .post("/api/chat")
+        .send({ message: overLimitPrompt, model })
+        .expect(400);
+      expect(tooLongChat.body.error?.code).toBe("MESSAGE_TOO_LONG");
+
+      const tooLongStream = await aliceAgent
+        .post("/api/chat/stream")
+        .send({ message: overLimitPrompt, model })
+        .expect(400);
+      expect(tooLongStream.body.error?.code).toBe("MESSAGE_TOO_LONG");
 
       // 5b. Starters do NOT cache fallback placeholders on transient upstream failure
       const fallbackStarters = await aliceAgent

@@ -18,6 +18,7 @@ import {
   type RagChunkKind,
 } from "../search/hybridSearch.ts";
 import {
+  MAX_SINGLE_MESSAGE_CHARS,
   chatStream,
   clampModelMessages,
   formatStreamErrorMessage,
@@ -25,6 +26,7 @@ import {
   redactAiErrorMessage,
   runStructured,
   runText,
+  shortenHistoricalTurn,
 } from "../ai/engine.ts";
 
 const router = Router();
@@ -405,7 +407,9 @@ async function extractEpisodicMemories({
   message: string;
   generatedText: string;
 }): Promise<void> {
-  const transcript = clampModelMessages(toModelMessages(history), 48_000)
+  const transcript = clampModelMessages(toModelMessages(history), 48_000, {
+    historyOnly: true,
+  })
     .map((m) => `${m.role}: ${String(m.content)}`)
     .join("\n");
 
@@ -461,7 +465,7 @@ model: ${generatedText}`;
   }
 }
 
-router.post("/stream", async (req, res) => {
+router.post("/stream", async (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
   const { message, context, persona, history = [], model, webResearch } = req.body as {
@@ -473,8 +477,19 @@ router.post("/stream", async (req, res) => {
     webResearch?: boolean;
   };
 
-  if (!message) {
+  if (!message || typeof message !== "string") {
     res.status(400).json({ message: "Message is required" });
+    return;
+  }
+
+  let boundedMessages: ModelMessage[];
+  try {
+    boundedMessages = clampModelMessages([
+      ...toModelMessages(history),
+      { role: "user", content: message },
+    ]);
+  } catch (err) {
+    next(err);
     return;
   }
 
@@ -519,7 +534,7 @@ router.post("/stream", async (req, res) => {
       scope,
       capability: "deep",
       system,
-      messages: [...toModelMessages(history), { role: "user", content: message }],
+      messages: boundedMessages,
       tools: buildStudyTools(scope, kit, {
         enableWebResearch,
         abortSignal: abortController.signal,
@@ -880,7 +895,9 @@ router.post("/concept-map", async (req, res, next) => {
   }
 
   try {
-    const boundedHistory = clampModelMessages(toModelMessages(history), 120_000);
+    const boundedHistory = clampModelMessages(toModelMessages(history), 120_000, {
+      historyOnly: true,
+    });
     const prompt = `You are an expert educational visualizer for ${kit.skeleton.identity.name}. Extract the key concepts, entities, and their relationships from the following chat history.
 Your output MUST be a valid, syntactically correct \`mermaid\` graph definition (e.g. \`graph TD\`).
 Use concise node labels and relationship labels. Only output the markdown block containing the mermaid code.
@@ -941,13 +958,17 @@ router.post("/commit", async (req, res, next) => {
   }
 
   try {
-    const MAX_COMMIT_CHARS = 140_000;
+    const MAX_COMMIT_CHARS = 200_000;
     const keptCommitTurns: string[] = [];
     let commitUsed = 0;
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
-      const text = typeof m?.content === "string" ? m.content.slice(0, 64_000) : "";
-      if (!text.trim()) continue;
+      const rawText = typeof m?.content === "string" ? m.content : "";
+      if (!rawText.trim()) continue;
+      const text =
+        i === messages.length - 1
+          ? rawText.slice(0, MAX_SINGLE_MESSAGE_CHARS)
+          : shortenHistoricalTurn(rawText, 64_000);
       const line = `[MSG ${i}][${m.role === "ai" ? "Tutor" : "Student"}]: ${text}`;
       if (keptCommitTurns.length > 0 && commitUsed + line.length > MAX_COMMIT_CHARS) break;
       keptCommitTurns.push(line);

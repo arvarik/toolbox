@@ -29,8 +29,12 @@ const STREAM_TIMEOUT_MS = 600_000;
 const MAX_TOOL_STEPS = 8;
 const MAX_RETRY_TOKENS = 32_768;
 const MAX_STRUCTURED_MODES = 256;
-const MAX_MESSAGE_CHARS = 64_000;
-const DEFAULT_HISTORY_BUDGET_CHARS = 160_000;
+export const MAX_SINGLE_MESSAGE_CHARS = 120_000;
+const MAX_HISTORY_TURN_CHARS = 64_000;
+const DEFAULT_HISTORY_BUDGET_CHARS = 200_000;
+const MIN_TRUNCATED_HISTORY_CHARS = 2_000;
+const HISTORY_OMISSION_MARKER =
+  "\n\n[... earlier turn middle omitted for context budget ...]\n\n";
 
 // A stream that starts and then goes silent this long is cut off, instead of
 // holding the request until STREAM_TIMEOUT_MS.
@@ -131,30 +135,92 @@ export function formatStreamErrorMessage(err: unknown): string {
   return redactAiErrorMessage(raw) || "AI stream failed.";
 }
 
+export function shortenHistoricalTurn(
+  text: string,
+  maxChars: number = MAX_HISTORY_TURN_CHARS,
+): string {
+  if (text.length <= maxChars) return text;
+  const available = maxChars - HISTORY_OMISSION_MARKER.length;
+  if (available <= 0) return text.slice(0, Math.max(0, maxChars));
+  const headLen = Math.ceil(available / 2);
+  const tailLen = Math.floor(available / 2);
+  return (
+    text.slice(0, headLen) +
+    HISTORY_OMISSION_MARKER +
+    text.slice(text.length - tailLen)
+  );
+}
+
 export function clampModelMessages(
   messages: ModelMessage[],
   budgetChars: number = DEFAULT_HISTORY_BUDGET_CHARS,
+  opts?: { historyOnly?: boolean },
 ): ModelMessage[] {
   if (messages.length === 0) return messages;
-  const normalized: ModelMessage[] = messages.map((m) => {
-    if (typeof m.content === "string" && m.content.length > MAX_MESSAGE_CHARS) {
-      return {
-        ...m,
-        content: `${m.content.slice(0, MAX_MESSAGE_CHARS)}\n…[truncated]`,
-      } as ModelMessage;
-    }
-    return m;
-  });
 
   const measure = (m: ModelMessage): number =>
     typeof m.content === "string"
       ? m.content.length
       : JSON.stringify(m.content).length;
 
+  const lastIdx = messages.length - 1;
+  const protectCurrentUserTurn =
+    !opts?.historyOnly && messages[lastIdx].role === "user";
+
+  if (protectCurrentUserTurn) {
+    const currentLen = measure(messages[lastIdx]);
+    if (currentLen > MAX_SINGLE_MESSAGE_CHARS) {
+      throw new AppError(
+        `Message is too long (${currentLen.toLocaleString("en-US")} characters; maximum is ${MAX_SINGLE_MESSAGE_CHARS.toLocaleString("en-US")}). Shorten the pasted content or split it across turns.`,
+        400,
+        {
+          code: "MESSAGE_TOO_LONG",
+          details: {
+            length: currentLen,
+            maxLength: MAX_SINGLE_MESSAGE_CHARS,
+          },
+        },
+      );
+    }
+  }
+
   const kept: ModelMessage[] = [];
   let used = 0;
-  for (let i = normalized.length - 1; i >= 0; i--) {
-    const item = normalized[i];
+  for (let i = lastIdx; i >= 0; i--) {
+    const item = messages[i];
+    if (i === lastIdx && protectCurrentUserTurn) {
+      kept.push(item);
+      used += measure(item);
+      continue;
+    }
+
+    const remaining = budgetChars - used;
+    if (typeof item.content === "string") {
+      const cap =
+        kept.length === 0
+          ? Math.min(
+              MAX_HISTORY_TURN_CHARS,
+              Math.max(budgetChars, HISTORY_OMISSION_MARKER.length + 200),
+            )
+          : Math.min(MAX_HISTORY_TURN_CHARS, remaining);
+
+      if (item.content.length <= cap) {
+        kept.push(item);
+        used += item.content.length;
+        continue;
+      }
+
+      if (kept.length > 0 && remaining < MIN_TRUNCATED_HISTORY_CHARS) {
+        break;
+      }
+
+      const shortened = shortenHistoricalTurn(item.content, cap);
+      kept.push({ ...item, content: shortened } as ModelMessage);
+      used += shortened.length;
+      if (used >= budgetChars) break;
+      continue;
+    }
+
     const len = measure(item);
     if (kept.length > 0 && used + len > budgetChars) break;
     kept.push(item);
@@ -417,63 +483,109 @@ function extractUpstreamHttpStatus(
   );
 }
 
-export function shouldDowngradeStructuredRung(
+const NON_DOWNGRADABLE_ERROR_RE =
+  /api[_ -]?key[_ -]?invalid|api key not valid|invalid[_ -]?api[_ -]?key|incorrect api key|\bunauthorized\b|permission[_ -]?denied|\bsafety\b|content[_ -]?filter|blocked due to|candidate was blocked|\brecitation\b|prohibited[_ -]?content|context[_ -]?length|maximum context|too many tokens|prompt is too long|input is too long|insufficient[_ -]?quota|\bbilling\b|quota exceeded|credit balance is too low|resource[_ -]?exhausted/i;
+
+const STRUCTURED_INCOMPATIBLE_RE =
+  /response_format|response_?schema|response_mime_type|json_schema|json_object|json mode|structured[ _-]?outputs?|invalid schema|schema.*not supported|tool_choice|guided_json|\bgrammar\b/i;
+
+function hasNonDowngradableFailure(
   err: unknown,
   seen = new Set<unknown>(),
 ): boolean {
   if (!err || typeof err !== "object" || seen.has(err)) return false;
   seen.add(err);
-  if (err instanceof AppError) return false;
-  // Never mistake token-limit truncation or upstream rate-limit/5xx/404 errors for schema incompatibility.
-  if (isLengthTruncatedError(err)) return false;
-  if (unwrapUpstreamProviderError(err) !== null) return false;
-
-  const httpStatus = extractUpstreamHttpStatus(err);
-  if (
-    httpStatus === 401 ||
-    httpStatus === 403 ||
-    httpStatus === 404 ||
-    httpStatus === 408 ||
-    httpStatus === 429 ||
-    (typeof httpStatus === "number" && httpStatus >= 500)
-  ) {
-    return false;
-  }
-
+  if (err instanceof AppError) return true;
   const e = err as {
-    statusCode?: number;
-    name?: string;
-    message?: string;
+    statusCode?: unknown;
+    name?: unknown;
+    finishReason?: unknown;
+    message?: unknown;
+    responseBody?: unknown;
     lastError?: unknown;
     cause?: unknown;
   };
-  if (e.name === "AbortError" || e.name === "TimeoutError") return false;
-  const msg = e.message ?? "";
   if (
-    /context_length|maximum context|too many tokens|prompt is too long/i.test(
-      msg,
+    e.name === "AbortError" ||
+    e.name === "TimeoutError" ||
+    e.name === "AI_LoadAPIKeyError"
+  ) {
+    return true;
+  }
+  if (
+    typeof e.finishReason === "string" &&
+    /^(length|content-filter|safety|recitation|prohibited_content|blocklist|spii)$/i.test(
+      e.finishReason,
     )
+  ) {
+    return true;
+  }
+  if (
+    typeof e.statusCode === "number" &&
+    (e.statusCode === 401 ||
+      e.statusCode === 403 ||
+      e.statusCode === 404 ||
+      e.statusCode === 408 ||
+      e.statusCode === 429 ||
+      e.statusCode >= 500)
+  ) {
+    return true;
+  }
+  const detail = `${typeof e.message === "string" ? e.message : ""}\n${typeof e.responseBody === "string" ? e.responseBody : ""}`;
+  if (NON_DOWNGRADABLE_ERROR_RE.test(detail)) return true;
+  return (
+    hasNonDowngradableFailure(e.lastError, seen) ||
+    hasNonDowngradableFailure(e.cause, seen)
+  );
+}
+
+export function shouldDowngradeStructuredRung(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  // Never mistake token-limit truncation, auth/API-key errors, safety blocks, context-window
+  // overflows, billing/quota limits, or upstream rate-limit/5xx/404 errors for schema rejection.
+  if (
+    isLengthTruncatedError(err) ||
+    unwrapUpstreamProviderError(err) !== null ||
+    hasNonDowngradableFailure(err)
   ) {
     return false;
   }
-  if (e.statusCode === 400 || e.statusCode === 422) return true;
-  if (
-    typeof e.name === "string" &&
-    /NoObjectGenerated|JSONParse|TypeValidation/i.test(e.name)
-  ) {
-    return true;
-  }
-  if (
-    /response_format|responseSchema|json_schema|json_object|json mode|structured|no object generated|could not parse/i.test(
-      msg,
-    )
-  ) {
-    return true;
-  }
-  return (
-    (e.lastError ? shouldDowngradeStructuredRung(e.lastError, seen) : false) ||
-    (e.cause ? shouldDowngradeStructuredRung(e.cause, seen) : false)
-  );
+
+  const httpStatus = extractUpstreamHttpStatus(err);
+  const seen = new Set<unknown>();
+
+  const matchesStructuredRejection = (node: unknown): boolean => {
+    if (!node || typeof node !== "object" || seen.has(node)) return false;
+    seen.add(node);
+    const e = node as {
+      name?: unknown;
+      message?: unknown;
+      responseBody?: unknown;
+      lastError?: unknown;
+      cause?: unknown;
+    };
+    const detail = `${typeof e.message === "string" ? e.message : ""}\n${typeof e.responseBody === "string" ? e.responseBody : ""}`;
+    if (STRUCTURED_INCOMPATIBLE_RE.test(detail)) return true;
+    if (
+      typeof e.name === "string" &&
+      /UnsupportedFunctionality/i.test(e.name)
+    ) {
+      return true;
+    }
+    if (
+      httpStatus === undefined &&
+      typeof e.name === "string" &&
+      /NoObjectGenerated|JSONParse|TypeValidation/i.test(e.name)
+    ) {
+      return true;
+    }
+    return (
+      matchesStructuredRejection(e.lastError) ||
+      matchesStructuredRejection(e.cause)
+    );
+  };
+
+  return matchesStructuredRejection(err);
 }
 
 /** Appends the JSON Schema instruction to `system` (or uses it alone). */
@@ -600,9 +712,17 @@ function tryParseJsonCandidate(candidate: string): { ok: true; value: unknown } 
   }
 }
 
-function scanBalancedJsonAt(text: string, startIdx: number): string | null {
+type BalancedScanResult =
+  | { kind: "balanced"; slice: string }
+  | { kind: "mismatch" }
+  | { kind: "unclosed" };
+
+function scanBalancedJsonAt(
+  text: string,
+  startIdx: number,
+): BalancedScanResult {
   const open = text[startIdx];
-  if (open !== "{" && open !== "[") return null;
+  if (open !== "{" && open !== "[") return { kind: "mismatch" };
   const stack: string[] = [open === "{" ? "}" : "]"];
   let inString = false;
   let escaped = false;
@@ -622,14 +742,14 @@ function scanBalancedJsonAt(text: string, startIdx: number): string | null {
     } else if (ch === "[") {
       stack.push("]");
     } else if (ch === "}" || ch === "]") {
-      if (stack[stack.length - 1] !== ch) return null;
+      if (stack[stack.length - 1] !== ch) return { kind: "mismatch" };
       stack.pop();
       if (stack.length === 0) {
-        return text.slice(startIdx, i + 1);
+        return { kind: "balanced", slice: text.slice(startIdx, i + 1) };
       }
     }
   }
-  return null;
+  return { kind: "unclosed" };
 }
 
 function tryParseDirectOrOuterFence(
@@ -676,22 +796,30 @@ export function extractJsonPayload(raw: string): unknown {
   let fenceMatch: RegExpExecArray | null;
   while ((fenceMatch = jsonFenceRegex.exec(cleaned)) !== null) {
     const braceIdx = fenceMatch.index + fenceMatch[0].length - 1;
-    const slice = scanBalancedJsonAt(cleaned, braceIdx);
-    if (slice) {
-      const parsed = tryParseJsonCandidate(slice);
+    const scan = scanBalancedJsonAt(cleaned, braceIdx);
+    if (scan.kind === "unclosed") {
+      throw new Error("Model did not return valid JSON.");
+    }
+    if (scan.kind === "balanced") {
+      const parsed = tryParseJsonCandidate(scan.slice);
       if (parsed.ok) return parsed.value;
     }
   }
 
-  // 4. General string-aware balanced scan across any { or [ in the response
+  // 4. General string-aware balanced scan across any { or [ in the response.
+  //    Abort immediately if an opening { or [ reaches EOF unclosed (depth > 0) so
+  //    truncated JSON never returns a partial inner object or array fragment.
   for (let i = 0; i < cleaned.length; i++) {
     const ch = cleaned[i];
     if (ch === "{" || ch === "[") {
-      const slice = scanBalancedJsonAt(cleaned, i);
-      if (slice) {
-        const parsed = tryParseJsonCandidate(slice);
+      const scan = scanBalancedJsonAt(cleaned, i);
+      if (scan.kind === "unclosed") {
+        break;
+      }
+      if (scan.kind === "balanced") {
+        const parsed = tryParseJsonCandidate(scan.slice);
         if (parsed.ok) return parsed.value;
-        i += slice.length - 1;
+        i += scan.slice.length - 1;
       }
     }
   }
@@ -730,65 +858,67 @@ async function callStructuredWithLengthRetry<
   maxOutputTokens: number;
   invoke: (tokens: number) => Promise<R>;
 }): Promise<{ result: R; effectiveMaxTokens: number }> {
+  // Attempt 1: isolated try/catch so a retry below can NEVER fall into a catch that retries again.
+  let firstResult: R | undefined;
+  let firstErr: unknown;
   try {
-    let result = await invoke(maxOutputTokens);
-    let effectiveMaxTokens = maxOutputTokens;
-
-    if (
-      (result.finishReason === "length" || isReasoningExhausted(result)) &&
-      maxOutputTokens < MAX_RETRY_TOKENS
-    ) {
-      const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
-      effectiveMaxTokens = retryTokens;
-      logger.warn(
-        `[ai] ${feature} structured output hit ${maxOutputTokens}-token budget (model=${modelId}); retrying with ${retryTokens}`,
-      );
-      result = await invoke(retryTokens);
-    }
-
-    if (isReasoningExhausted(result)) {
-      throwReasoningExhausted(modelId, effectiveMaxTokens);
-    }
-    return { result, effectiveMaxTokens };
+    firstResult = await invoke(maxOutputTokens);
   } catch (err) {
-    if (err instanceof AppError) throw err;
-    if (!isLengthTruncatedError(err) && !isReasoningExhaustedError(err)) {
-      throw err;
-    }
+    firstErr = err;
+  }
 
-    const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
-    if (retryTokens > maxOutputTokens) {
-      logger.warn(
-        `[ai] ${feature} structured output truncated at ${maxOutputTokens} tokens (model=${modelId}); retrying with ${retryTokens}`,
-      );
-      try {
-        const retryResult = await invoke(retryTokens);
-        if (isReasoningExhausted(retryResult)) {
-          throwReasoningExhausted(modelId, retryTokens);
-        }
-        return { result: retryResult, effectiveMaxTokens: retryTokens };
-      } catch (retryErr) {
-        if (retryErr instanceof AppError) throw retryErr;
-        if (isReasoningExhaustedError(retryErr)) {
-          throwReasoningExhausted(modelId, retryTokens);
-        }
-        if (isLengthTruncatedError(retryErr)) {
-          throw new Error(
-            `The model response was cut off at ${retryTokens} output tokens. Retry with a shorter input or a higher output limit.`,
-            { cause: retryErr },
-          );
-        }
-        throw retryErr;
+  if (firstErr !== undefined) {
+    if (firstErr instanceof AppError) throw firstErr;
+    if (!isLengthTruncatedError(firstErr) && !isReasoningExhaustedError(firstErr)) {
+      throw firstErr;
+    }
+  } else if (
+    firstResult &&
+    firstResult.finishReason !== "length" &&
+    !isReasoningExhausted(firstResult)
+  ) {
+    return { result: firstResult, effectiveMaxTokens: maxOutputTokens };
+  }
+
+  const retryTokens = Math.min(maxOutputTokens * 2, MAX_RETRY_TOKENS);
+  if (retryTokens <= maxOutputTokens) {
+    if (firstErr !== undefined) {
+      if (isReasoningExhaustedError(firstErr)) {
+        throwReasoningExhausted(modelId, maxOutputTokens);
       }
+      throw new Error(
+        `The model response was cut off at ${maxOutputTokens} output tokens. Retry with a shorter input or a higher output limit.`,
+        { cause: firstErr },
+      );
     }
-
-    if (isReasoningExhaustedError(err)) {
+    if (firstResult && isReasoningExhausted(firstResult)) {
       throwReasoningExhausted(modelId, maxOutputTokens);
     }
-    throw new Error(
-      `The model response was cut off at ${maxOutputTokens} output tokens. Retry with a shorter input or a higher output limit.`,
-      { cause: err },
-    );
+    return { result: firstResult!, effectiveMaxTokens: maxOutputTokens };
+  }
+
+  // Attempt 2 (at most once): doubled budget up to MAX_RETRY_TOKENS.
+  logger.warn(
+    `[ai] ${feature} structured output truncated at ${maxOutputTokens} tokens (model=${modelId}); retrying with ${retryTokens}`,
+  );
+  try {
+    const retryResult = await invoke(retryTokens);
+    if (isReasoningExhausted(retryResult)) {
+      throwReasoningExhausted(modelId, retryTokens);
+    }
+    return { result: retryResult, effectiveMaxTokens: retryTokens };
+  } catch (retryErr) {
+    if (retryErr instanceof AppError) throw retryErr;
+    if (isReasoningExhaustedError(retryErr)) {
+      throwReasoningExhausted(modelId, retryTokens);
+    }
+    if (isLengthTruncatedError(retryErr)) {
+      throw new Error(
+        `The model response was cut off at ${retryTokens} output tokens. Retry with a shorter input or a higher output limit.`,
+        { cause: retryErr },
+      );
+    }
+    throw retryErr;
   }
 }
 
