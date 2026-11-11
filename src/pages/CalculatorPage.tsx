@@ -13,7 +13,7 @@ export default function CalculatorPage() {
           <h1 className="page-title font-serif">
             BotE Calculator
           </h1>
-          <p className="page-subtitle">
+          <p className="page-description">
             Live capacity estimation for traffic, storage, cache, bandwidth, and hardware.
           </p>
         </div>

@@ -749,15 +749,17 @@ export default function StudyPage() {
                           </div>
                         )}
                         {/* Quick actions overlay */}
-                        <div className="deck-actions absolute top-3 right-3 flex gap-1 opacity-0 transition-opacity">
+                        <div className="deck-actions absolute top-3 right-3 flex gap-1 opacity-0 focus-within:opacity-100 transition-opacity">
                           {deck.dueCount > 0 && (
                             <button
+                              type="button"
                               className="btn btn-ghost btn-icon btn-sm text-on-primary-wash"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 void handleReviewDeck(deck)
                               }}
                               title="Review Due Cards"
+                              aria-label={`Review due cards in ${deck.name}`}
                               style={QUICK_BTN_STYLE}
                             >
                               <Clock size={12} />
@@ -772,24 +774,28 @@ export default function StudyPage() {
                           ].map((act) => (
                             <button
                               key={act.title}
+                              type="button"
                               className="btn btn-ghost btn-icon btn-sm"
                               onClick={(e) => {
                                 e.stopPropagation()
                                 act.run()
                               }}
                               title={act.title}
+                              aria-label={`${act.title} ${deck.name}`}
                               style={QUICK_BTN_STYLE}
                             >
                               {act.icon}
                             </button>
                           ))}
                           <button
+                            type="button"
                             className="btn btn-ghost btn-icon btn-sm text-error"
                             onClick={(e) => {
                               e.stopPropagation()
                               setDeleteModal(deck)
                             }}
                             title="Delete"
+                            aria-label={`Delete ${deck.name}`}
                             style={QUICK_BTN_STYLE}
                           >
                             <Trash2 size={12} />
@@ -864,6 +870,7 @@ export default function StudyPage() {
             </button>
             <button
               className="btn btn-primary"
+              style={{ background: 'var(--color-error)', color: 'var(--color-on-error)' }}
               onClick={() => deleteModal && handleDeleteDeck(deleteModal)}
             >
               Delete

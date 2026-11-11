@@ -29,6 +29,7 @@ import ChallengeNodeModal from "../components/drills/ChallengeNodeModal.tsx";
 import {
   DomainGlyph,
   HelpHint,
+  RetrievabilityRing,
   SegmentedControl,
   resolveKitGlyph,
 } from "../components/ui";
@@ -358,9 +359,17 @@ export default function KitPathPage() {
       >
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
           <div className="flex items-start gap-3 min-w-0">
-            <div className="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-mono font-semibold tabular-nums shrink-0 border border-outline-variant bg-surface-container-high text-on-surface">
-              {orderIdx}
-            </div>
+            <RetrievabilityRing
+              size={34}
+              strokeWidth={2.5}
+              retrievability={
+                status === "Mastered" ? Math.max(strengthPct, 100) : strengthPct
+              }
+              strokeColorOverride={
+                status === "Mastered" ? "var(--color-ok)" : undefined
+              }
+              centerLabel={orderIdx}
+            />
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-serif text-lg font-medium text-on-surface">

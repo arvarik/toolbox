@@ -18,13 +18,14 @@ import {
   MessageSquare,
   Layers,
   Loader2,
+  PenLine,
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { flashcardsApi, chatApi } from '../../utils/api'
 import { SYSTEM_DESIGN_KIT_SKELETON } from '../../../shared/kits/systemDesignKit'
 import StudySessionSummary, { type StudySessionStats } from './StudySessionSummary'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
-import { Kbd, KitAvatar } from '../ui'
+import { AnkiGradeBar, Kbd, KitAvatar, type AnkiGrade } from '../ui'
 import useAppStore from '../../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 
@@ -69,7 +70,12 @@ interface GuideLinkInfo {
   sectionName: string
 }
 
-type ConfidenceLevel = 'low' | 'medium' | 'high'
+const GRADE_TO_QUALITY: Record<AnkiGrade, 1 | 3 | 4 | 5> = {
+  again: 1,
+  hard: 3,
+  good: 4,
+  easy: 5,
+}
 
 export interface FlashcardViewProps {
   cards?: ReadonlyArray<FlashcardItem>
@@ -93,7 +99,8 @@ export default function FlashcardView({
   const [sessionQueue, setSessionQueue] = useState<FlashcardItem[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [flipped, setFlipped] = useState(false)
-  const [confidence, setConfidence] = useState<ConfidenceLevel | null>('medium')
+  const [typeAnswerOpen, setTypeAnswerOpen] = useState(false)
+  const [typedAnswer, setTypedAnswer] = useState('')
   const [isReviewing, setIsReviewing] = useState(false)
   const [reviewedCount, setReviewedCount] = useState(0)
   const [sessionStats, setSessionStats] = useState<StudySessionStats | null>(null)
@@ -108,6 +115,7 @@ export default function FlashcardView({
   const startTimeRef = useRef<number>(0)
   const ratingsRef = useRef<Record<number, number>>({})
   const correctCountRef = useRef<number>(0)
+  const typeInputRef = useRef<HTMLTextAreaElement>(null)
 
   // Load cards into the dynamic session queue
   useEffect(() => {
@@ -115,7 +123,7 @@ export default function FlashcardView({
       setSessionQueue([...cards])
       setCurrentIndex(0)
       setFlipped(false)
-      setConfidence('medium')
+      setTypedAnswer('')
       setIsReviewing(false)
       setReviewedCount(0)
       setSessionStats(null)
@@ -130,6 +138,12 @@ export default function FlashcardView({
       setSessionQueue([])
     }
   }, [cards])
+
+  useEffect(() => {
+    if (reviewMode && typeAnswerOpen && !flipped) {
+      typeInputRef.current?.focus()
+    }
+  }, [reviewMode, typeAnswerOpen, flipped, currentIndex])
 
   const currentCard = sessionQueue[currentIndex]
   const isDone = reviewMode && sessionStats !== null
@@ -171,7 +185,6 @@ export default function FlashcardView({
 
   const handleFlip = () => {
     if (!isReviewing) {
-      if (!flipped) setConfidence('medium')
       setFlipped(!flipped)
     }
   }
@@ -179,22 +192,25 @@ export default function FlashcardView({
   const handlePrev = () => {
     if (reviewMode) return
     setFlipped(false)
+    setTypedAnswer('')
     setCurrentIndex((i) => Math.max(0, i - 1))
   }
 
   const handleNext = () => {
     setFlipped(false)
+    setTypedAnswer('')
     setCurrentIndex((i) => Math.min(sessionQueue.length - 1, i + 1))
   }
 
   const handleShuffle = () => {
     setFlipped(false)
+    setTypedAnswer('')
     setCurrentIndex(Math.floor(Math.random() * sessionQueue.length))
   }
 
   const handleReset = () => {
     setFlipped(false)
-    setConfidence('medium')
+    setTypedAnswer('')
     setCurrentIndex(0)
     setReviewedCount(0)
   }
@@ -218,7 +234,7 @@ export default function FlashcardView({
           targetDeckId,
           currentCard.id,
           quality,
-          confidence ?? 'medium',
+          'medium',
         )) as ReviewCardResponse
 
         // Let live views (Knowledge Graph heatmap) refresh without a reload
@@ -266,7 +282,7 @@ export default function FlashcardView({
         const isStillLearning = updatedCardData.state === 1 || updatedCardData.state === 3
 
         setFlipped(false)
-        setConfidence('medium')
+        setTypedAnswer('')
         const nextIdx = currentIndex + 1
 
         if (isStillLearning) {
@@ -300,7 +316,6 @@ export default function FlashcardView({
       }
     },
     [
-      confidence,
       currentCard,
       currentIndex,
       deckId,
@@ -313,23 +328,29 @@ export default function FlashcardView({
     ],
   )
 
-  // Keyboard Shortcuts listener
+  // Keyboard Shortcuts listener — Space/Enter ONLY reveals in reviewMode (never auto-grades Good)
   useEffect(() => {
     if (isDone || !currentCard || isReviewing || interceptorActive) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return
       const target = e.target as HTMLElement | null
       const tag = target?.tagName ? target.tagName.toLowerCase() : ''
       if (tag === 'input' || tag === 'textarea' || Boolean(target?.isContentEditable)) return
 
-      if (e.key === ' ' || e.code === 'Space' || (reviewMode && e.key === 'Enter')) {
+      if (e.key === '?' && reviewMode) {
         e.preventDefault()
+        setShowHotkeysGuide((v) => !v)
+        return
+      }
+
+      if (e.key === ' ' || e.code === 'Space' || (reviewMode && e.key === 'Enter')) {
+        if (tag === 'button' && e.key === 'Enter') return
         if (!flipped) {
-          setConfidence('medium')
+          e.preventDefault()
           setFlipped(true)
-        } else if (reviewMode) {
-          void handleRate(4)
-        } else {
+        } else if (!reviewMode) {
+          e.preventDefault()
           setFlipped(false)
         }
       } else if (reviewMode && flipped) {
@@ -426,7 +447,7 @@ export default function FlashcardView({
             correctCountRef.current = 0
             setSessionStats(null)
             setFlipped(false)
-            setConfidence('medium')
+            setTypedAnswer('')
           }}
         />
       </div>
@@ -434,37 +455,6 @@ export default function FlashcardView({
   }
 
   const previews = currentCard?.srs_previews || { again: '1m', hard: '5m', good: '10m', easy: '4d' }
-
-  const QUALITY_BUTTONS = [
-    {
-      quality: 1,
-      keyHint: '1',
-      label: 'Again',
-      desc: previews.again,
-      cls: 'border-error/40 bg-error/8 text-error hover:bg-error/10',
-    },
-    {
-      quality: 3,
-      keyHint: '2',
-      label: 'Hard',
-      desc: previews.hard,
-      cls: 'border-warning/40 bg-warning/10 text-warning hover:bg-warning/14',
-    },
-    {
-      quality: 4,
-      keyHint: '3',
-      label: 'Good',
-      desc: previews.good,
-      cls: 'border-success/40 bg-success/10 text-success hover:bg-success/14',
-    },
-    {
-      quality: 5,
-      keyHint: '4',
-      label: 'Easy',
-      desc: previews.easy,
-      cls: 'border-primary/40 bg-primary/12 text-on-primary-wash hover:bg-primary/20',
-    },
-  ] as const
 
   const canvasCapability = capabilities?.canvas ?? 'architecture'
   const canvasRoute = `${prefix}/${canvasCapability === 'concept' ? 'canvas' : 'builder'}`
@@ -485,6 +475,24 @@ export default function FlashcardView({
         <div className="flex items-center gap-2">
           {reviewMode ? (
             <>
+              <button
+                type="button"
+                aria-pressed={typeAnswerOpen}
+                onClick={() => {
+                  setTypeAnswerOpen((v) => {
+                    if (v) setTypedAnswer('')
+                    return !v
+                  })
+                }}
+                className={`btn btn-sm ${
+                  typeAnswerOpen
+                    ? 'bg-primary/15 text-on-primary-wash border-primary/35'
+                    : 'btn-ghost'
+                }`}
+              >
+                <PenLine size={12} />
+                Type answer
+              </button>
               <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/12 text-on-primary-wash border border-primary/30 inline-flex items-center gap-1">
                 <Clock size={12} />
                 SRS Review
@@ -493,16 +501,17 @@ export default function FlashcardView({
                 className={`btn btn-icon btn-sm ${showHotkeysGuide ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setShowHotkeysGuide(!showHotkeysGuide)}
                 title="Keyboard Shortcuts"
+                aria-label="Keyboard Shortcuts"
               >
                 <Keyboard size={14} />
               </button>
             </>
           ) : (
             <>
-              <button className="btn btn-ghost btn-icon" onClick={handleShuffle} title="Shuffle">
+              <button className="btn btn-ghost btn-icon" onClick={handleShuffle} title="Shuffle" aria-label="Shuffle">
                 <Shuffle size={16} />
               </button>
-              <button className="btn btn-ghost btn-icon" onClick={handleReset} title="Reset">
+              <button className="btn btn-ghost btn-icon" onClick={handleReset} title="Reset" aria-label="Reset">
                 <RotateCcw size={16} />
               </button>
             </>
@@ -562,6 +571,12 @@ export default function FlashcardView({
                 </span>
               )}
             </div>
+            {reviewMode && typedAnswer.trim() && (
+              <div className="w-full rounded-xl border border-outline-variant bg-surface-container-low px-3 py-2 text-xs text-on-surface-variant text-left mb-3">
+                <span className="font-semibold text-on-surface">Your recall:</span>{' '}
+                {typedAnswer.trim()}
+              </div>
+            )}
             <MarkdownRenderer
               content={currentCard?.back}
               className="flashcard-markdown"
@@ -575,6 +590,27 @@ export default function FlashcardView({
             )}
           </div>
         </div>
+
+        {reviewMode && typeAnswerOpen && !flipped && (
+          <div className="mt-3 w-full" onClick={(e) => e.stopPropagation()}>
+            <textarea
+              ref={typeInputRef}
+              aria-label="Jot your recall before flipping"
+              rows={2}
+              value={typedAnswer}
+              onChange={(e) => setTypedAnswer(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+                  e.preventDefault()
+                  setFlipped(true)
+                }
+              }}
+              placeholder="Jot your recall before flipping (Enter to reveal)..."
+              className="input w-full text-sm resize-none"
+            />
+          </div>
+        )}
+
         {!flipped && (
           <div className="mt-4 flex justify-center w-full">
             <button
@@ -582,7 +618,6 @@ export default function FlashcardView({
               className={reviewMode ? 'btn btn-primary px-6 py-2.5' : 'btn btn-outline px-6 py-2.5'}
               onClick={(e) => {
                 e.stopPropagation()
-                setConfidence('medium')
                 setFlipped(true)
               }}
             >
@@ -621,7 +656,7 @@ export default function FlashcardView({
       {reviewMode && showHotkeysGuide && !interceptorActive && (
         <div className="w-full max-w-xl mt-3 rounded-xl border border-outline-variant bg-surface-container-low p-3 text-xs text-on-surface-variant flex flex-wrap gap-x-4 gap-y-1.5 items-center">
           <span className="inline-flex items-center gap-1.5">
-            <Kbd>Space</Kbd> Flip / rate Good
+            <Kbd>Space</Kbd> Reveal answer
           </span>
           <span className="inline-flex items-center gap-1.5">
             <Kbd>1</Kbd> Again
@@ -638,28 +673,14 @@ export default function FlashcardView({
         </div>
       )}
 
-      {/* SRS Buttons */}
+      {/* Shared Pure Anki Grade Bar */}
       {!interceptorActive && reviewMode && flipped && (
-        <div className="srs-rating-buttons grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-4 w-full max-w-xl">
-          {QUALITY_BUTTONS.map((btn) => (
-            <button
-              key={btn.quality}
-              type="button"
-              className={`srs-rating-btn rounded-xl border px-3 py-2.5 flex flex-col items-center gap-1 transition cursor-pointer active:scale-95 ${btn.cls}`}
-              onClick={(e) => {
-                e.stopPropagation()
-                void handleRate(btn.quality)
-              }}
-              disabled={isReviewing}
-            >
-              <span className="text-sm font-semibold inline-flex items-center gap-1.5">
-                {btn.label}
-                <Kbd>{btn.keyHint}</Kbd>
-              </span>
-              <span className="text-xs font-mono tabular-nums opacity-85">{btn.desc}</span>
-            </button>
-          ))}
-        </div>
+        <AnkiGradeBar
+          intervals={previews}
+          disabled={isReviewing}
+          onRate={(grade) => void handleRate(GRADE_TO_QUALITY[grade])}
+          className="mt-4 w-full max-w-xl"
+        />
       )}
 
       {/* Review in Guide link — appears after rating "Again" on cards with source metadata */}

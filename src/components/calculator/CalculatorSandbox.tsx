@@ -170,7 +170,7 @@ export default function CalculatorSandbox({ compact = false }: CalculatorSandbox
               title={sc.description}
               id={`calc-scenario-${sc.id}`}
             >
-              <span aria-hidden="true">{sc.emoji}</span> {sc.name}
+              {sc.name}
             </button>
           ))}
         </div>

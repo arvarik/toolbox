@@ -28,8 +28,16 @@ export default function DeckCard<T extends DeckCardData>({ deck, onClick }: Deck
 
   return (
     <div
+      role="button"
+      tabIndex={0}
       className="card card-interactive deck-card"
       onClick={() => onClick(deck)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onClick(deck)
+        }
+      }}
       id={`deck-${deck.id}`}
     >
       <div className="deck-card-header">

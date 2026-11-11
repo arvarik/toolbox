@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { Flame } from 'lucide-react'
 
 export interface StudySessionDay {
   date: string
@@ -27,10 +28,10 @@ function formatDate(date: Date): string {
 }
 
 function getColor(count: number): string {
-  if (count === 0) return 'var(--color-bg-tertiary)'
-  if (count <= 5) return 'var(--color-success-subtle)'
-  if (count <= 15) return '#34d399'
-  return 'var(--color-success)'
+  if (count === 0) return 'var(--color-surface-low)'
+  if (count <= 5) return 'color-mix(in srgb, var(--color-ok) 35%, var(--color-surface-low))'
+  if (count <= 15) return 'color-mix(in srgb, var(--color-ok) 68%, var(--color-surface-low))'
+  return 'var(--color-ok)'
 }
 
 export interface StudyHeatmapProps {
@@ -165,9 +166,9 @@ export default function StudyHeatmap({ sessions = [] }: StudyHeatmapProps) {
             gap: 'var(--space-2)',
           }}
         >
-          <span>🌱</span>
+          <Flame size={14} className="shrink-0 text-[var(--color-brand)]" aria-hidden="true" />
           <span>
-            <strong>First time here?</strong> Complete your first review session to start tracking your daily study streak and retention heatmap!
+            <strong>First time here?</strong> Complete your first review session to start tracking your daily study streak and retention heatmap.
           </span>
         </div>
       )}

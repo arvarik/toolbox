@@ -189,13 +189,13 @@ export default function StatsDashboard({ deck, onBack }: StatsDashboardProps) {
           <h3 style={{ fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-5)' }}>Interval Distribution</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
             {[
-              { label: 'New', count: stats.intervalBuckets.new, color: 'var(--color-info)' },
-              { label: 'Learn', count: stats.intervalBuckets.learn, color: 'var(--color-warning)' },
-              { label: '1 day', count: stats.intervalBuckets.days_1, color: '#10b981' },
-              { label: '2-6 days', count: stats.intervalBuckets.days_2_6, color: '#059669' },
-              { label: '7-14 days', count: stats.intervalBuckets.days_7_14, color: '#047857' },
-              { label: '15-30 days', count: stats.intervalBuckets.days_15_30, color: '#065f46' },
-              { label: '31+ days', count: stats.intervalBuckets.days_30_plus, color: '#064e3b' },
+              { label: 'New', count: stats.intervalBuckets.new, color: 'var(--color-ink-faint)' },
+              { label: 'Learn', count: stats.intervalBuckets.learn, color: 'var(--color-warn)' },
+              { label: '1 day', count: stats.intervalBuckets.days_1, color: 'color-mix(in srgb, var(--color-ok) 45%, var(--color-surface-low))' },
+              { label: '2-6 days', count: stats.intervalBuckets.days_2_6, color: 'color-mix(in srgb, var(--color-ok) 62%, var(--color-surface-low))' },
+              { label: '7-14 days', count: stats.intervalBuckets.days_7_14, color: 'color-mix(in srgb, var(--color-ok) 78%, var(--color-surface-low))' },
+              { label: '15-30 days', count: stats.intervalBuckets.days_15_30, color: 'color-mix(in srgb, var(--color-ok) 90%, var(--color-surface-low))' },
+              { label: '31+ days', count: stats.intervalBuckets.days_30_plus, color: 'var(--color-ok)' },
             ].map((b) => {
               const pct = stats.total > 0 ? (b.count / maxIntervalCount) * 100 : 0
               return (

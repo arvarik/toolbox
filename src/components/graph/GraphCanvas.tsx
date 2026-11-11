@@ -48,6 +48,8 @@ interface ConceptNodeData extends Record<string, unknown>, GraphNodeItem {
   filteredOut: boolean
   focus: boolean
   inLineage: boolean
+  inLineageUp: boolean
+  inLineageDown: boolean
   dimmed: boolean
   trackPos: number | undefined
 }
@@ -55,7 +57,7 @@ interface ConceptNodeData extends Record<string, unknown>, GraphNodeItem {
 type ConceptFlowNode = Node<ConceptNodeData, 'concept'>
 
 /** Edge colors per lineage state (SVG markers need literal colors). */
-const EDGE_COLORS: Record<string, string> = { default: '#6e685e', up: '#f0a429', down: '#6fbf94' }
+const EDGE_COLORS: Record<string, string> = { default: '#6e685e', up: '#c97d2e', down: '#4f9d73' }
 
 /**
  * One concept pill: health-colored dot + name, card-count badge,
@@ -67,7 +69,7 @@ function ConceptNode({ data }: NodeProps<ConceptFlowNode>) {
   return (
     <div
       id={`graph-node-${data.nodeId}`}
-      className={`graph-node${data.filteredOut ? ' filtered-out' : ''}${data.focus ? ' focus' : ''}${data.inLineage ? ' lineage in-lineage' : ''}${data.dimmed ? ' lineage-dimmed' : ''}${data.ready ? ' ready' : ''}${data.locked ? ' locked' : ''}`}
+      className={`graph-node${data.filteredOut ? ' filtered-out' : ''}${data.focus ? ' focus' : ''}${data.inLineage ? ' lineage in-lineage' : ''}${data.inLineageUp ? ' in-lineage-prereq' : ''}${data.inLineageDown ? ' in-lineage-dep' : ''}${data.dimmed ? ' lineage-dimmed' : ''}${data.ready ? ' ready' : ''}${data.locked ? ' locked' : ''}`}
       style={{ '--health-color': color } as CSSProperties}
       title={`${data.name}\n${data.summary}\nCards: ${totalCards}`}
     >
@@ -124,8 +126,10 @@ export default function GraphCanvas({
 
   const flowNodes = useMemo<ConceptFlowNode[]>(() => nodes.map((node) => {
     const filtered = Boolean(visibleIds && !visibleIds.has(node.id))
-    const focus = node.id === focusId || node.id === selectedId
-    const inLineage = Boolean(lineage && (lineage.up.has(node.id) || lineage.down.has(node.id)))
+    const focus = node.id === focusId
+    const inLineageUp = Boolean(lineage?.up.has(node.id))
+    const inLineageDown = Boolean(lineage?.down.has(node.id))
+    const inLineage = inLineageUp || inLineageDown
     return {
       id: node.id,
       type: 'concept',
@@ -140,11 +144,13 @@ export default function GraphCanvas({
         filteredOut: filtered,
         focus,
         inLineage,
+        inLineageUp,
+        inLineageDown,
         dimmed: Boolean(lineage && !focus && !inLineage && !filtered),
         trackPos: trackOrder?.get(node.id),
       },
     }
-  }), [nodes, positions, visibleIds, focusId, selectedId, lineage, trackOrder])
+  }), [nodes, positions, visibleIds, focusId, lineage, trackOrder])
 
   const flowEdges = useMemo<Edge[]>(() => edges.map((edge) => {
     const hidden = Boolean(

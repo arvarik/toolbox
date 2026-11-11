@@ -53,6 +53,7 @@ export default function FeynmanPage() {
   const [selectedNodeId, setSelectedNodeId] = useState(nodeParam || '')
   const [customTopic, setCustomTopic] = useState('')
   const [explanation, setExplanation] = useState('')
+  const [interimTranscript, setInterimTranscript] = useState('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [result, setResult] = useState<FeynmanEvaluation | null>(null)
   const [isRecording, setIsRecording] = useState(false)
@@ -81,11 +82,19 @@ export default function FeynmanPage() {
     [skeleton.graph.nodes, selectedNodeId],
   )
 
-  // Reset dangling node selection & verdict when switching Kits on /k/:slug/feynman
+  // Reset dangling node selection, active dictation & verdict when switching Kits on /k/:slug/feynman
   useEffect(() => {
     const kitKey = `${prefix}:${skeleton.identity.slug}`
     if (prevKitKeyRef.current !== kitKey) {
       prevKitKeyRef.current = kitKey
+      try {
+        recognitionRef.current?.stop()
+      } catch {
+        // ignore if already stopped
+      }
+      setIsRecording(false)
+      setRecordingSeconds(0)
+      setInterimTranscript('')
       setResult(null)
       setExplanation('')
       setCustomTopic('')
@@ -114,31 +123,40 @@ export default function FeynmanPage() {
       recognition.interimResults = true
 
       recognition.onresult = (event) => {
-        let finalTranscript = ''
+        let finalChunk = ''
+        let liveInterim = ''
         for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const transcript = event.results[i][0].transcript
           if (event.results[i].isFinal) {
-            finalTranscript += `${event.results[i][0].transcript} `
+            finalChunk += `${transcript} `
+          } else {
+            liveInterim += transcript
           }
         }
-        if (finalTranscript) {
-          setExplanation((prev) => prev + finalTranscript)
+        if (finalChunk) {
+          setExplanation((prev) => prev + finalChunk)
         }
+        setInterimTranscript(liveInterim)
       }
 
       recognition.onerror = (event) => {
         console.error('Speech recognition error', event.error)
+        setInterimTranscript('')
         setIsRecording(false)
       }
 
       recognition.onend = () => {
+        setInterimTranscript('')
         setIsRecording(false)
       }
 
       recognitionRef.current = recognition
     }
     return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop()
+      try {
+        recognitionRef.current?.stop()
+      } catch {
+        // ignore if already stopped
       }
     }
   }, [])
@@ -149,12 +167,23 @@ export default function FeynmanPage() {
       return
     }
     if (isRecording) {
-      recognitionRef.current.stop()
+      try {
+        recognitionRef.current.stop()
+      } catch {
+        // ignore if already stopped
+      }
+      setInterimTranscript('')
       setIsRecording(false)
     } else {
-      setRecordingSeconds(0)
-      recognitionRef.current.start()
-      setIsRecording(true)
+      try {
+        setRecordingSeconds(0)
+        setInterimTranscript('')
+        recognitionRef.current.start()
+        setIsRecording(true)
+      } catch {
+        // Recognition may still be stopping from a rapid double-click
+        setIsRecording(false)
+      }
     }
   }
 
@@ -194,6 +223,14 @@ export default function FeynmanPage() {
   }
 
   const handleReset = () => {
+    try {
+      recognitionRef.current?.stop()
+    } catch {
+      // ignore if already stopped
+    }
+    setIsRecording(false)
+    setRecordingSeconds(0)
+    setInterimTranscript('')
     setSelectedNodeId('')
     setCustomTopic('')
     setExplanation('')
@@ -350,8 +387,11 @@ export default function FeynmanPage() {
             data-testid="feynman-explanation-input"
             className="input feynman-textarea w-full min-h-[160px]"
             placeholder="Explain the core mechanism, why it is needed, unpack any specialized terms, and state what breaks when assumptions fail..."
-            value={explanation}
-            onChange={(e) => setExplanation(e.target.value)}
+            value={explanation + interimTranscript}
+            onChange={(e) => {
+              setInterimTranscript('')
+              setExplanation(e.target.value)
+            }}
             disabled={isAnalyzing}
           />
         </div>

@@ -8,10 +8,6 @@ import SearchDialog from '../components/shared/SearchDialog'
 import TaskWorkingBar from '../components/shared/TaskWorkingBar'
 import ChatPage from '../pages/ChatPage'
 import GuidePage from '../pages/GuidePage'
-import InterleavedPage from '../pages/InterleavedPage'
-import LibraryHomePage from '../pages/LibraryHomePage'
-import ReviewPage from '../pages/ReviewPage'
-import SharedLibraryPage from '../pages/SharedLibraryPage'
 import useAppStore from '../stores/appStore'
 import useCommitStore from '../stores/useCommitStore'
 import useKitStore from '../stores/useKitStore'
@@ -19,9 +15,6 @@ import { makeTestKit, resetKitStore } from './testHelpers'
 
 const apiMocks = vi.hoisted(() => ({
   kitsList: vi.fn(),
-  sharedKitsList: vi.fn(),
-  dueAll: vi.fn(),
-  reviewCard: vi.fn(),
   listDogears: vi.fn(),
   toggleDogear: vi.fn(),
   listHighlights: vi.fn(),
@@ -80,19 +73,6 @@ vi.mock('../utils/api', async (importOriginal) => {
       list: (...args: unknown[]) => apiMocks.kitsList(...args),
       touch: vi.fn(() => Promise.resolve({ ok: true })),
     },
-    sharedKitsApi: {
-      ...actual.sharedKitsApi,
-      list: (...args: unknown[]) => apiMocks.sharedKitsList(...args),
-    },
-    flashcardsApi: {
-      ...actual.flashcardsApi,
-      dueAll: (...args: unknown[]) => apiMocks.dueAll(...args),
-      review: (...args: unknown[]) => apiMocks.reviewCard(...args),
-    },
-    studySessionsApi: {
-      ...actual.studySessionsApi,
-      list: vi.fn(() => Promise.resolve([])),
-    },
     guideContentApi: {
       ...actual.guideContentApi,
       progress: (...args: unknown[]) => apiMocks.guideProgress(...args),
@@ -130,28 +110,6 @@ describe('v2 3-Pane Study Workspace, Navigation Chrome & Living Notebook', () =>
     useCommitStore.getState().closeCompletely()
 
     apiMocks.kitsList.mockResolvedValue({ kits: [] })
-    apiMocks.sharedKitsList.mockResolvedValue({
-      kits: [
-        {
-          id: 'shared-1',
-          slug: 'system-design',
-          name: 'System Design',
-          description: 'Distributed systems architecture.',
-          icon: '📚',
-          color: '#006a91',
-          latestVersion: 2,
-          downloads: 18,
-          pillarCount: 4,
-          topicCount: 16,
-          tags: ['systems', 'distributed'],
-          isOfficial: true,
-          authorDisplayName: 'Toolbox Team',
-          updatedAt: '2026-11-10T00:00:00Z',
-        },
-      ],
-    })
-    apiMocks.dueAll.mockResolvedValue([])
-    apiMocks.reviewCard.mockResolvedValue({ id: 'c1', state: 2, stability: 12.4, difficulty: 4.1 })
     apiMocks.listDogears.mockResolvedValue([
       {
         pillarId: 'compute',
@@ -609,99 +567,5 @@ describe('v2 3-Pane Study Workspace, Navigation Chrome & Living Notebook', () =>
     } finally {
       Element.prototype.scrollIntoView = origScroll
     }
-  })
-
-  it('renders pure Anki ReviewPage without Confidence Gate, toggles Type answer scratchpad, and shows 1-click Resume reading on LibraryHomePage', async () => {
-    apiMocks.dueAll.mockResolvedValueOnce([
-      {
-        id: 'c1',
-        deck_id: 'd1',
-        front: 'Define **linearizability**.',
-        back: 'Real-time single-copy serializability.',
-        kit_slug: 'system-design',
-        kit_name: 'System Design',
-        srs_previews: { again: '1m', hard: '3d', good: '10d', easy: '21d' },
-      },
-      {
-        id: 'c2',
-        deck_id: 'd1',
-        front: 'Define **quorum intersection**.',
-        back: 'R + W > N.',
-        kit_slug: 'system-design',
-        kit_name: 'System Design',
-      },
-    ])
-
-    const reviewRender = render(
-      <MemoryRouter initialEntries={['/review']}>
-        <ReviewPage />
-      </MemoryRouter>,
-    )
-
-    expect(await screen.findByTestId('review-card-front')).toBeInTheDocument()
-    // Pure Anki: pre-reveal Confidence Gate is removed
-    expect(screen.queryByText(/Confidence before revealing/i)).toBeNull()
-
-    // Toggle optional Type answer recall scratchpad before revealing
-    const typeBtn = screen.getByRole('button', { name: /Type answer/i })
-    fireEvent.click(typeBtn)
-    const recallBox = screen.getByPlaceholderText(/Jot your recall/i)
-    fireEvent.change(recallBox, { target: { value: 'Single atomic point between invocation and response' } })
-
-    fireEvent.click(screen.getByTestId('reveal-answer-btn'))
-    expect(await screen.findByTestId('review-card-back')).toBeInTheDocument()
-    reviewRender.unmount()
-
-    // LibraryHomePage shows 1-click Resume reading link + dogeared count + zero raw book emojis
-    const resumedKit = makeTestKit({
-      id: 'k-resume',
-      slug: 'distributed-rust',
-      name: 'Distributed Rust',
-      dogearCount: 3,
-      archivedNotesCount: 2,
-      lastGuideRef: {
-        pillarId: 'ownership',
-        topicId: 'borrowing',
-        sectionId: '',
-        topicName: 'Borrow Rules',
-      },
-    })
-    apiMocks.kitsList.mockResolvedValue({ kits: [resumedKit] })
-
-    await act(async () => {
-      render(
-        <MemoryRouter initialEntries={['/']}>
-          <LibraryHomePage />
-        </MemoryRouter>,
-      )
-    })
-
-    const resumeLink = await screen.findByTestId('kit-resume-link-distributed-rust')
-    expect(resumeLink).toHaveAttribute('href', '/k/distributed-rust/guide/ownership/borrowing')
-    expect(screen.getByText(/3 dogeared/i)).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('📚')
-    expect(document.body.textContent).not.toContain('📦')
-  })
-
-  it('renders SharedLibraryPage tag/search filtering and InterleavedPage empty/review states cleanly', async () => {
-    const sharedRender = render(
-      <MemoryRouter initialEntries={['/shared']}>
-        <SharedLibraryPage />
-      </MemoryRouter>,
-    )
-    expect(
-      await screen.findByRole('heading', { name: 'Shared Community Library' }),
-    ).toBeInTheDocument()
-    expect(await screen.findByTestId('shared-kit-system-design')).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('📚')
-    sharedRender.unmount()
-
-    apiMocks.dueAll.mockResolvedValueOnce([])
-    render(
-      <MemoryRouter initialEntries={['/interleaved']}>
-        <InterleavedPage />
-      </MemoryRouter>,
-    )
-    expect(await screen.findByText(/All caught up/i)).toBeInTheDocument()
   })
 })

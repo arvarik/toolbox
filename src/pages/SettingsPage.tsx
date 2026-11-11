@@ -7,6 +7,7 @@ import * as apiModule from '../utils/api'
 import { configApi, systemApi, profileApi, guideContentApi, endpointsApi } from '../utils/api'
 import Modal from '../components/shared/Modal'
 import ModelPicker from '../components/shared/ModelPicker'
+import { SHORTCUT_SECTIONS } from '../components/shared/KeyboardShortcutsModal'
 import { useAuth } from '../components/auth/AuthGate'
 import { AccountSecuritySection, InstanceAdminSection } from '../components/settings/AccountAndAdminSections'
 import { AiSettingsSection } from '../components/settings/AiSettingsSection'
@@ -537,7 +538,7 @@ function CustomEndpointsSection() {
             </button>
             <button
               className="btn btn-primary"
-              style={{ background: 'var(--color-error)' }}
+              style={{ background: 'var(--color-error)', color: 'var(--color-on-error)' }}
               onClick={() => void handleDelete()}
             >
               Remove
@@ -1021,24 +1022,19 @@ export default function SettingsPage() {
           </p>
 
           <div className="shortcut-list">
-            {[
-              ['1', 'Navigate to Guide'],
-              ['2', 'Navigate to Builder'],
-              ['3', 'Navigate to Flashcards'],
-              [',', 'Navigate to Settings'],
-              ['K', 'Toggle AI Chat'],
-              ['B', 'Toggle Sidebar'],
-              ['D', 'Toggle Dark/Light Mode'],
-              ['S', 'Save Board (in Builder)'],
-              ['/', 'Search Topics'],
-            ].map(([key, desc]) => (
-              <div key={key} className="shortcut-item">
-                <span className="shortcut-desc">{desc}</span>
-                <kbd className="shortcut-key">
-                  {isMac ? `⌘${key}` : `Ctrl+${key}`}
-                </kbd>
-              </div>
-            ))}
+            {SHORTCUT_SECTIONS.map((section) =>
+              section.items.map((item) => {
+                const formattedKeys = item.keys
+                  .map((k) => (k === '⌘' ? (isMac ? '⌘' : 'Ctrl') : k))
+                  .join(isMac && item.keys[0] === '⌘' ? '' : '+')
+                return (
+                  <div key={`${section.category}-${item.label}`} className="shortcut-item">
+                    <span className="shortcut-desc">{item.label}</span>
+                    <kbd className="shortcut-key">{formattedKeys}</kbd>
+                  </div>
+                )
+              }),
+            )}
           </div>
         </div>
 

@@ -34,7 +34,11 @@ export const SHORTCUT_SECTIONS = [
   {
     category: 'Study & Flashcards',
     items: [
-      { label: 'Flip Card', keys: ['Space'] },
+      { label: 'Flip Card / Reveal', keys: ['Space'] },
+      { label: 'Rate: Again', keys: ['1'] },
+      { label: 'Rate: Hard', keys: ['2'] },
+      { label: 'Rate: Good', keys: ['3'] },
+      { label: 'Rate: Easy', keys: ['4'] },
       { label: 'Previous / Next Card', keys: ['←', '→'] },
     ],
   },

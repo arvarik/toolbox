@@ -243,14 +243,22 @@ export default function LibraryHomePage() {
               {showHeatmap ? "Hide Activity" : "Activity Heatmap"}
             </button>
             <Link
-              to={totals.due > 0 ? "/review" : "/interleaved"}
+              to={
+                totals.due > 0
+                  ? "/review"
+                  : kits[0]?.slug
+                    ? `/k/${encodeURIComponent(kits[0].slug)}`
+                    : "/shared"
+              }
               className="btn btn-primary tabular-nums"
               data-testid="cross-kit-review-btn"
             >
               <Activity size={16} />
               {totals.due > 0
                 ? `Review ${totals.due} Due Cards`
-                : "Interleaved Practice"}
+                : kits[0]?.slug
+                  ? "Open Study Kit"
+                  : "Browse Shared Kits"}
             </Link>
           </div>
         </div>
@@ -375,7 +383,7 @@ export default function LibraryHomePage() {
                   {/* 1-Click Resume Reading */}
                   {kit.lastGuideRef && (
                     <Link
-                      to={`/k/${encodeURIComponent(kit.slug)}/guide/${encodeURIComponent(kit.lastGuideRef.pillarId)}/${encodeURIComponent(kit.lastGuideRef.topicId)}`}
+                      to={`/k/${encodeURIComponent(kit.slug)}/guide/${encodeURIComponent(kit.lastGuideRef.pillarId)}/${encodeURIComponent(kit.lastGuideRef.topicId)}${kit.lastGuideRef.sectionId ? `#blueprint-${encodeURIComponent(kit.lastGuideRef.sectionId)}` : ""}`}
                       data-testid={`kit-resume-link-${kit.slug}`}
                       className="rounded-xl border border-outline-variant bg-surface-container hover:bg-surface-container-high px-3 py-2 flex items-center gap-2 text-xs text-on-surface transition"
                     >
