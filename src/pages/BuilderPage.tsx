@@ -17,7 +17,6 @@ import {
   toFlowNodes,
   toFlowEdges,
   toBoardData,
-  categoryColor,
   DEFAULT_CONCEPT_PROTOCOLS,
   readStoreEdges,
   readStoreNodes,
@@ -390,11 +389,11 @@ export default function BuilderPage() {
       if (!ctx) return
 
       const isDark = document.documentElement.getAttribute('data-theme') !== 'light'
-      ctx.fillStyle = isDark ? '#16161d' : '#f1f3f5'
+      ctx.fillStyle = isDark ? '#191816' : '#f5f2ea'
       ctx.fillRect(0, 0, canvas2d.width, canvas2d.height)
 
       // Draw dot grid
-      ctx.fillStyle = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.12)'
+      ctx.fillStyle = isDark ? 'rgba(235,231,224,0.09)' : 'rgba(30,28,25,0.12)'
       for (let x = 0; x < canvas2d.width; x += 24 * scale) {
         for (let y = 0; y < canvas2d.height; y += 24 * scale) {
           ctx.beginPath()
@@ -406,26 +405,25 @@ export default function BuilderPage() {
       ctx.scale(scale, scale)
 
       boardNodes.forEach((node) => {
-        const color = categoryColor(node.category, node.color)
         const x = node.x || 0
         const y = node.y || 0
         const w = 140
         const h = 52
 
-        ctx.fillStyle = isDark ? '#1c1c27' : '#ffffff'
-        ctx.strokeStyle = color + '44'
+        ctx.fillStyle = isDark ? '#22211e' : '#fcfaf5'
+        ctx.strokeStyle = isDark ? '#38352f' : '#d8d2c5'
         ctx.lineWidth = 1.5
         ctx.beginPath()
         ctx.roundRect(x, y, w, h, 8)
         ctx.fill()
         ctx.stroke()
 
-        ctx.fillStyle = color
+        ctx.fillStyle = isDark ? '#857f74' : '#6e685e'
         ctx.beginPath()
         ctx.roundRect(x, y, 4, h, [4, 0, 0, 4])
         ctx.fill()
 
-        ctx.fillStyle = isDark ? '#f4f4f5' : '#111827'
+        ctx.fillStyle = isDark ? '#ebe7e0' : '#1e1c19'
         ctx.font = '12px Inter, sans-serif'
         ctx.textBaseline = 'middle'
         ctx.fillText(node.name || 'Node', x + 14, y + h / 2)
@@ -441,8 +439,7 @@ export default function BuilderPage() {
         const toX = (toNode.x || 0) + 70
         const toY = toNode.y || 0
 
-        const fromColor = categoryColor(fromNode.category, fromNode.color)
-        ctx.strokeStyle = fromColor + '88'
+        ctx.strokeStyle = isDark ? '#6e685e' : '#857f74'
         ctx.lineWidth = 1.5
         ctx.beginPath()
         ctx.moveTo(fromX, fromY)
@@ -503,11 +500,11 @@ export default function BuilderPage() {
                 title={isConceptMode ? 'Default linking phrase for new propositions' : 'Default protocol label for new edges'}
                 style={{
                   fontSize: 'var(--text-xs)',
-                  padding: '4px 8px',
-                  borderRadius: 'var(--radius-sm)',
+                  padding: '5px 10px',
+                  borderRadius: 'var(--radius-md)',
                   border: '1px solid var(--color-border)',
-                  background: 'var(--color-surface)',
-                  color: 'var(--color-text-secondary)',
+                  background: 'var(--color-bg-secondary)',
+                  color: 'var(--color-text-primary)',
                   cursor: 'pointer',
                 }}
               >
@@ -535,10 +532,11 @@ export default function BuilderPage() {
                   position: 'absolute',
                   top: -3,
                   right: -3,
-                  background: '#ef4444',
-                  color: '#fff',
+                  background: 'var(--color-error)',
+                  color: 'var(--color-on-error, #2b0906)',
                   fontSize: '9px',
                   fontWeight: 800,
+                  fontVariantNumeric: 'tabular-nums',
                   borderRadius: 'var(--radius-full)',
                   padding: '1px 5px',
                   lineHeight: '12px',

@@ -2,13 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router";
 import {
   Activity,
+  Archive,
   ArrowRight,
+  Bookmark,
   BookOpen,
   Calendar,
   Download,
   Flame,
   Globe,
-  Layers,
   Plus,
   RefreshCw,
   Sparkles,
@@ -23,6 +24,7 @@ import {
   PublishKitModal,
 } from "../components/kits/KitModals";
 import { ExpandKitModal } from "../components/kits/ExpandKitModal";
+import { DomainGlyph, resolveKitGlyph } from "../components/ui/DomainGlyph";
 import useAppStore from "../stores/appStore";
 import useKitStore, { type KitSummaryItem } from "../stores/useKitStore";
 import { kitsApi, sharedKitsApi, studySessionsApi } from "../utils/api";
@@ -162,12 +164,11 @@ export default function LibraryHomePage() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-on-surface tracking-tight flex items-center gap-2.5">
-            <Layers size={24} className="text-primary" />
+          <h1 className="text-2xl sm:text-3xl font-serif font-semibold text-on-surface tracking-tight">
             My Study Library
           </h1>
           <p className="text-sm text-on-surface-variant mt-1">
-            Isolated domain Study Kits with unified daily spaced-repetition triage.
+            Domain Study Kits and unified daily spaced-repetition triage.
           </p>
         </div>
 
@@ -202,14 +203,14 @@ export default function LibraryHomePage() {
       >
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start sm:items-center gap-3.5">
-            <div className="w-11 h-11 rounded-xl bg-primary/12 text-on-primary-wash flex items-center justify-center shrink-0">
-              <Flame size={22} />
+            <div className="w-11 h-11 rounded-xl border border-outline-variant bg-surface-container-high text-on-surface flex items-center justify-center shrink-0">
+              <Flame size={20} />
             </div>
             <div>
               <div className="text-sm font-semibold text-on-surface">
                 Cross-Kit Daily Review Queue
               </div>
-              <div className="text-xs text-on-surface-variant mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <div className="text-xs text-on-surface-variant mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 tabular-nums">
                 <span>
                   <strong className="text-on-surface">{totals.due}</strong> due now
                 </span>
@@ -242,14 +243,22 @@ export default function LibraryHomePage() {
               {showHeatmap ? "Hide Activity" : "Activity Heatmap"}
             </button>
             <Link
-              to={totals.due > 0 ? "/review" : "/interleaved"}
-              className="btn btn-primary"
+              to={
+                totals.due > 0
+                  ? "/review"
+                  : kits[0]?.slug
+                    ? `/k/${encodeURIComponent(kits[0].slug)}`
+                    : "/shared"
+              }
+              className="btn btn-primary tabular-nums"
               data-testid="cross-kit-review-btn"
             >
               <Activity size={16} />
               {totals.due > 0
                 ? `Review ${totals.due} Due Cards`
-                : "Interleaved Practice"}
+                : kits[0]?.slug
+                  ? "Open Study Kit"
+                  : "Browse Shared Kits"}
             </Link>
           </div>
         </div>
@@ -268,10 +277,10 @@ export default function LibraryHomePage() {
         </div>
       ) : kits.length === 0 ? (
         <div className="rounded-2xl border border-outline-variant bg-surface-container-low p-8 sm:p-10 text-center max-w-2xl mx-auto space-y-4">
-          <div className="w-12 h-12 rounded-2xl bg-primary/12 text-on-primary-wash flex items-center justify-center mx-auto">
-            <Sparkles size={24} />
+          <div className="w-12 h-12 rounded-2xl border border-outline-variant bg-surface-container-high text-on-surface flex items-center justify-center mx-auto">
+            <Sparkles size={22} />
           </div>
-          <h2 className="text-lg font-semibold text-on-surface">
+          <h2 className="text-xl font-serif font-semibold text-on-surface">
             Your Personal Study Library is Empty
           </h2>
           <p className="text-sm text-on-surface-variant">
@@ -318,6 +327,7 @@ export default function LibraryHomePage() {
               kit.guideTotalCount > 0
                 ? Math.round((kit.guideFilledCount / kit.guideTotalCount) * 100)
                 : 0;
+            const dogears = kit.dogearCount ?? 0;
             return (
               <article
                 key={kit.id}
@@ -325,28 +335,28 @@ export default function LibraryHomePage() {
                 className="rounded-2xl border border-outline-variant bg-surface-container-low hover:bg-surface-container transition flex flex-col justify-between p-5"
               >
                 <div className="space-y-3">
-                  {/* Top row: Icon + Title + Upstream Update Badge */}
+                  {/* Top row: Icon + Title + Due Badge */}
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex items-center gap-3 min-w-0">
                       <span
-                        className="w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 border border-outline-variant bg-surface-container-high"
-                        style={
-                          kit.color
-                            ? { borderLeftWidth: 4, borderLeftColor: kit.color }
-                            : undefined
-                        }
+                        className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border border-outline-variant bg-surface-container-high text-on-surface"
                         aria-hidden="true"
                       >
-                        {kit.icon || "📚"}
+                        <DomainGlyph
+                          kind={resolveKitGlyph(
+                            `${kit.slug} ${kit.name} ${kit.icon || ""}`,
+                          )}
+                          size={18}
+                        />
                       </span>
                       <div className="min-w-0">
                         <Link
                           to={`/k/${encodeURIComponent(kit.slug)}`}
-                          className="font-semibold text-base text-on-surface hover:underline truncate block"
+                          className="font-serif font-semibold text-base text-on-surface hover:underline truncate block"
                         >
                           {kit.name}
                         </Link>
-                        <div className="text-xs text-on-surface-variant truncate">
+                        <div className="text-xs text-on-surface-variant truncate tabular-nums">
                           {kit.pillarCount} pillars • {kit.topicCount} topics
                           {kit.forkedVersion ? ` • v${kit.forkedVersion}` : ""}
                         </div>
@@ -356,7 +366,7 @@ export default function LibraryHomePage() {
                     {kit.dueCount > 0 && (
                       <Link
                         to={`/k/${encodeURIComponent(kit.slug)}/study`}
-                        className="px-2.5 py-1 rounded-full text-xs font-medium bg-primary/12 text-on-primary-wash shrink-0"
+                        className="px-2.5 py-1 rounded-full text-xs font-medium tabular-nums bg-primary/12 text-on-primary-wash shrink-0"
                         title="Review due cards in this Kit"
                       >
                         {kit.dueCount} due
@@ -370,15 +380,36 @@ export default function LibraryHomePage() {
                     </p>
                   )}
 
+                  {/* 1-Click Resume Reading */}
+                  {kit.lastGuideRef && (
+                    <Link
+                      to={`/k/${encodeURIComponent(kit.slug)}/guide/${encodeURIComponent(kit.lastGuideRef.pillarId)}/${encodeURIComponent(kit.lastGuideRef.topicId)}${kit.lastGuideRef.sectionId ? `#blueprint-${encodeURIComponent(kit.lastGuideRef.sectionId)}` : ""}`}
+                      data-testid={`kit-resume-link-${kit.slug}`}
+                      className="rounded-xl border border-outline-variant bg-surface-container hover:bg-surface-container-high px-3 py-2 flex items-center gap-2 text-xs text-on-surface transition"
+                    >
+                      <BookOpen size={13} className="text-on-surface-variant shrink-0" />
+                      <span className="font-medium shrink-0">Resume reading</span>
+                      {kit.lastGuideRef.topicName && (
+                        <span className="text-on-surface-variant truncate">
+                          · {kit.lastGuideRef.topicName}
+                        </span>
+                      )}
+                      <ArrowRight
+                        size={13}
+                        className="ml-auto text-on-surface-variant shrink-0"
+                      />
+                    </Link>
+                  )}
+
                   {/* Live Background Seeder Status Pill */}
                   {kit.status === "seeding" && (
                     <div
                       data-testid={`kit-seeding-pill-${kit.slug}`}
-                      className="rounded-xl border border-ai/40 bg-ai/12 px-3 py-2 flex items-center gap-2 text-xs font-medium text-on-ai-wash"
+                      className="rounded-xl border border-outline-variant bg-surface-container-high px-3 py-2 flex items-center gap-2 text-xs font-medium text-on-surface"
                     >
                       <RefreshCw
                         size={13}
-                        className="animate-spin shrink-0"
+                        className="animate-spin shrink-0 text-on-surface-variant"
                         aria-hidden="true"
                       />
                       <span className="truncate">
@@ -390,12 +421,12 @@ export default function LibraryHomePage() {
                   {/* Upstream Update Available Banner */}
                   {kit.hasUpstreamUpdate && (
                     <div className="rounded-xl border border-primary/40 bg-primary/12 p-2.5 flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-on-primary-wash">
+                      <span className="text-xs font-medium tabular-nums text-on-primary-wash">
                         Update v{kit.upstreamLatestVersion} available
                       </span>
                       <button
                         type="button"
-                        className="btn btn-primary btn-sm"
+                        className="btn btn-primary btn-sm tabular-nums"
                         disabled={syncingId === kit.id}
                         onClick={() => void handleSyncUpstream(kit)}
                       >
@@ -408,18 +439,18 @@ export default function LibraryHomePage() {
                     </div>
                   )}
 
-                  {/* Progress bars */}
+                  {/* Monochrome Tabular Progress Bars */}
                   <div className="space-y-2 pt-1">
                     <div>
                       <div className="flex justify-between text-xs text-on-surface-variant mb-1">
                         <span>SRS Mastery</span>
-                        <span className="font-medium text-on-surface">
+                        <span className="font-medium text-on-surface tabular-nums">
                           {kit.masteryPercent}% ({kit.cardCount} cards)
                         </span>
                       </div>
                       <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden">
                         <div
-                          className="h-full bg-primary transition-all"
+                          className="h-full bg-on-surface transition-all"
                           style={{ width: `${Math.min(100, kit.masteryPercent)}%` }}
                         />
                       </div>
@@ -428,23 +459,34 @@ export default function LibraryHomePage() {
                     <div>
                       <div className="flex justify-between text-xs text-on-surface-variant mb-1">
                         <span>Guide Notes</span>
-                        <span className="font-medium text-on-surface">
+                        <span className="font-medium text-on-surface tabular-nums">
                           {kit.guideFilledCount}/{kit.guideTotalCount} ({guidePct}%)
                         </span>
                       </div>
                       <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden">
                         <div
-                          className="h-full bg-primary/70 transition-all"
+                          className="h-full bg-on-surface-variant transition-all"
                           style={{ width: `${Math.min(100, guidePct)}%` }}
                         />
                       </div>
                     </div>
                   </div>
 
-                  {kit.archivedNotesCount > 0 && (
-                    <div className="text-xs text-on-surface-variant">
-                      📦 {kit.archivedNotesCount} archived{" "}
-                      {kit.archivedNotesCount === 1 ? "note" : "notes"} preserved
+                  {(dogears > 0 || kit.archivedNotesCount > 0) && (
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-on-surface-variant tabular-nums">
+                      {dogears > 0 && (
+                        <span className="inline-flex items-center gap-1">
+                          <Bookmark size={12} aria-hidden="true" />
+                          {dogears} dogeared
+                        </span>
+                      )}
+                      {kit.archivedNotesCount > 0 && (
+                        <span className="inline-flex items-center gap-1">
+                          <Archive size={12} aria-hidden="true" />
+                          {kit.archivedNotesCount} archived{" "}
+                          {kit.archivedNotesCount === 1 ? "note" : "notes"} preserved
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>

@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router'
 import {
-  BrainCircuit,
   Play,
-  Loader,
+  Loader2,
   Mic,
   MicOff,
   MessageSquare,
@@ -11,6 +10,7 @@ import {
   RotateCcw,
   ArrowLeft,
 } from 'lucide-react'
+import { KitAvatar, NotebookSheet, VoiceWaveform } from '../components/ui'
 import useAppStore from '../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
 import { feynmanApi } from '../utils/pedagogyApi'
@@ -53,12 +53,22 @@ export default function FeynmanPage() {
   const [selectedNodeId, setSelectedNodeId] = useState(nodeParam || '')
   const [customTopic, setCustomTopic] = useState('')
   const [explanation, setExplanation] = useState('')
+  const [interimTranscript, setInterimTranscript] = useState('')
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [result, setResult] = useState<FeynmanEvaluation | null>(null)
   const [isRecording, setIsRecording] = useState(false)
+  const [recordingSeconds, setRecordingSeconds] = useState(0)
 
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null)
   const prevKitKeyRef = useRef(`${prefix}:${skeleton.identity.slug}`)
+
+  useEffect(() => {
+    if (!isRecording) return
+    const timer = setInterval(() => {
+      setRecordingSeconds((s) => s + 1)
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [isRecording])
 
   const nodesByPillar = useMemo(() => {
     return pillars.map((p) => ({
@@ -72,11 +82,19 @@ export default function FeynmanPage() {
     [skeleton.graph.nodes, selectedNodeId],
   )
 
-  // Reset dangling node selection & verdict when switching Kits on /k/:slug/feynman
+  // Reset dangling node selection, active dictation & verdict when switching Kits on /k/:slug/feynman
   useEffect(() => {
     const kitKey = `${prefix}:${skeleton.identity.slug}`
     if (prevKitKeyRef.current !== kitKey) {
       prevKitKeyRef.current = kitKey
+      try {
+        recognitionRef.current?.stop()
+      } catch {
+        // ignore if already stopped
+      }
+      setIsRecording(false)
+      setRecordingSeconds(0)
+      setInterimTranscript('')
       setResult(null)
       setExplanation('')
       setCustomTopic('')
@@ -105,31 +123,40 @@ export default function FeynmanPage() {
       recognition.interimResults = true
 
       recognition.onresult = (event) => {
-        let finalTranscript = ''
+        let finalChunk = ''
+        let liveInterim = ''
         for (let i = event.resultIndex; i < event.results.length; ++i) {
+          const transcript = event.results[i][0].transcript
           if (event.results[i].isFinal) {
-            finalTranscript += `${event.results[i][0].transcript} `
+            finalChunk += `${transcript} `
+          } else {
+            liveInterim += transcript
           }
         }
-        if (finalTranscript) {
-          setExplanation((prev) => prev + finalTranscript)
+        if (finalChunk) {
+          setExplanation((prev) => prev + finalChunk)
         }
+        setInterimTranscript(liveInterim)
       }
 
       recognition.onerror = (event) => {
         console.error('Speech recognition error', event.error)
+        setInterimTranscript('')
         setIsRecording(false)
       }
 
       recognition.onend = () => {
+        setInterimTranscript('')
         setIsRecording(false)
       }
 
       recognitionRef.current = recognition
     }
     return () => {
-      if (recognitionRef.current) {
-        recognitionRef.current.stop()
+      try {
+        recognitionRef.current?.stop()
+      } catch {
+        // ignore if already stopped
       }
     }
   }, [])
@@ -140,11 +167,23 @@ export default function FeynmanPage() {
       return
     }
     if (isRecording) {
-      recognitionRef.current.stop()
+      try {
+        recognitionRef.current.stop()
+      } catch {
+        // ignore if already stopped
+      }
+      setInterimTranscript('')
       setIsRecording(false)
     } else {
-      recognitionRef.current.start()
-      setIsRecording(true)
+      try {
+        setRecordingSeconds(0)
+        setInterimTranscript('')
+        recognitionRef.current.start()
+        setIsRecording(true)
+      } catch {
+        // Recognition may still be stopping from a rapid double-click
+        setIsRecording(false)
+      }
     }
   }
 
@@ -184,6 +223,14 @@ export default function FeynmanPage() {
   }
 
   const handleReset = () => {
+    try {
+      recognitionRef.current?.stop()
+    } catch {
+      // ignore if already stopped
+    }
+    setIsRecording(false)
+    setRecordingSeconds(0)
+    setInterimTranscript('')
     setSelectedNodeId('')
     setCustomTopic('')
     setExplanation('')
@@ -197,6 +244,16 @@ export default function FeynmanPage() {
     if (!effectiveConceptName || !explanation.trim()) {
       addToast({ type: 'error', message: 'Please select or enter a concept and write your explanation.' })
       return
+    }
+
+    if (isRecording) {
+      try {
+        recognitionRef.current?.stop()
+      } catch {
+        // ignore if already stopped
+      }
+      setInterimTranscript('')
+      setIsRecording(false)
     }
 
     setIsAnalyzing(true)
@@ -224,41 +281,45 @@ export default function FeynmanPage() {
   }
 
   return (
-    <div className="page-layout feynman-container" id="feynman-page">
-      <div className="page-header">
-        <div>
-          {prefix && (
-            <Link
-              to={prefix}
-              className="text-xs font-semibold text-on-primary-wash hover:underline inline-flex items-center gap-1 mb-1"
-            >
-              <ArrowLeft size={13} />
-              Back to {skeleton.identity.name} Path
-            </Link>
-          )}
-          <h1 className="page-title feynman-title">
-            <BrainCircuit className="icon-accent" size={24} />
+    <div
+      className="max-w-4xl mx-auto px-4 sm:px-6 py-6 sm:py-8 space-y-6"
+      id="feynman-page"
+    >
+      <header className="space-y-1.5">
+        {prefix && (
+          <Link
+            to={prefix}
+            className="text-xs font-semibold text-on-primary-wash hover:underline inline-flex items-center gap-1"
+          >
+            <ArrowLeft size={13} />
+            Back to {skeleton.identity.name} Path
+          </Link>
+        )}
+        <div className="flex items-center gap-3">
+          <KitAvatar size={24} state={isAnalyzing ? 'thinking' : 'idle'} />
+          <h1 className="font-serif text-2xl sm:text-3xl font-normal text-on-surface tracking-tight">
             Feynman Simulator
           </h1>
-          <p className="page-subtitle">
-            Teach a concept from first principles without hiding behind jargon — graded against your {skeleton.identity.name} curriculum rubric.
-          </p>
         </div>
-      </div>
+        <p className="text-sm text-on-surface-variant">
+          Teach a concept from first principles without jargon, graded against
+          your curriculum rubric.
+        </p>
+      </header>
 
-      <div className="card feynman-card">
+      <NotebookSheet className="p-5 sm:p-6 space-y-5">
         <div className="space-y-3">
           <div>
             <label
               htmlFor="feynman-node-select"
-              style={{ display: 'block', fontSize: 'var(--text-sm)', fontWeight: 600, marginBottom: 'var(--space-2)' }}
+              className="block text-sm font-medium text-on-surface mb-1.5"
             >
               Concept Node ({skeleton.identity.name})
             </label>
             <select
               id="feynman-node-select"
               data-testid="feynman-node-select"
-              className="input"
+              className="input w-full"
               value={selectedNodeId}
               onChange={(e) => handleSelectNode(e.target.value)}
               disabled={isAnalyzing}
@@ -266,7 +327,10 @@ export default function FeynmanPage() {
               <option value="">Custom Freeform Topic…</option>
               {nodesByPillar.map(({ pillar, nodes }) =>
                 nodes.length > 0 ? (
-                  <optgroup key={pillar.id} label={`Pillar ${pillar.number}: ${pillar.name}`}>
+                  <optgroup
+                    key={pillar.id}
+                    label={`Pillar ${pillar.number}: ${pillar.name}`}
+                  >
                     {nodes.map((node) => (
                       <option key={node.id} value={node.id}>
                         {node.name}
@@ -280,19 +344,20 @@ export default function FeynmanPage() {
 
           {selectedNode ? (
             <div className="rounded-xl border border-outline-variant bg-surface-container p-3 text-xs text-on-surface-variant">
-              <strong className="text-on-surface">{selectedNode.name}:</strong> {selectedNode.summary}
+              <strong className="text-on-surface">{selectedNode.name}:</strong>{' '}
+              {selectedNode.summary}
             </div>
           ) : (
             <div>
               <label
                 htmlFor="feynman-custom-topic"
-                style={{ display: 'block', fontSize: 'var(--text-xs)', fontWeight: 600, marginBottom: 'var(--space-1)' }}
+                className="block text-xs font-medium text-on-surface-variant mb-1"
               >
                 Or enter any custom concept:
               </label>
               <input
                 id="feynman-custom-topic"
-                className="input"
+                className="input w-full"
                 placeholder="e.g., Consistent Hashing, Paxos, Borrow Checker"
                 value={customTopic}
                 onChange={(e) => setCustomTopic(e.target.value)}
@@ -302,46 +367,70 @@ export default function FeynmanPage() {
           )}
         </div>
 
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
-            <label htmlFor="feynman-explanation-input" style={{ fontSize: 'var(--text-sm)', fontWeight: 600 }}>
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label
+              htmlFor="feynman-explanation-input"
+              className="text-sm font-medium text-on-surface"
+            >
               Explain it clearly from first principles:
             </label>
-            <button
-              type="button"
-              className={`btn btn-sm ${isRecording ? 'btn-primary' : 'btn-outline'}`}
-              onClick={toggleRecording}
-              style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-              disabled={isAnalyzing}
-            >
-              {isRecording ? <MicOff size={14} /> : <Mic size={14} />}
-              {isRecording ? 'Stop Recording' : 'Voice Record'}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <VoiceWaveform
+                recording={isRecording}
+                seconds={recordingSeconds}
+                className="py-1.5 px-3"
+              />
+              <button
+                type="button"
+                className={`btn btn-sm ${isRecording ? 'btn-primary' : 'btn-secondary'}`}
+                onClick={toggleRecording}
+                disabled={isAnalyzing}
+              >
+                {isRecording ? <MicOff size={14} /> : <Mic size={14} />}
+                {isRecording ? 'Stop Recording' : 'Voice Record'}
+              </button>
+            </div>
           </div>
           <textarea
             id="feynman-explanation-input"
             data-testid="feynman-explanation-input"
-            className="input feynman-textarea"
+            className="input feynman-textarea w-full min-h-[160px]"
             placeholder="Explain the core mechanism, why it is needed, unpack any specialized terms, and state what breaks when assumptions fail..."
             value={explanation}
             onChange={(e) => setExplanation(e.target.value)}
             disabled={isAnalyzing}
           />
+          {interimTranscript && (
+            <div
+              data-testid="feynman-interim-transcript"
+              aria-live="polite"
+              className="rounded-lg border border-outline-variant bg-surface-container px-3 py-1.5 text-xs italic text-on-surface-variant"
+            >
+              Listening: {interimTranscript}
+            </div>
+          )}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 'var(--space-2)' }}>
+        <div className="flex justify-end gap-2">
           <button
             type="button"
             className="btn btn-primary"
-            onClick={() => { void handleAnalyze() }}
+            onClick={() => {
+              void handleAnalyze()
+            }}
             disabled={isAnalyzing || !effectiveConceptName || !explanation.trim()}
             id="feynman-analyze-btn"
           >
-            {isAnalyzing ? <Loader className="spin" size={16} /> : <Play size={16} />}
+            {isAnalyzing ? (
+              <Loader2 className="animate-spin" size={16} />
+            ) : (
+              <Play size={16} />
+            )}
             {isAnalyzing ? 'Evaluating Against Rubric...' : 'Analyze Explanation'}
           </button>
         </div>
-      </div>
+      </NotebookSheet>
 
       {result && (
         <div className="space-y-4">

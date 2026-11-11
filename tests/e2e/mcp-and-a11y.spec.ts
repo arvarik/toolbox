@@ -238,6 +238,11 @@ test.describe("MCP Streamable HTTP, Mobile Drawer & Accessibility", () => {
           label: "settings-mcp",
           readySelector: "#mcp-settings-section",
         },
+        {
+          path: "/design-system",
+          label: "design-system-showcase",
+          readySelector: '[data-testid="design-system-page"]',
+        },
       ];
 
     for (const route of routes) {

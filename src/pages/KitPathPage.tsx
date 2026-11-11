@@ -26,6 +26,13 @@ import {
 } from "../../shared/kits/kitSkeleton.ts";
 import FlashcardView, { type FlashcardItem } from "../components/study/FlashcardView";
 import ChallengeNodeModal from "../components/drills/ChallengeNodeModal.tsx";
+import {
+  DomainGlyph,
+  HelpHint,
+  RetrievabilityRing,
+  SegmentedControl,
+  resolveKitGlyph,
+} from "../components/ui";
 import useAppStore from "../stores/appStore";
 import useKitStore, {
   useActiveKit,
@@ -96,7 +103,7 @@ function statusPillClasses(status: NodeDisplayStatus): string {
     case "In Progress":
       return "bg-primary/15 text-on-primary-wash border-primary/30";
     case "Ready / Unlocked":
-      return "bg-info/10 text-info border-info/30";
+      return "bg-surface-container-high text-on-surface border-outline-variant";
     case "Locked":
       return "bg-surface-container-high text-on-surface-variant border-outline-variant";
   }
@@ -177,7 +184,7 @@ export default function KitPathPage() {
       name: n.name,
       pillarId: n.pillarId,
       pillarName: pillarNames.get(n.pillarId) ?? n.pillarId,
-      pillarColor: pillarColors.get(n.pillarId) ?? "#818cf8",
+      pillarColor: pillarColors.get(n.pillarId) ?? "var(--color-outline)",
       topicId: n.topicId,
       summary: n.summary,
       health: "unseen" as const,
@@ -352,15 +359,20 @@ export default function KitPathPage() {
       >
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
           <div className="flex items-start gap-3 min-w-0">
-            <div
-              className="w-8 h-8 rounded-xl flex items-center justify-center text-xs font-bold shrink-0 border border-outline-variant bg-surface-container-high text-on-surface"
-              style={{ borderLeftWidth: 3, borderLeftColor: node.pillarColor }}
-            >
-              {orderIdx}
-            </div>
+            <RetrievabilityRing
+              size={34}
+              strokeWidth={2.5}
+              retrievability={
+                status === "Mastered" ? Math.max(strengthPct, 100) : strengthPct
+              }
+              strokeColorOverride={
+                status === "Mastered" ? "var(--color-ok)" : undefined
+              }
+              centerLabel={orderIdx}
+            />
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-base font-bold text-on-surface">
+                <h3 className="font-serif text-lg font-medium text-on-surface">
                   {node.name}
                 </h3>
                 <span
@@ -393,7 +405,7 @@ export default function KitPathPage() {
             onClick={() => setChallengeNode({ id: node.id, name: node.name })}
             title="Skip ahead with 1 Hard Drill (0 hints) + Feynman Synthesis"
           >
-            <Zap size={14} className="text-warning" />
+            <Zap size={14} className="text-on-primary-wash" />
             Challenge Node
           </button>
         </div>
@@ -430,10 +442,10 @@ export default function KitPathPage() {
 
         {/* Continuous FSRS-6 Retrievability Strength Bar */}
         <div className="space-y-1">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-on-surface-variant">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-on-surface-variant tabular-nums">
             <span>
               FSRS-6 Retrievability Strength:{" "}
-              <strong className="text-on-surface">{strengthPct}%</strong>
+              <strong className="font-mono text-on-surface">{strengthPct}%</strong>
             </span>
             <span>
               {node.counts.mastered}/{node.counts.total} cards mastered ·{" "}
@@ -442,7 +454,7 @@ export default function KitPathPage() {
           </div>
           <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden">
             <div
-              className="h-full bg-primary transition-all"
+              className={`h-full transition-all ${status === "Mastered" ? "bg-success" : "bg-on-surface"}`}
               style={{
                 width: `${Math.min(100, status === "Mastered" ? Math.max(strengthPct, 100) : strengthPct)}%`,
               }}
@@ -479,7 +491,7 @@ export default function KitPathPage() {
           </Link>
           <button
             type="button"
-            className="btn btn-ghost btn-sm"
+            className="btn btn-ghost btn-sm tabular-nums"
             disabled={startingSessionId === node.id}
             onClick={() => void handleStartNodeFlashcards(node)}
           >
@@ -540,28 +552,29 @@ export default function KitPathPage() {
         <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
           <div className="flex items-start gap-4 min-w-0">
             <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shrink-0 border border-outline-variant bg-surface-container-high"
-              style={
-                skeleton.identity.color
-                  ? {
-                      borderLeftWidth: 4,
-                      borderLeftColor: skeleton.identity.color,
-                    }
-                  : undefined
-              }
+              className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 border border-outline-variant bg-surface-container-high text-on-surface"
               aria-hidden="true"
             >
-              {skeleton.identity.icon || "📚"}
+              <DomainGlyph
+                kind={resolveKitGlyph(
+                  `${skeleton.identity.slug} ${skeleton.identity.name} ${skeleton.identity.icon ?? ""}`,
+                )}
+                size={22}
+              />
             </div>
             <div className="min-w-0 space-y-1">
               <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-2xl font-bold text-on-surface tracking-tight">
+                <h1 className="font-serif text-2xl sm:text-3xl font-normal text-on-surface tracking-tight">
                   {skeleton.identity.name}
                 </h1>
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-surface-container-high border border-outline-variant text-on-surface-variant inline-flex items-center gap-1">
                   <Compass size={12} />
                   Ordered Mastery Path
                 </span>
+                <HelpHint
+                  align="left"
+                  text="Master foundations to unlock downstream concepts, or Challenge any node to skip ahead."
+                />
               </div>
               {skeleton.identity.description && (
                 <p className="text-sm text-on-surface-variant max-w-2xl">
@@ -575,7 +588,7 @@ export default function KitPathPage() {
             <Link
               to={dueCardsTotal > 0 ? "/review" : `${prefix}/study`}
               data-testid="kit-due-cards-btn"
-              className="btn btn-primary btn-sm"
+              className="btn btn-primary btn-sm tabular-nums"
             >
               <Flame size={15} />
               {dueCardsTotal > 0
@@ -597,13 +610,13 @@ export default function KitPathPage() {
             </div>
             <div
               data-testid="kit-overall-mastery"
-              className="text-lg font-extrabold text-on-surface mt-0.5"
+              className="font-mono text-lg font-bold text-on-surface tabular-nums mt-0.5"
             >
               {overallRetrievabilityPct}%
             </div>
             <div className="h-1.5 rounded-full bg-surface-container-high overflow-hidden mt-2">
               <div
-                className="h-full bg-primary transition-all"
+                className="h-full bg-on-surface transition-all"
                 style={{ width: `${Math.min(100, overallRetrievabilityPct)}%` }}
               />
             </div>
@@ -613,10 +626,10 @@ export default function KitPathPage() {
             <div className="text-xs text-on-surface-variant">
               Concept Nodes Mastered
             </div>
-            <div className="text-lg font-extrabold text-on-surface mt-0.5">
+            <div className="font-mono text-lg font-bold text-on-surface tabular-nums mt-0.5">
               {masteredNodeCount} / {effectiveNodes.length}
             </div>
-            <div className="text-[11px] text-on-surface-variant mt-1">
+            <div className="text-[11px] text-on-surface-variant tabular-nums mt-1">
               {graphData?.remediationCount
                 ? `${graphData.remediationCount} remediation checkup card(s) queued`
                 : "Prerequisite credit (FIRe) active"}
@@ -627,7 +640,7 @@ export default function KitPathPage() {
             <div className="text-xs text-on-surface-variant">
               Scenario Drills
             </div>
-            <div className="text-lg font-extrabold text-on-surface mt-0.5">
+            <div className="font-mono text-lg font-bold text-on-surface tabular-nums mt-0.5">
               {drills.filter((d) => d.mastered).length} / {drills.length}
             </div>
             <Link
@@ -666,9 +679,9 @@ export default function KitPathPage() {
               <button
                 type="button"
                 onClick={() => setActiveTrackId("")}
-                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer ${
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer tabular-nums ${
                   activeTrackId === ""
-                    ? "bg-primary text-on-primary border-primary"
+                    ? "bg-surface-container-high text-on-surface border-outline"
                     : "bg-surface-container text-on-surface-variant border-outline-variant hover:text-on-surface"
                 }`}
               >
@@ -689,14 +702,17 @@ export default function KitPathPage() {
                     onClick={() =>
                       setActiveTrackId(isSelected ? "" : track.id)
                     }
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer ${
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition cursor-pointer inline-flex items-center gap-1.5 tabular-nums ${
                       isSelected
-                        ? "bg-primary text-on-primary border-primary"
+                        ? "bg-surface-container-high text-on-surface border-outline"
                         : "bg-surface-container text-on-surface-variant border-outline-variant hover:text-on-surface"
                     }`}
                     title={track.description}
                   >
-                    {track.emoji} {track.name} ({count})
+                    <Compass size={12} className="shrink-0" />
+                    <span>
+                      {track.name} ({count})
+                    </span>
                   </button>
                 );
               })}
@@ -706,42 +722,25 @@ export default function KitPathPage() {
       </header>
 
       {/* Ordering Mode Switcher */}
-      <div className="flex items-center justify-between gap-3">
-        <h2 className="text-sm font-bold uppercase tracking-wide text-on-surface-variant flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-sm font-bold uppercase tracking-wide text-on-surface-variant flex items-center gap-2 tabular-nums">
           <Layers size={15} />
           {activeTrackId
             ? `Track Path (${orderedNodes.length} concepts in prerequisite order)`
             : `Curriculum Concepts (${orderedNodes.length})`}
         </h2>
 
-        <div
-          className="inline-flex rounded-xl border border-outline-variant bg-surface-container-low p-1"
-          role="group"
-          aria-label="Grouping mode"
-        >
-          <button
-            type="button"
-            onClick={() => setGroupMode("topological")}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-              groupMode === "topological"
-                ? "bg-primary text-on-primary"
-                : "text-on-surface-variant hover:text-on-surface"
-            }`}
-          >
-            Topological Order
-          </button>
-          <button
-            type="button"
-            onClick={() => setGroupMode("pillar")}
-            className={`px-3 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
-              groupMode === "pillar"
-                ? "bg-primary text-on-primary"
-                : "text-on-surface-variant hover:text-on-surface"
-            }`}
-          >
-            By Pillar
-          </button>
-        </div>
+        <SegmentedControl
+          roleType="group"
+          ariaLabel="Grouping mode"
+          size="xs"
+          value={groupMode}
+          onChange={setGroupMode}
+          items={[
+            { value: "topological", label: "Topological Order" },
+            { value: "pillar", label: "By Pillar" },
+          ]}
+        />
       </div>
 
       {/* Concept Nodes List */}
@@ -763,13 +762,13 @@ export default function KitPathPage() {
               <section key={pillar.id} className="space-y-3">
                 <div className="flex items-center gap-2">
                   <span
-                    className="w-3 h-3 rounded-full"
-                    style={{ backgroundColor: pillar.color }}
+                    className="w-2.5 h-2.5 rounded-full bg-on-surface-variant shrink-0"
+                    aria-hidden="true"
                   />
-                  <h3 className="text-base font-bold text-on-surface">
+                  <h3 className="font-serif text-lg font-medium text-on-surface">
                     Pillar {pillar.number}: {pillar.name}
                   </h3>
-                  <span className="text-xs text-on-surface-variant">
+                  <span className="text-xs text-on-surface-variant tabular-nums">
                     ({pNodes.length} concepts)
                   </span>
                 </div>

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Layers } from 'lucide-react'
+import { ArrowLeft, Loader2 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import FlashcardView, { type FlashcardItem } from '../components/study/FlashcardView'
+import { KitAvatar } from '../components/ui'
 import { flashcardsApi } from '../utils/api'
 import useAppStore from '../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../stores/useKitStore'
@@ -42,9 +43,12 @@ export default function InterleavedPage() {
 
   if (isLoading) {
     return (
-      <div className="study-layout">
-        <div className="study-main" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <p>Loading interleaved review...</p>
+      <div className="study-layout" id="interleaved-page">
+        <div className="study-main items-center justify-center gap-2 text-sm text-on-surface-variant">
+          <div className="flex items-center gap-2 py-16">
+            <Loader2 size={18} className="animate-spin" />
+            <span>Loading interleaved review…</span>
+          </div>
         </div>
       </div>
     )
@@ -61,26 +65,26 @@ export default function InterleavedPage() {
             onBack={() => navigate(studyHubRoute)}
           />
         ) : (
-          <div style={{ textAlign: 'center', marginTop: 'var(--space-12)' }}>
-            <div style={{
-              width: 48, height: 48, borderRadius: 'var(--radius-full)',
-              background: 'var(--color-bg-tertiary)', display: 'flex', alignItems: 'center',
-              justifyContent: 'center', margin: '0 auto var(--space-4)', color: 'var(--color-accent)',
-            }}>
-              <Layers size={24} />
+          <div className="max-w-md mx-auto px-4 py-16 text-center space-y-4">
+            <div className="flex justify-center">
+              <KitAvatar size={36} state="done" />
             </div>
-            <h2 className="page-title">All Caught Up!</h2>
-            <p className="page-subtitle" style={{ marginTop: 'var(--space-2)' }}>
-              There are no due cards across any of your decks right now.
+            <h1 className="font-serif text-2xl font-normal text-on-surface">
+              All caught up
+            </h1>
+            <p className="text-sm text-on-surface-variant">
+              Zero due cards remain across your decks right now.
             </p>
-            <button
-              className="btn btn-primary"
-              style={{ marginTop: 'var(--space-6)' }}
-              onClick={() => navigate(studyHubRoute)}
-            >
-              <ArrowLeft size={16} />
-              Back to Study Hub
-            </button>
+            <div className="pt-2">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => navigate(studyHubRoute)}
+              >
+                <ArrowLeft size={16} />
+                Back to Study Hub
+              </button>
+            </div>
           </div>
         )}
       </div>

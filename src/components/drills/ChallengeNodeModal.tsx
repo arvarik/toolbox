@@ -124,7 +124,7 @@ export default function ChallengeNodeModal({
     <Modal
       open={open}
       onClose={() => !submitting && onClose()}
-      title={`⚡ Challenge Node: ${payload?.nodeName || nodeName || ""}`.trim()}
+      title={`Challenge Node: ${payload?.nodeName || nodeName || ""}`.trim()}
     >
       <div
         data-testid="challenge-node-modal"

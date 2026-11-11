@@ -2,6 +2,7 @@ import {
   useState,
   useRef,
   useEffect,
+  useCallback,
   type TouchEvent as ReactTouchEvent,
 } from 'react'
 import {
@@ -16,12 +17,15 @@ import {
   Wrench,
   MessageSquare,
   Layers,
+  Loader2,
+  PenLine,
 } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { flashcardsApi, chatApi } from '../../utils/api'
 import { SYSTEM_DESIGN_KIT_SKELETON } from '../../../shared/kits/systemDesignKit'
 import StudySessionSummary, { type StudySessionStats } from './StudySessionSummary'
 import MarkdownRenderer from '../shared/MarkdownRenderer'
+import { AnkiGradeBar, Kbd, KitAvatar, type AnkiGrade } from '../ui'
 import useAppStore from '../../stores/appStore'
 import { useActiveKit, useKitRoutePrefix } from '../../stores/useKitStore'
 
@@ -66,7 +70,12 @@ interface GuideLinkInfo {
   sectionName: string
 }
 
-type ConfidenceLevel = 'low' | 'medium' | 'high'
+const GRADE_TO_QUALITY: Record<AnkiGrade, 1 | 3 | 4 | 5> = {
+  again: 1,
+  hard: 3,
+  good: 4,
+  easy: 5,
+}
 
 export interface FlashcardViewProps {
   cards?: ReadonlyArray<FlashcardItem>
@@ -90,7 +99,8 @@ export default function FlashcardView({
   const [sessionQueue, setSessionQueue] = useState<FlashcardItem[]>([])
   const [currentIndex, setCurrentIndex] = useState(0)
   const [flipped, setFlipped] = useState(false)
-  const [confidence, setConfidence] = useState<ConfidenceLevel | null>(null)
+  const [typeAnswerOpen, setTypeAnswerOpen] = useState(false)
+  const [typedAnswer, setTypedAnswer] = useState('')
   const [isReviewing, setIsReviewing] = useState(false)
   const [reviewedCount, setReviewedCount] = useState(0)
   const [sessionStats, setSessionStats] = useState<StudySessionStats | null>(null)
@@ -105,6 +115,7 @@ export default function FlashcardView({
   const startTimeRef = useRef<number>(0)
   const ratingsRef = useRef<Record<number, number>>({})
   const correctCountRef = useRef<number>(0)
+  const typeInputRef = useRef<HTMLTextAreaElement>(null)
 
   // Load cards into the dynamic session queue
   useEffect(() => {
@@ -112,7 +123,7 @@ export default function FlashcardView({
       setSessionQueue([...cards])
       setCurrentIndex(0)
       setFlipped(false)
-      setConfidence(null)
+      setTypedAnswer('')
       setIsReviewing(false)
       setReviewedCount(0)
       setSessionStats(null)
@@ -127,6 +138,12 @@ export default function FlashcardView({
       setSessionQueue([])
     }
   }, [cards])
+
+  useEffect(() => {
+    if (reviewMode && typeAnswerOpen && !flipped) {
+      typeInputRef.current?.focus()
+    }
+  }, [reviewMode, typeAnswerOpen, flipped, currentIndex])
 
   const currentCard = sessionQueue[currentIndex]
   const isDone = reviewMode && sessionStats !== null
@@ -167,150 +184,187 @@ export default function FlashcardView({
   }
 
   const handleFlip = () => {
-    if (!isReviewing) setFlipped(!flipped)
+    if (!isReviewing) {
+      setFlipped(!flipped)
+    }
   }
 
   const handlePrev = () => {
     if (reviewMode) return
     setFlipped(false)
+    setTypedAnswer('')
     setCurrentIndex((i) => Math.max(0, i - 1))
   }
 
   const handleNext = () => {
     setFlipped(false)
+    setTypedAnswer('')
     setCurrentIndex((i) => Math.min(sessionQueue.length - 1, i + 1))
   }
 
   const handleShuffle = () => {
     setFlipped(false)
+    setTypedAnswer('')
     setCurrentIndex(Math.floor(Math.random() * sessionQueue.length))
   }
 
   const handleReset = () => {
     setFlipped(false)
-    setConfidence(null)
+    setTypedAnswer('')
     setCurrentIndex(0)
     setReviewedCount(0)
   }
 
-  const handleRate = async (quality: number, skipInterceptor = false) => {
-    // The "Why?" Interceptor
-    if (!skipInterceptor && reviewMode && (quality === 4 || quality === 5) && Math.random() < 0.1) {
-      setInterceptorActive(true)
-      setInterceptorQuality(quality)
-      setInterceptorInput('')
-      setInterceptorFeedback(null)
-      return
-    }
-
-    const targetDeckId = currentCard?.deck_id || deckId
-    if (!currentCard || !targetDeckId || isReviewing) return
-    setIsReviewing(true)
-    try {
-      const updatedCardData = (await flashcardsApi.review(
-        targetDeckId,
-        currentCard.id,
-        quality,
-        confidence
-      )) as ReviewCardResponse
-
-      // Let live views (Knowledge Graph heatmap) refresh without a reload
-      useAppStore.getState().bumpSrsVersion()
-
-      // The adaptive engine queued prerequisite cards after this lapse
-      if (updatedCardData?.remediation && updatedCardData.remediation.length > 0) {
-        const names = updatedCardData.remediation
-          .map((r) => r.nodeName)
-          .filter((name): name is string => Boolean(name))
-        useAppStore.getState().addToast({
-          type: 'info',
-          message: `Foundation checkup queued: ${updatedCardData.remediation.length} prerequisite card${updatedCardData.remediation.length === 1 ? '' : 's'}${names.length > 0 ? ` (${[...new Set(names)].join(', ')})` : ''} added to your next session`,
-        })
+  const handleRate = useCallback(
+    async (quality: number, skipInterceptor = false) => {
+      // The "Why?" Interceptor
+      if (!skipInterceptor && reviewMode && (quality === 4 || quality === 5) && Math.random() < 0.1) {
+        setInterceptorActive(true)
+        setInterceptorQuality(quality)
+        setInterceptorInput('')
+        setInterceptorFeedback(null)
+        return
       }
 
-      if (quality === 5 && !skipInterceptor) {
-        useAppStore.getState().triggerAhaMoment()
-      }
+      const targetDeckId = currentCard?.deck_id || deckId
+      if (!currentCard || !targetDeckId || isReviewing) return
+      setIsReviewing(true)
+      try {
+        const updatedCardData = (await flashcardsApi.review(
+          targetDeckId,
+          currentCard.id,
+          quality,
+          'medium',
+        )) as ReviewCardResponse
 
-      const newReviewedCount = reviewedCount + 1
-      setReviewedCount(newReviewedCount)
+        // Let live views (Knowledge Graph heatmap) refresh without a reload
+        useAppStore.getState().bumpSrsVersion()
 
-      ratingsRef.current[quality] = (ratingsRef.current[quality] || 0) + 1
-      if (quality >= 3) correctCountRef.current += 1
-
-      // Show "Review in Guide" link when rated Again and card has source metadata
-      if (quality === 1 && currentCard.source_pillar_id && currentCard.source_topic_id) {
-        const sectionId = currentCard.source_section_id
-        const pillarId = currentCard.source_pillar_id
-        const activePillarSections =
-          sectionsByPillar[pillarId] ||
-          SYSTEM_DESIGN_KIT_SKELETON.pillars.find((p) => p.id === pillarId)?.sections ||
-          []
-        const sectionDef = activePillarSections.find((s) => s.id === sectionId)
-        const sectionName = sectionDef?.name || 'this section'
-        const url = `${prefix}/guide/${currentCard.source_pillar_id}/${currentCard.source_topic_id}${sectionId ? `#blueprint-${sectionId}` : ''}`
-        setGuideLink({ url, sectionName })
-        setTimeout(() => setGuideLink(null), 4000)
-      } else {
-        setGuideLink(null)
-      }
-
-      // Anki dynamic queue re-insertion logic
-      const isStillLearning = updatedCardData.state === 1 || updatedCardData.state === 3
-
-      setFlipped(false)
-      setConfidence(null)
-      const nextIdx = currentIndex + 1
-
-      if (isStillLearning) {
-        setSessionQueue((prev) => {
-          const newQueue = [...prev]
-          const insertPos = Math.min(newQueue.length, currentIndex + 4)
-          newQueue.splice(insertPos, 0, { ...currentCard, ...updatedCardData })
-          return newQueue
-        })
-      }
-
-      // Check if session is finished
-      if (nextIdx >= sessionQueue.length + (isStillLearning ? 1 : 0)) {
-        const finalStats: StudySessionStats = {
-          totalCards: newReviewedCount,
-          correctCards: correctCountRef.current,
-          totalTimeMs: Date.now() - (startTimeRef.current || Date.now()),
-          ratings: { ...ratingsRef.current },
+        // The adaptive engine queued prerequisite cards after this lapse
+        if (updatedCardData?.remediation && updatedCardData.remediation.length > 0) {
+          const names = updatedCardData.remediation
+            .map((r) => r.nodeName)
+            .filter((name): name is string => Boolean(name))
+          useAppStore.getState().addToast({
+            type: 'info',
+            message: `Foundation checkup queued: ${updatedCardData.remediation.length} prerequisite card${updatedCardData.remediation.length === 1 ? '' : 's'}${names.length > 0 ? ` (${[...new Set(names)].join(', ')})` : ''} added to your next session`,
+          })
         }
-        setSessionStats(finalStats)
-        setIsReviewing(false)
-      } else {
-        setTimeout(() => {
-          setCurrentIndex(nextIdx)
-          setIsReviewing(false)
-        }, 150)
-      }
-    } catch (err) {
-      console.error('Review failed:', err)
-      setIsReviewing(false)
-    }
-  }
 
-  // Keyboard Shortcuts listener
+        if (quality === 5 && !skipInterceptor) {
+          useAppStore.getState().triggerAhaMoment()
+        }
+
+        const newReviewedCount = reviewedCount + 1
+        setReviewedCount(newReviewedCount)
+
+        ratingsRef.current[quality] = (ratingsRef.current[quality] || 0) + 1
+        if (quality >= 3) correctCountRef.current += 1
+
+        // Show "Review in Guide" link when rated Again and card has source metadata
+        if (quality === 1 && currentCard.source_pillar_id && currentCard.source_topic_id) {
+          const sectionId = currentCard.source_section_id
+          const pillarId = currentCard.source_pillar_id
+          const activePillarSections =
+            sectionsByPillar[pillarId] ||
+            SYSTEM_DESIGN_KIT_SKELETON.pillars.find((p) => p.id === pillarId)?.sections ||
+            []
+          const sectionDef = activePillarSections.find((s) => s.id === sectionId)
+          const sectionName = sectionDef?.name || 'this section'
+          const url = `${prefix}/guide/${currentCard.source_pillar_id}/${currentCard.source_topic_id}${sectionId ? `#blueprint-${sectionId}` : ''}`
+          setGuideLink({ url, sectionName })
+          setTimeout(() => setGuideLink(null), 4000)
+        } else {
+          setGuideLink(null)
+        }
+
+        // Anki dynamic queue re-insertion logic
+        const isStillLearning = updatedCardData.state === 1 || updatedCardData.state === 3
+
+        setFlipped(false)
+        setTypedAnswer('')
+        const nextIdx = currentIndex + 1
+
+        if (isStillLearning) {
+          setSessionQueue((prev) => {
+            const newQueue = [...prev]
+            const insertPos = Math.min(newQueue.length, currentIndex + 4)
+            newQueue.splice(insertPos, 0, { ...currentCard, ...updatedCardData })
+            return newQueue
+          })
+        }
+
+        // Check if session is finished
+        if (nextIdx >= sessionQueue.length + (isStillLearning ? 1 : 0)) {
+          const finalStats: StudySessionStats = {
+            totalCards: newReviewedCount,
+            correctCards: correctCountRef.current,
+            totalTimeMs: Date.now() - (startTimeRef.current || Date.now()),
+            ratings: { ...ratingsRef.current },
+          }
+          setSessionStats(finalStats)
+          setIsReviewing(false)
+        } else {
+          setTimeout(() => {
+            setCurrentIndex(nextIdx)
+            setIsReviewing(false)
+          }, 150)
+        }
+      } catch (err) {
+        console.error('Review failed:', err)
+        setIsReviewing(false)
+      }
+    },
+    [
+      currentCard,
+      currentIndex,
+      deckId,
+      isReviewing,
+      prefix,
+      reviewMode,
+      reviewedCount,
+      sectionsByPillar,
+      sessionQueue.length,
+    ],
+  )
+
+  // Keyboard Shortcuts listener — Space/Enter ONLY reveals in reviewMode (never auto-grades Good)
   useEffect(() => {
-    if (!reviewMode || isDone || !currentCard || isReviewing) return
+    if (isDone || !currentCard || isReviewing || interceptorActive) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null
-      const tag = target?.tagName ? target.tagName.toLowerCase() : ''
-      if (tag === 'input' || tag === 'textarea' || Boolean(target?.isContentEditable)) return
-
-      if (e.key === ' ' || e.key === 'Enter') {
-        e.preventDefault()
-        if (!flipped) {
-          setConfidence('medium')
-          setFlipped(true)
-        } else {
-          void handleRate(4)
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      const target = e.target
+      if (target instanceof Element) {
+        const tag = target.tagName.toLowerCase()
+        if (
+          tag === 'input' ||
+          tag === 'textarea' ||
+          tag === 'select' ||
+          (target instanceof HTMLElement && target.isContentEditable)
+        ) {
+          return
         }
-      } else if (flipped) {
+      }
+
+      if (e.key === '?' && reviewMode) {
+        e.preventDefault()
+        setShowHotkeysGuide((v) => !v)
+        return
+      }
+
+      if (e.key === ' ' || e.code === 'Space' || (reviewMode && e.key === 'Enter')) {
+        if (target instanceof Element && target.closest('a, button, [role="button"], summary')) {
+          return
+        }
+        if (!flipped) {
+          e.preventDefault()
+          setFlipped(true)
+        } else if (!reviewMode) {
+          e.preventDefault()
+          setFlipped(false)
+        }
+      } else if (reviewMode && flipped) {
         if (e.key === '1') {
           e.preventDefault()
           void handleRate(1)
@@ -329,8 +383,7 @@ export default function FlashcardView({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flipped, currentCard, reviewMode, isReviewing, interceptorActive])
+  }, [flipped, currentCard, reviewMode, isDone, isReviewing, interceptorActive, handleRate])
 
   const submitInterceptor = async () => {
     if (!interceptorInput.trim() || interceptorLoading || interceptorQuality === null) return
@@ -351,7 +404,7 @@ export default function FlashcardView({
       } else {
         setInterceptorFeedback(
           evaluation.feedback ||
-            'Your explanation was incorrect or incomplete. Please review the material.'
+            'Your explanation was incorrect or incomplete. Please review the material.',
         )
       }
     } catch (err) {
@@ -372,9 +425,14 @@ export default function FlashcardView({
   if (sessionQueue.length === 0) {
     return (
       <div className="flashcard-viewer">
-        <div style={{ textAlign: 'center' }}>
-          <p style={{ color: 'var(--color-text-tertiary)', marginBottom: 'var(--space-4)' }}>
-            {reviewMode ? 'No cards due for review! 🎉' : 'No cards in this deck yet.'}
+        <div className="text-center space-y-4">
+          {reviewMode && (
+            <div className="flex justify-center">
+              <KitAvatar size={32} state="done" />
+            </div>
+          )}
+          <p className="text-sm text-on-surface-variant">
+            {reviewMode ? 'No cards due for review.' : 'No cards in this deck yet.'}
           </p>
           <button className="btn btn-secondary" onClick={onBack}>
             <ArrowLeft size={14} />
@@ -400,7 +458,7 @@ export default function FlashcardView({
             correctCountRef.current = 0
             setSessionStats(null)
             setFlipped(false)
-            setConfidence(null)
+            setTypedAnswer('')
           }}
         />
       </div>
@@ -408,13 +466,6 @@ export default function FlashcardView({
   }
 
   const previews = currentCard?.srs_previews || { again: '1m', hard: '5m', good: '10m', easy: '4d' }
-
-  const QUALITY_BUTTONS = [
-    { quality: 1, label: 'Again', color: '#ef4444', desc: previews.again },
-    { quality: 3, label: 'Hard', color: '#f59e0b', desc: previews.hard },
-    { quality: 4, label: 'Good', color: '#34d399', desc: previews.good },
-    { quality: 5, label: 'Easy', color: '#818cf8', desc: previews.easy },
-  ]
 
   const canvasCapability = capabilities?.canvas ?? 'architecture'
   const canvasRoute = `${prefix}/${canvasCapability === 'concept' ? 'canvas' : 'builder'}`
@@ -427,32 +478,33 @@ export default function FlashcardView({
   return (
     <div className="flashcard-viewer" id="flashcard-viewer">
       {/* Header */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        width: '100%',
-        maxWidth: 560,
-        marginBottom: 'var(--space-6)',
-      }}>
+      <div className="flex items-center justify-between w-full max-w-xl mb-6">
         <button className="btn btn-ghost btn-sm" onClick={onBack}>
           <ArrowLeft size={14} />
           {deckName}
         </button>
-        <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
-          {reviewMode && (
+        <div className="flex items-center gap-2">
+          {reviewMode ? (
             <>
-              <span style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-accent)',
-                fontWeight: 600,
-                padding: '2px 8px',
-                background: 'var(--color-accent-subtle)',
-                borderRadius: 'var(--radius-full)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-              }}>
+              <button
+                type="button"
+                aria-pressed={typeAnswerOpen}
+                onClick={() => {
+                  setTypeAnswerOpen((v) => {
+                    if (v) setTypedAnswer('')
+                    return !v
+                  })
+                }}
+                className={`btn btn-sm ${
+                  typeAnswerOpen
+                    ? 'bg-primary/15 text-on-primary-wash border-primary/35'
+                    : 'btn-ghost'
+                }`}
+              >
+                <PenLine size={12} />
+                Type answer
+              </button>
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-primary/12 text-on-primary-wash border border-primary/30 inline-flex items-center gap-1">
                 <Clock size={12} />
                 SRS Review
               </span>
@@ -460,18 +512,17 @@ export default function FlashcardView({
                 className={`btn btn-icon btn-sm ${showHotkeysGuide ? 'btn-primary' : 'btn-ghost'}`}
                 onClick={() => setShowHotkeysGuide(!showHotkeysGuide)}
                 title="Keyboard Shortcuts"
-                style={{ width: 28, height: 28 }}
+                aria-label="Keyboard Shortcuts"
               >
                 <Keyboard size={14} />
               </button>
             </>
-          )}
-          {!reviewMode && (
+          ) : (
             <>
-              <button className="btn btn-ghost btn-icon" onClick={handleShuffle} title="Shuffle">
+              <button className="btn btn-ghost btn-icon" onClick={handleShuffle} title="Shuffle" aria-label="Shuffle">
                 <Shuffle size={16} />
               </button>
-              <button className="btn btn-ghost btn-icon" onClick={handleReset} title="Reset">
+              <button className="btn btn-ghost btn-icon" onClick={handleReset} title="Reset" aria-label="Reset">
                 <RotateCcw size={16} />
               </button>
             </>
@@ -481,13 +532,16 @@ export default function FlashcardView({
 
       {/* Foundational checkup banner */}
       {reviewMode && currentCard?.is_remediation === 1 && (
-        <div className="remediation-banner" id="remediation-banner">
-          <Wrench size={13} />
-          <span className="remediation-banner-title">
+        <div
+          className="w-full max-w-xl mb-4 rounded-xl border border-warning/35 bg-warning/10 p-3 text-xs text-on-surface flex items-center gap-2"
+          id="remediation-banner"
+        >
+          <Wrench size={13} className="text-warning shrink-0" />
+          <span className="font-semibold">
             Foundation Checkup{currentCard.remediation_node ? ` · ${currentCard.remediation_node}` : ''}
           </span>
           {currentCard.remediation_reason && (
-            <span className="remediation-banner-reason">{currentCard.remediation_reason}</span>
+            <span className="text-on-surface-variant">{currentCard.remediation_reason}</span>
           )}
         </div>
       )}
@@ -501,11 +555,11 @@ export default function FlashcardView({
         onTouchEnd={handleTouchEnd}
       >
         <div className="flashcard-inner">
-          <div className="flashcard-face flashcard-front">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-              <span className="flashcard-label">Question</span>
+          <div className="flashcard-face flashcard-front notebook-sheet">
+            <div className="flex justify-between items-center w-full">
+              <span className="flashcard-label">Prompt</span>
               {currentCard?.deckName && (
-                <span style={{ fontSize: '10px', padding: '2px 8px', background: 'var(--color-bg-tertiary)', borderRadius: '12px', color: 'var(--color-text-secondary)', fontWeight: 600 }}>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-surface-container-high border border-outline-variant text-on-surface-variant font-medium">
                   {currentCard.deckName}
                 </span>
               )}
@@ -515,125 +569,95 @@ export default function FlashcardView({
               className="flashcard-markdown"
               paragraphClassName="flashcard-text"
             />
-            <span
-              style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-disabled)',
-                marginTop: 'var(--space-6)',
-              }}
-            >
-              Click to reveal answer
+            <span className="text-xs text-on-surface-variant mt-6">
+              Click or press Space to reveal
             </span>
           </div>
-          <div className="flashcard-face flashcard-back">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <div className="flashcard-face flashcard-back notebook-sheet">
+            <div className="flex justify-between items-center w-full">
               <span className="flashcard-label">Answer</span>
               {currentCard?.deckName && (
-                <span style={{ fontSize: '10px', padding: '2px 8px', background: 'var(--color-bg-tertiary)', borderRadius: '12px', color: 'var(--color-text-secondary)', fontWeight: 600 }}>
+                <span className="text-xs px-2 py-0.5 rounded-full bg-surface-container-high border border-outline-variant text-on-surface-variant font-medium">
                   {currentCard.deckName}
                 </span>
               )}
             </div>
+            {reviewMode && typedAnswer.trim() && (
+              <div className="w-full rounded-xl border border-outline-variant bg-surface-container-low px-3 py-2 text-xs text-on-surface-variant text-left mb-3">
+                <span className="font-semibold text-on-surface">Your recall:</span>{' '}
+                {typedAnswer.trim()}
+              </div>
+            )}
             <MarkdownRenderer
               content={currentCard?.back}
               className="flashcard-markdown"
               paragraphClassName="flashcard-text"
             />
             {(currentCard?.interval ?? 0) > 0 && (
-              <span style={{
-                fontSize: 'var(--text-xs)',
-                color: 'var(--color-text-disabled)',
-                marginTop: 'var(--space-3)',
-              }}>
-                Current interval: {currentCard?.interval}d (Ease: {Math.round(((currentCard?.ease_factor || 2.5) * 100))}%)
+              <span className="text-xs font-mono tabular-nums text-on-surface-variant mt-3">
+                Interval: {currentCard?.interval}d · Ease{' '}
+                {Math.round((currentCard?.ease_factor || 2.5) * 100)}%
               </span>
             )}
           </div>
         </div>
-        {reviewMode && !flipped ? (
-          <div style={{ marginTop: 'var(--space-4)', display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', width: '100%' }}>
-            <p style={{ textAlign: 'center', fontSize: 'var(--text-sm)', color: 'var(--color-text-tertiary)', fontWeight: 500 }}>
-              How confident are you in your answer?
-            </p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--space-2)' }}>
-              <button
-                className="btn btn-outline"
-                onClick={(e) => { e.stopPropagation(); setConfidence('low'); setFlipped(true) }}
-                style={{ padding: 'var(--space-3)', minHeight: 44 }}
-              >
-                Low
-              </button>
-              <button
-                className="btn btn-outline"
-                onClick={(e) => { e.stopPropagation(); setConfidence('medium'); setFlipped(true) }}
-                style={{ padding: 'var(--space-3)', borderColor: 'var(--color-border)', minHeight: 44 }}
-              >
-                Medium
-              </button>
-              <button
-                className="btn btn-outline"
-                onClick={(e) => { e.stopPropagation(); setConfidence('high'); setFlipped(true) }}
-                style={{ padding: 'var(--space-3)', borderColor: 'var(--color-accent)', color: 'var(--color-accent)', minHeight: 44 }}
-              >
-                High
-              </button>
-            </div>
+
+        {reviewMode && typeAnswerOpen && !flipped && (
+          <div className="mt-3 w-full" onClick={(e) => e.stopPropagation()}>
+            <textarea
+              ref={typeInputRef}
+              aria-label="Jot your recall before flipping"
+              rows={2}
+              value={typedAnswer}
+              onChange={(e) => setTypedAnswer(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey || !e.shiftKey)) {
+                  e.preventDefault()
+                  setFlipped(true)
+                }
+              }}
+              placeholder="Jot your recall before flipping (Enter to reveal)..."
+              className="input w-full text-sm resize-none"
+            />
           </div>
-        ) : !reviewMode && !flipped ? (
-          <div style={{ marginTop: 'var(--space-4)', display: 'flex', justifyContent: 'center', width: '100%' }}>
+        )}
+
+        {!flipped && (
+          <div className="mt-4 flex justify-center w-full">
             <button
-              className="btn btn-outline"
-              onClick={(e) => { e.stopPropagation(); setFlipped(true) }}
-              style={{ minHeight: 44, padding: 'var(--space-3) var(--space-6)' }}
+              type="button"
+              className={reviewMode ? 'btn btn-primary px-6 py-2.5' : 'btn btn-outline px-6 py-2.5'}
+              onClick={(e) => {
+                e.stopPropagation()
+                setFlipped(true)
+              }}
             >
-              Show Answer
+              <span>{reviewMode ? 'Reveal Answer' : 'Show Answer'}</span>
+              <Kbd>Space</Kbd>
             </button>
           </div>
-        ) : null}
+        )}
       </div>
 
       {/* Anki-style Counts Badge Panel */}
       {reviewMode && (
-        <div style={{
-          display: 'flex',
-          justifyContent: 'center',
-          gap: 'var(--space-3)',
-          marginBottom: 'var(--space-4)',
-          marginTop: 'var(--space-4)',
-          width: '100%',
-          maxWidth: 560,
-        }}>
-          <span style={{
-            fontSize: 'var(--text-xs)',
-            fontWeight: 700,
-            padding: '2px 10px',
-            borderRadius: 'var(--radius-md)',
-            background: 'rgba(96, 165, 250, 0.15)',
-            color: 'var(--color-info)',
-            border: '1px solid rgba(96, 165, 250, 0.3)',
-          }} title="New cards left">
+        <div className="flex justify-center gap-2.5 my-4 w-full max-w-xl font-mono text-xs tabular-nums">
+          <span
+            className="px-2.5 py-0.5 rounded-md border border-outline-variant bg-surface-container-low text-on-surface-variant"
+            title="New cards left"
+          >
             {newCount} New
           </span>
-          <span style={{
-            fontSize: 'var(--text-xs)',
-            fontWeight: 700,
-            padding: '2px 10px',
-            borderRadius: 'var(--radius-md)',
-            background: 'rgba(251, 191, 36, 0.15)',
-            color: 'var(--color-warning)',
-            border: '1px solid rgba(251, 191, 36, 0.3)',
-          }} title="Learning/relearning cards left">
+          <span
+            className="px-2.5 py-0.5 rounded-md border border-outline-variant bg-surface-container-low text-warning"
+            title="Learning/relearning cards left"
+          >
             {learnCount} Learn
           </span>
-          <span style={{
-            fontSize: 'var(--text-xs)',
-            fontWeight: 700,
-            padding: '2px 10px',
-            borderRadius: 'var(--radius-md)',
-            background: 'rgba(52, 211, 153, 0.15)',
-            color: 'var(--color-success)',
-            border: '1px solid rgba(52, 211, 153, 0.3)',
-          }} title="Due review cards left">
+          <span
+            className="px-2.5 py-0.5 rounded-md border border-outline-variant bg-surface-container-low text-success"
+            title="Due review cards left"
+          >
             {dueCount} Due
           </span>
         </div>
@@ -641,112 +665,41 @@ export default function FlashcardView({
 
       {/* Keyboard Shortcuts Guide Overlay */}
       {reviewMode && showHotkeysGuide && !interceptorActive && (
-        <div style={{
-          background: 'var(--color-bg-secondary)',
-          borderRadius: 'var(--radius-md)',
-          padding: 'var(--space-3) var(--space-4)',
-          border: '1px solid var(--color-border)',
-          width: '100%',
-          maxWidth: 560,
-          marginTop: 'var(--space-3)',
-          fontSize: 'var(--text-xs)',
-          color: 'var(--color-text-secondary)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 4,
-        }}>
-          <div><strong>Keyboard Shortcuts:</strong></div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, opacity: 0.85 }}>
-            <div><kbd style={{ background: 'var(--color-bg-tertiary)', padding: '2px 6px', borderRadius: 3, border: '1px solid var(--color-border)' }}>Space</kbd> / <kbd style={{ background: 'var(--color-bg-tertiary)', padding: '2px 6px', borderRadius: 3, border: '1px solid var(--color-border)' }}>Enter</kbd> : Flip or rate Good</div>
-            <div><kbd style={{ background: 'var(--color-bg-tertiary)', padding: '2px 6px', borderRadius: 3, border: '1px solid var(--color-border)' }}>1</kbd> : Rate Again (1m)</div>
-            <div><kbd style={{ background: 'var(--color-bg-tertiary)', padding: '2px 6px', borderRadius: 3, border: '1px solid var(--color-border)' }}>2</kbd> : Rate Hard (5m)</div>
-            <div><kbd style={{ background: 'var(--color-bg-tertiary)', padding: '2px 6px', borderRadius: 3, border: '1px solid var(--color-border)' }}>3</kbd> : Rate Good (10m)</div>
-            <div><kbd style={{ background: 'var(--color-bg-tertiary)', padding: '2px 6px', borderRadius: 3, border: '1px solid var(--color-border)' }}>4</kbd> : Rate Easy (4d)</div>
-          </div>
+        <div className="w-full max-w-xl mt-3 rounded-xl border border-outline-variant bg-surface-container-low p-3 text-xs text-on-surface-variant flex flex-wrap gap-x-4 gap-y-1.5 items-center">
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>Space</Kbd> Reveal answer
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>1</Kbd> Again
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>2</Kbd> Hard
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>3</Kbd> Good
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <Kbd>4</Kbd> Easy
+          </span>
         </div>
       )}
 
-      {/* SRS Buttons */}
+      {/* Shared Pure Anki Grade Bar */}
       {!interceptorActive && reviewMode && flipped && (
-        <div className="srs-rating-buttons" style={{
-          display: 'flex',
-          gap: 'var(--space-2)',
-          marginTop: 'var(--space-4)',
-          width: '100%',
-          maxWidth: 560,
-        }}>
-          {QUALITY_BUTTONS.map((btn) => (
-            <button
-              key={btn.quality}
-              className="srs-rating-btn"
-              onClick={(e) => {
-                e.stopPropagation()
-                void handleRate(btn.quality)
-              }}
-              disabled={isReviewing}
-              style={{
-                flex: 1,
-                padding: 'var(--space-3) var(--space-2)',
-                borderRadius: 'var(--radius-md)',
-                border: `1px solid ${btn.color}40`,
-                background: `${btn.color}10`,
-                color: btn.color,
-                cursor: isReviewing ? 'wait' : 'pointer',
-                transition: 'all var(--duration-fast)',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 2,
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = `${btn.color}25`
-                e.currentTarget.style.borderColor = btn.color
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = `${btn.color}10`
-                e.currentTarget.style.borderColor = `${btn.color}40`
-              }}
-            >
-              <span style={{ fontWeight: 700, fontSize: 'var(--text-sm)' }}>{btn.label}</span>
-              <span style={{ fontSize: '10px', opacity: 0.7 }}>{btn.desc}</span>
-            </button>
-          ))}
-        </div>
+        <AnkiGradeBar
+          intervals={previews}
+          disabled={isReviewing}
+          onRate={(grade) => void handleRate(GRADE_TO_QUALITY[grade])}
+          className="mt-4 w-full max-w-xl"
+        />
       )}
 
       {/* Review in Guide link — appears after rating "Again" on cards with source metadata */}
       {guideLink && reviewMode && (
-        <div style={{
-          width: '100%',
-          maxWidth: 560,
-          marginTop: 'var(--space-3)',
-          animation: 'fadeIn var(--duration-normal) ease-out',
-        }}>
+        <div className="w-full max-w-xl mt-3">
           <Link
             to={guideLink.url}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 'var(--space-2)',
-              padding: 'var(--space-2) var(--space-4)',
-              borderRadius: 'var(--radius-md)',
-              background: 'rgba(96, 165, 250, 0.08)',
-              border: '1px solid rgba(96, 165, 250, 0.2)',
-              color: 'var(--color-info)',
-              fontSize: 'var(--text-xs)',
-              fontWeight: 600,
-              textDecoration: 'none',
-              transition: 'all 0.2s ease',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(96, 165, 250, 0.15)'
-              e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.4)'
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(96, 165, 250, 0.08)'
-              e.currentTarget.style.borderColor = 'rgba(96, 165, 250, 0.2)'
-            }}
+            className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-outline-variant bg-surface-container-low hover:bg-surface-container text-xs font-semibold text-on-surface transition"
           >
             <BookOpen size={13} />
             Review: {guideLink.sectionName}
@@ -789,23 +742,12 @@ export default function FlashcardView({
       )}
 
       {/* Cross-tool learning loop bar */}
-      <div
-        className="flashcard-cross-tool-bar"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 'var(--space-2)',
-          marginTop: 'var(--space-4)',
-          flexWrap: 'wrap',
-        }}
-      >
+      <div className="flashcard-cross-tool-bar flex items-center justify-center gap-2 mt-4 flex-wrap">
         {currentCard?.source_pillar_id && currentCard?.source_topic_id ? (
           <Link
             to={`${prefix}/guide/${currentCard.source_pillar_id}/${currentCard.source_topic_id}`}
-            className="btn btn-ghost btn-xs"
+            className="btn btn-ghost btn-sm"
             title="Open related guide topic blueprint and deep dive"
-            style={{ fontSize: '11px', gap: 4, color: 'var(--color-text-secondary)' }}
           >
             <BookOpen size={12} /> Guide Note
           </Link>
@@ -813,23 +755,22 @@ export default function FlashcardView({
         {canvasCapability !== 'none' && (
           <Link
             to={canvasRoute}
-            className="btn btn-ghost btn-xs"
+            className="btn btn-ghost btn-sm"
             title={`Open ${canvasLabel}`}
-            style={{ fontSize: '11px', gap: 4, color: 'var(--color-text-secondary)' }}
           >
             <Layers size={12} /> {canvasLabel}
           </Link>
         )}
         <button
-          className="btn btn-ghost btn-xs"
-          title="Ask AI tutor for deep explanation & tradeoffs"
-          style={{ fontSize: '11px', gap: 4, color: 'var(--color-text-secondary)' }}
+          type="button"
+          className="btn btn-ghost btn-sm"
+          title="Ask Kit for deep explanation & tradeoffs"
           onClick={() => {
             const chatRoute = `${prefix}/chat`
             try {
               sessionStorage.setItem(
                 'toolbox_chat_draft',
-                `Explain this ${domainLabel} concept and its key tradeoffs:\n\n**${currentCard?.front || ''}**\n\n${currentCard?.back || ''}`
+                `Explain this ${domainLabel} concept and its key tradeoffs:\n\n**${currentCard?.front || ''}**\n\n${currentCard?.back || ''}`,
               )
               window.dispatchEvent(new CustomEvent('toolbox-chat-draft'))
               navigate(chatRoute)
@@ -838,105 +779,59 @@ export default function FlashcardView({
             }
           }}
         >
-          <MessageSquare size={12} /> Ask AI Tutor
+          <MessageSquare size={12} /> Ask Kit
         </button>
       </div>
 
       {/* Elaborative Interrogation Modal Overlay */}
       {interceptorActive && (
-        <div style={{
-          position: 'fixed',
-          top: 0, left: 0, right: 0, bottom: 0,
-          background: 'rgba(0, 0, 0, 0.4)',
-          backdropFilter: 'blur(8px)',
-          WebkitBackdropFilter: 'blur(8px)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 9999,
-          padding: 'var(--space-4)',
-          animation: 'fadeIn var(--duration-normal) ease-out',
-        }}>
-          <div style={{
-            background: 'var(--color-bg)',
-            border: '1px solid var(--color-border)',
-            borderRadius: 'var(--radius-xl)',
-            padding: 'var(--space-6)',
-            width: '100%',
-            maxWidth: 500,
-            boxShadow: 'var(--shadow-xl)',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--space-4)',
-            animation: 'slideUp var(--duration-normal) ease-out',
-          }}>
-            <div style={{ textAlign: 'center' }}>
-              <h2 style={{ fontSize: 'var(--text-lg)', fontWeight: 800, color: 'var(--color-accent)', marginBottom: 'var(--space-2)' }}>
-                Hold on... Why is this true?
+        <div className="modal-overlay">
+          <div className="rounded-2xl border border-outline-variant bg-surface-container-low p-6 w-full max-w-lg shadow-xl space-y-4">
+            <div className="text-center space-y-1.5">
+              <h2 className="font-serif text-xl font-normal text-on-surface">
+                Hold on — why does this hold?
               </h2>
-              <p style={{ color: 'var(--color-text-secondary)', fontSize: 'var(--text-sm)', lineHeight: 1.5 }}>
-                You rated this as <strong>{interceptorQuality === 5 ? 'Easy' : 'Good'}</strong>, but true mastery requires deep understanding. Explain the underlying concept to proceed.
+              <p className="text-sm text-on-surface-variant">
+                You rated this <strong>{interceptorQuality === 5 ? 'Easy' : 'Good'}</strong>. State the underlying mechanism in one or two sentences.
               </p>
             </div>
 
             {interceptorFeedback ? (
-              <div style={{
-                background: 'var(--color-error-subtle)',
-                color: 'var(--color-error)',
-                padding: 'var(--space-4)',
-                borderRadius: 'var(--radius-md)',
-                fontSize: 'var(--text-sm)',
-                lineHeight: 1.6,
-                border: '1px solid rgba(239, 68, 68, 0.3)',
-              }}>
-                <div style={{ fontWeight: 700, marginBottom: 'var(--space-2)' }}>Feedback:</div>
-                {interceptorFeedback}
-                <div style={{ marginTop: 'var(--space-4)' }}>
-                  <button
-                    className="btn btn-primary"
-                    style={{ width: '100%', background: 'var(--color-error)', color: 'white', borderColor: 'var(--color-error)' }}
-                    onClick={handleFailAcknowledge}
-                  >
-                    Accept Penalty (Rate Again)
-                  </button>
+              <div className="rounded-xl border border-error/35 bg-error/10 p-4 text-sm text-error space-y-3">
+                <div>
+                  <strong className="block mb-1">Feedback</strong>
+                  <span className="text-on-surface">{interceptorFeedback}</span>
                 </div>
+                <button
+                  type="button"
+                  className="btn btn-primary w-full"
+                  onClick={handleFailAcknowledge}
+                >
+                  Accept &amp; Rate Again
+                </button>
               </div>
             ) : (
               <>
                 <textarea
-                  className="input"
-                  style={{ minHeight: 120, fontSize: 'var(--text-md)', resize: 'none' }}
-                  placeholder="Type your explanation here..."
+                  aria-label="Explain the underlying concept"
+                  className="input min-h-28 text-sm resize-none"
+                  placeholder="Type your explanation here…"
                   value={interceptorInput}
                   onChange={(e) => setInterceptorInput(e.target.value)}
                   autoFocus
                   disabled={interceptorLoading}
                 />
                 <button
-                  className="btn btn-primary"
-                  style={{
-                    height: 48,
-                    fontSize: 'var(--text-md)',
-                    opacity: !interceptorInput.trim() || interceptorLoading ? 0.6 : 1,
-                  }}
+                  type="button"
+                  className="btn btn-primary w-full py-2.5"
                   onClick={() => void submitInterceptor()}
                   disabled={!interceptorInput.trim() || interceptorLoading}
                 >
                   {interceptorLoading ? (
-                    <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span
-                        className="spinner"
-                        style={{
-                          width: 16,
-                          height: 16,
-                          border: '2px solid rgba(255,255,255,0.3)',
-                          borderTopColor: 'white',
-                          borderRadius: '50%',
-                          animation: 'spin 1s linear infinite',
-                        }}
-                      />
-                      Evaluating...
-                    </span>
+                    <>
+                      <Loader2 size={15} className="animate-spin" />
+                      Evaluating…
+                    </>
                   ) : (
                     'Submit Explanation'
                   )}

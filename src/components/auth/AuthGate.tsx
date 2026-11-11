@@ -11,7 +11,8 @@ import {
   startAuthentication,
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
-import { KeyRound, Layers, LogIn, ShieldCheck, UserPlus } from "lucide-react";
+import { KeyRound, LogIn, ShieldCheck, UserPlus } from "lucide-react";
+import { KitLogo } from "../ui/KitLogo";
 import {
   authApi,
   type AuthStatusResponse,
@@ -301,15 +302,20 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     <AuthContext.Provider value={ctxValue}>
       <main className="min-h-dvh w-full overflow-y-auto flex items-center justify-center p-6 bg-surface text-on-surface">
         <div className="w-full max-w-md rounded-2xl bg-surface-container p-7 border border-outline-variant shadow-lg">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-9 h-9 rounded-lg bg-primary/15 text-on-primary-wash flex items-center justify-center">
-              <Layers size={18} />
+          <div className="flex items-center gap-3.5 mb-6">
+            <div className="w-11 h-11 rounded-xl border border-outline-variant bg-surface-container-high text-on-surface flex items-center justify-center shrink-0">
+              <KitLogo size={26} ariaHidden />
             </div>
-            <div>
-              <h1 className="text-lg font-semibold leading-tight text-on-surface">
-                {instanceLabel}
-              </h1>
-              <p className="text-xs text-on-surface-variant">
+            <div className="min-w-0">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <h1 className="text-xl font-serif font-semibold leading-tight text-on-surface">
+                  {instanceLabel}
+                </h1>
+                <span className="text-[11px] font-medium uppercase tracking-wider text-on-surface-variant">
+                  Tools for Thought
+                </span>
+              </div>
+              <p className="text-xs text-on-surface-variant mt-0.5">
                 {screen === "setup" && "Create Administrator Account"}
                 {screen === "signin" && "Sign in to your study workspace"}
                 {screen === "register" && "Create a new learner account"}

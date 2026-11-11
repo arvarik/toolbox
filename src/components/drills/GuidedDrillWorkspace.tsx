@@ -25,7 +25,8 @@ const MIN_ATTEMPT_CHARS = 30;
 const DIFFICULTY_META: Record<1 | 2 | 3, { label: string; badge: string }> = {
   1: {
     label: "Level 1 · Foundational",
-    badge: "bg-info/10 text-info border-info/30",
+    badge:
+      "bg-surface-container-high text-on-surface-variant border-outline-variant",
   },
   2: {
     label: "Level 2 · Multi-Constraint",
@@ -166,22 +167,25 @@ export default function GuidedDrillWorkspace({
       className="space-y-5"
     >
       {/* Drill Scenario Card */}
-      <section className="rounded-2xl border border-outline-variant bg-surface-container-low p-5 space-y-4">
+      <section className="notebook-sheet rounded-2xl p-5 sm:p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <span
-              className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${diffMeta.badge}`}
+              className={`px-2.5 py-0.5 rounded-full text-xs font-semibold tabular-nums border ${diffMeta.badge}`}
             >
               {diffMeta.label}
             </span>
-            <span className="text-xs font-semibold text-on-surface-variant">
-              Concept: <strong className="text-on-surface">{drill.nodeName}</strong>
+            <span className="text-xs font-medium text-on-surface-variant">
+              Concept:{" "}
+              <strong className="font-serif text-sm font-medium text-on-surface">
+                {drill.nodeName}
+              </strong>
             </span>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
             {drill.mastered && (
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-success/15 text-success border border-success/30 inline-flex items-center gap-1">
+              <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-success/10 text-success border border-success/30 inline-flex items-center gap-1">
                 <CheckCircle2 size={12} />
                 Mastered
               </span>
@@ -189,7 +193,7 @@ export default function GuidedDrillWorkspace({
             {isAssistedLive && (
               <span
                 data-testid="live-assisted-pill"
-                className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-warning/15 text-warning border border-warning/35 inline-flex items-center gap-1"
+                className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-warning/10 text-warning border border-warning/35 inline-flex items-center gap-1"
               >
                 <AlertTriangle size={12} />
                 Assisted Mode
@@ -209,16 +213,16 @@ export default function GuidedDrillWorkspace({
         <div className="pt-3 border-t border-outline-variant space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="text-xs font-bold uppercase tracking-wide text-on-surface-variant flex items-center gap-1.5">
-              <Lightbulb size={14} className="text-warning" />
-              Progressive Scaffolding Hints
+              <Lightbulb size={14} className="text-on-primary-wash" />
+              Progressive Hints
             </div>
             {!hint1Unlocked && hintsUsed === 0 && (
               <span
                 data-testid="hint-1-gate-reason"
-                className="text-[11px] text-on-surface-variant"
+                className="font-mono text-[11px] text-on-surface-variant tabular-nums"
               >
-                Unlocks after {MIN_ATTEMPT_CHARS - nonWhitespaceChars} more
-                non-space chars or {secondsLeft}s read time
+                Unlocks in {MIN_ATTEMPT_CHARS - nonWhitespaceChars} chars or{" "}
+                {secondsLeft}s
               </span>
             )}
           </div>
@@ -230,7 +234,7 @@ export default function GuidedDrillWorkspace({
               data-testid="reveal-hint-1-btn"
               disabled={!hint1Unlocked && hintsUsed < 1}
               onClick={() => handleRevealHint(1)}
-              className={`btn btn-sm ${
+              className={`btn btn-sm tabular-nums ${
                 hintsUsed >= 1 ? "btn-primary" : "btn-secondary"
               }`}
             >
@@ -242,7 +246,7 @@ export default function GuidedDrillWorkspace({
               {hintsUsed >= 1
                 ? "Hint 1: Nudge ✓"
                 : !hint1Unlocked
-                  ? `Hint 1: Nudge (${secondsLeft}s / ${nonWhitespaceChars}/${MIN_ATTEMPT_CHARS} chars)`
+                  ? `Hint 1: Nudge (${secondsLeft}s · ${nonWhitespaceChars}/${MIN_ATTEMPT_CHARS})`
                   : "Reveal Hint 1 (Nudge)"}
             </button>
 
@@ -252,7 +256,7 @@ export default function GuidedDrillWorkspace({
               data-testid="reveal-hint-2-btn"
               disabled={hintsUsed < 1}
               onClick={() => handleRevealHint(2)}
-              className={`btn btn-sm ${
+              className={`btn btn-sm tabular-nums ${
                 hintsUsed >= 2 ? "btn-primary" : "btn-secondary"
               }`}
               title="Using Hint 2 caps your maximum score at 80%"
@@ -370,7 +374,7 @@ export default function GuidedDrillWorkspace({
           >
             Solution Scratchpad
           </label>
-          <span className="text-[11px] text-on-surface-variant font-mono">
+          <span className="text-[11px] text-on-surface-variant font-mono tabular-nums">
             {nonWhitespaceChars} non-space chars
           </span>
         </div>

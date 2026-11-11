@@ -9,6 +9,7 @@ import {
   Target,
 } from "lucide-react";
 import GuidedDrillWorkspace from "../components/drills/GuidedDrillWorkspace.tsx";
+import { HelpHint, KitAvatar } from "../components/ui";
 import useAppStore from "../stores/appStore";
 import { useActiveKit, useKitRoutePrefix } from "../stores/useKitStore.ts";
 import { drillsApi, type DrillItem } from "../utils/pedagogyApi.ts";
@@ -144,13 +145,19 @@ export default function DrillsPage() {
               Back to {skeleton.identity.name} Path
             </Link>
           )}
-          <h1 className="text-2xl font-bold text-on-surface tracking-tight flex items-center gap-2.5">
-            <Target size={24} className="text-primary" />
-            Guided Scenario Drills
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-serif text-2xl sm:text-3xl font-normal text-on-surface tracking-tight flex items-center gap-2.5">
+              <Target size={22} className="text-on-surface-variant shrink-0" />
+              Guided Scenario Drills
+            </h1>
+            <HelpHint
+              align="left"
+              text="Unassisted rubric passes automatically credit prerequisite flashcards via FIRe."
+            />
+          </div>
           <p className="text-sm text-on-surface-variant">
-            Attempt-gated progressive hints and falsification-first rubric
-            grading with upward FIRe prerequisite credit.
+            Active-recall scenarios with attempt-gated hints and falsification
+            rubric grading.
           </p>
         </div>
 
@@ -178,7 +185,7 @@ export default function DrillsPage() {
             onChange={(e) =>
               setGenDifficulty(Number(e.target.value) as 1 | 2 | 3)
             }
-            className="rounded-lg border border-outline-variant bg-surface-container text-on-surface text-xs px-2.5 py-2"
+            className="rounded-lg border border-outline-variant bg-surface-container text-on-surface text-xs px-2.5 py-2 tabular-nums"
           >
             <option value={1}>Difficulty 1 · Foundational</option>
             <option value={2}>Difficulty 2 · Multi-Constraint</option>
@@ -242,10 +249,10 @@ export default function DrillsPage() {
               key={item.val}
               type="button"
               onClick={() => setDifficultyFilter(item.val)}
-              className={`px-2.5 py-1 rounded-lg text-xs font-semibold cursor-pointer ${
+              className={`px-2.5 py-1 rounded-lg text-xs font-semibold border cursor-pointer tabular-nums ${
                 difficultyFilter === item.val
-                  ? "bg-primary text-on-primary"
-                  : "bg-surface-container text-on-surface-variant hover:text-on-surface"
+                  ? "bg-surface-container-high text-on-surface border-outline"
+                  : "bg-surface-container text-on-surface-variant border-outline-variant hover:text-on-surface"
               }`}
             >
               {item.label}
@@ -262,15 +269,15 @@ export default function DrillsPage() {
         </div>
       ) : filteredDrills.length === 0 ? (
         <div className="rounded-2xl border border-outline-variant bg-surface-container-low p-10 text-center space-y-4 max-w-xl mx-auto">
-          <div className="w-12 h-12 rounded-2xl bg-primary/12 text-on-primary-wash flex items-center justify-center mx-auto">
-            <Sparkles size={22} />
+          <div className="flex justify-center">
+            <KitAvatar size={32} state="idle" />
           </div>
-          <h2 className="text-lg font-semibold text-on-surface">
+          <h2 className="font-serif text-xl font-normal text-on-surface">
             No Drills Yet for This Selection
           </h2>
           <p className="text-xs text-on-surface-variant">
-            Generate a grounded active-recall scenario problem tailored to your
-            Study Kit and committed Guide notes.
+            Generate a grounded active-recall scenario tailored to your Study
+            Kit and notes.
           </p>
           <button
             type="button"
@@ -300,22 +307,22 @@ export default function DrillsPage() {
                   onClick={() => setSelectedDrillId(d.id)}
                   className={`w-full text-left rounded-2xl border p-3.5 transition cursor-pointer space-y-1.5 ${
                     isSelected
-                      ? "border-primary bg-primary/10"
+                      ? "border-outline bg-surface-container-high"
                       : "border-outline-variant bg-surface-container-low hover:bg-surface-container"
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-bold text-on-surface truncate">
+                    <span className="font-serif text-sm font-medium text-on-surface truncate">
                       {d.nodeName}
                     </span>
-                    <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-surface-container-high border border-outline-variant text-on-surface-variant shrink-0">
+                    <span className="font-mono text-[11px] font-semibold tabular-nums px-2 py-0.5 rounded-full bg-surface-container border border-outline-variant text-on-surface-variant shrink-0">
                       L{d.difficulty}
                     </span>
                   </div>
                   <p className="text-xs text-on-surface-variant line-clamp-2">
                     {d.prompt}
                   </p>
-                  <div className="flex items-center justify-between text-[11px] text-on-surface-variant pt-1">
+                  <div className="flex items-center justify-between text-[11px] text-on-surface-variant tabular-nums pt-1">
                     <span>
                       {d.attemptCount}{" "}
                       {d.attemptCount === 1 ? "attempt" : "attempts"}
