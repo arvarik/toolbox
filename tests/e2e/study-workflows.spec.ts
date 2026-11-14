@@ -291,4 +291,439 @@ test.describe("Multi-Kit Study Workflows (/k/euclidean-geometry)", () => {
 
     expect(pageErrors).toEqual([]);
   });
+
+  test("7a. calling GET /api/drills on a fresh instance before forking system-design populates flashcards & guide notes without 409", async ({
+    page,
+  }) => {
+    const { ToolboxInstance } = await import("./fixtures/instance.ts");
+    const { buildEuclideanGeometryKit } = await import("./fixtures/kits.ts");
+    const fresh = await ToolboxInstance.start({ authRequired: false });
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+
+    try {
+      // 1. Trigger ensureDefaultSystemDesignKit via GET /api/drills (creates bare shell with 0 decks/notes)
+      const drillsRes = await fetch(`${fresh.baseURL}/api/drills`);
+      expect(drillsRes.ok).toBe(true);
+      const drills = (await drillsRes.json()) as unknown[];
+      expect(Array.isArray(drills)).toBe(true);
+
+      // 2. Forking official system-design kit must hydrate starter deck instead of returning 409 KIT_SLUG_CONFLICT
+      const forkRes = await fetch(`${fresh.baseURL}/api/shared-kits/system-design/fork`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      expect(forkRes.status).not.toBe(409);
+      expect(forkRes.ok).toBe(true);
+
+      const dueCards = await fresh.api<unknown[]>(
+        "GET",
+        "/decks/all/cards/due?kitId=system-design",
+      );
+      expect(dueCards.length).toBeGreaterThan(0);
+
+      // Hydrated starter flashcards are immediately searchable via RAG/FTS
+      const searchRes = await fresh.api<{ chunks: unknown[] }>(
+        "GET",
+        "/search?q=consistent&kitId=system-design",
+      );
+      expect(searchRes.chunks.length).toBeGreaterThan(0);
+
+      // 3. Also verify a shared kit carrying starterDeck + baselineGuideNotes + drills hydrates all three on fork
+      const richSkeleton = buildEuclideanGeometryKit({
+        slug: "fork-seed-rich-src",
+        name: "Seeded Geometry Reference",
+        includeStarterContent: true,
+      });
+      richSkeleton.seeds.baselineGuideNotes = [
+        {
+          pillarId: "foundations",
+          topicId: "parallel-postulate",
+          sectionId: "core-postulates",
+          content: "Forked baseline guide note on parallel lines and transversal axioms.",
+        },
+      ];
+      richSkeleton.seeds.drills = [
+        {
+          key: "fork-parallel-drill",
+          nodeId: "axioms-postulates",
+          difficulty: 1,
+          prompt: "State Euclid's fifth postulate and an equivalent planar statement.",
+          hints: ["Consider a line and external point.", "Compare intersecting angles.", "Playfair's axiom."],
+          rubricPoints: ["Mentions unique parallel line"],
+          workedSolution: "Through a point not on line L, there exists at most one line parallel to L.",
+        },
+      ];
+      const importedRich = await fresh.api<{ kit: { id: string } }>(
+        "POST",
+        "/kits/import-kit",
+        { skeleton: richSkeleton },
+      );
+      await fresh.api("POST", `/kits/${importedRich.kit.id}/publish`, {
+        slug: "fork-seed-rich-shared",
+        summary: "Starter cards + baseline guide notes + drills",
+        includeBaselineNotes: true,
+      });
+      const richForkRes = await fetch(
+        `${fresh.baseURL}/api/shared-kits/fork-seed-rich-shared/fork`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ customSlug: "fork-seed-rich-copy" }),
+        },
+      );
+      expect(richForkRes.ok).toBe(true);
+
+      const richDue = await fresh.api<unknown[]>(
+        "GET",
+        "/decks/all/cards/due?kitId=fork-seed-rich-copy",
+      );
+      expect(richDue.length).toBeGreaterThan(0);
+
+      const richProgress = await fresh.api<Record<string, boolean>>(
+        "GET",
+        "/guide-content/progress?kitId=fork-seed-rich-copy",
+      );
+      expect(richProgress["foundations__parallel-postulate__core-postulates"]).toBe(true);
+
+      const richDrills = await fresh.api<unknown[]>(
+        "GET",
+        "/drills?kitId=fork-seed-rich-copy",
+      );
+      expect(richDrills.length).toBeGreaterThan(0);
+
+      const richSearch = await fresh.api<{ chunks: unknown[] }>(
+        "GET",
+        "/search?q=transversal&kitId=fork-seed-rich-copy",
+      );
+      expect(richSearch.chunks.length).toBeGreaterThan(0);
+
+      await page.goto(`${fresh.baseURL}/k/system-design`);
+      await expect(page.getByText(/System Design/i).first()).toBeVisible();
+      expect(errors).toEqual([]);
+    } finally {
+      await fresh.stop();
+    }
+  });
+
+  test("7b. remediation stays open on Again and resolves on Good, high-difficulty prereqs unlock on state=2, and interval=21 marks graph node mastered", async ({
+    page,
+  }) => {
+    const { ToolboxInstance } = await import("./fixtures/instance.ts");
+    const { buildEuclideanGeometryKit } = await import("./fixtures/kits.ts");
+    const { createZipArchive } = await import("../../server/platform/archive/zip.ts");
+
+    const fresh = await ToolboxInstance.start({ authRequired: false });
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+
+    try {
+      const labSkeleton = buildEuclideanGeometryKit({
+        slug: "fsrs-e2e-lab",
+        name: "FSRS Remediation Lab",
+        includeStarterContent: false,
+      });
+      await fresh.api("POST", "/kits/import-kit", { skeleton: labSkeleton });
+
+      const deck = await fresh.api<{ id: string }>(
+        "POST",
+        "/decks",
+        { name: "Remediation Gate Deck", settings: { steps: "1m" } },
+        { "X-Toolbox-Kit": "fsrs-e2e-lab" },
+      );
+
+      const prereqCard = await fresh.api<{ id: string }>(
+        "POST",
+        `/decks/${deck.id}/cards`,
+        {
+          front: "What does Euclid's parallel postulate guarantee?",
+          back: "At most one parallel line through an external point.",
+          node_id: "axioms-postulates",
+        },
+        { "X-Toolbox-Kit": "fsrs-e2e-lab" },
+      );
+
+      const depCard = await fresh.api<{ id: string }>(
+        "POST",
+        `/decks/${deck.id}/cards`,
+        {
+          front: "Why do planar triangle angles sum to 180 degrees?",
+          back: "Alternate interior angles formed by a parallel line through a vertex.",
+          node_id: "triangle-congruence",
+          prerequisite_id: prereqCard.id,
+        },
+        { "X-Toolbox-Kit": "fsrs-e2e-lab" },
+      );
+
+      // While prereqCard is unseen (state=0) or in learning (state=1), depCard stays locked
+      const dueWhileUnseen = await fresh.api<Array<{ id: string }>>(
+        "GET",
+        `/decks/${deck.id}/cards/due`,
+      );
+      expect(dueWhileUnseen.some((c) => c.id === depCard.id)).toBe(false);
+
+      // Fail prereqCard once (Again -> high difficulty, reduced ease, state=1)
+      await fresh.api(
+        "POST",
+        `/decks/${deck.id}/cards/${prereqCard.id}/review`,
+        { quality: 1 },
+      );
+      const dueWhileLearning = await fresh.api<Array<{ id: string }>>(
+        "GET",
+        `/decks/${deck.id}/cards/due`,
+      );
+      expect(dueWhileLearning.some((c) => c.id === depCard.id)).toBe(false);
+
+      // Graduate prereqCard to state=2 despite high difficulty / lowered ease
+      for (let step = 0; step < 3; step += 1) {
+        const cards = await fresh.api<Array<{ id: string; state: number }>>(
+          "GET",
+          `/decks/${deck.id}/cards`,
+        );
+        if (cards.find((c) => c.id === prereqCard.id)?.state === 2) break;
+        await fresh.api(
+          "POST",
+          `/decks/${deck.id}/cards/${prereqCard.id}/review`,
+          { quality: 4 },
+        );
+      }
+
+      const cardsAfterGrad = await fresh.api<
+        Array<{ id: string; state: number; ease_factor: number; difficulty: number | null }>
+      >("GET", `/decks/${deck.id}/cards`);
+      const gradPrereq = cardsAfterGrad.find((c) => c.id === prereqCard.id)!;
+      expect(gradPrereq.state).toBe(2);
+
+      // High-difficulty graduated prerequisite unlocks depCard
+      const dueAfterGrad = await fresh.api<Array<{ id: string }>>(
+        "GET",
+        `/decks/${deck.id}/cards/due`,
+      );
+      expect(dueAfterGrad.some((c) => c.id === depCard.id)).toBe(true);
+
+      // Fail depCard to enqueue shaky prereqCard in remediation_queue
+      await fresh.api("POST", `/decks/${deck.id}/cards/${depCard.id}/review`, {
+        quality: 1,
+      });
+
+      const dueWithRem = await fresh.api<
+        Array<{ id: string; is_remediation?: number; remediation_reason?: string }>
+      >("GET", "/decks/all/cards/due?kitId=fsrs-e2e-lab");
+      expect(
+        dueWithRem.some((c) => c.id === prereqCard.id && c.is_remediation === 1),
+      ).toBe(true);
+
+      // Open /review UI, fail remediation card with Again ('1'), verify remediation stays open
+      await page.goto(`${fresh.baseURL}/review`);
+      await expect(page.getByTestId("review-remediation-banner")).toBeVisible();
+      await expect(page.getByTestId("review-card-front")).toContainText(
+        "Euclid's parallel postulate",
+      );
+
+      await page.keyboard.press("Space");
+      const againRespPromise = page.waitForResponse(
+        (res) =>
+          res.url().includes(`/cards/${prereqCard.id}/review`) &&
+          res.request().method() === "PUT",
+      );
+      await page.keyboard.press("1");
+      await againRespPromise;
+
+      const dueAfterAgain = await fresh.api<
+        Array<{ id: string; is_remediation?: number }>
+      >("GET", "/decks/all/cards/due?kitId=fsrs-e2e-lab");
+      expect(
+        dueAfterAgain.some((c) => c.id === prereqCard.id && c.is_remediation === 1),
+      ).toBe(true);
+
+      // Pass the re-queued remediation card with Good ('3'), verifying remediation resolves cleanly
+      await expect(page.getByTestId("review-remediation-banner")).toBeVisible();
+      await expect(page.getByRole("button", { name: /Reveal Answer/i })).toBeVisible();
+      await page.keyboard.press("Space");
+      const goodRespPromise = page.waitForResponse(
+        (res) =>
+          res.url().includes(`/cards/${prereqCard.id}/review`) &&
+          res.request().method() === "PUT",
+      );
+      await page.keyboard.press("3");
+      await goodRespPromise;
+
+      const dueAfterGood = await fresh.api<
+        Array<{ id: string; is_remediation?: number }>
+      >("GET", "/decks/all/cards/due?kitId=fsrs-e2e-lab");
+      expect(
+        dueAfterGood.some((c) => c.id === prereqCard.id && c.is_remediation === 1),
+      ).toBe(false);
+
+      // Verify interval === 21 marks a Graph node as "mastered" via Mode 2 backup archive restore
+      const masteredSkeleton = buildEuclideanGeometryKit({
+        slug: "mastered-node-lab",
+        name: "Mastered Boundary Lab",
+        includeStarterContent: false,
+      });
+      const nowIso = new Date().toISOString();
+      const future21Iso = new Date(Date.now() + 21 * 86_400_000).toISOString();
+      const masteredZip = await createZipArchive([
+        {
+          name: "kit.json",
+          data: Buffer.from(JSON.stringify(masteredSkeleton), "utf8"),
+        },
+        {
+          name: "userdata.json",
+          data: Buffer.from(
+            JSON.stringify({
+              format: "toolbox-kit-userdata",
+              schemaVersion: 1,
+              exportedAt: nowIso,
+              originalKitId: "orig-mastered-kit",
+              decks: [
+                {
+                  id: "deck-mastered-21",
+                  name: "Mastery Boundary Deck",
+                  description: "",
+                  createdAt: nowIso,
+                  updatedAt: nowIso,
+                },
+              ],
+              flashcards: [
+                {
+                  id: "card-interval-21",
+                  deckId: "deck-mastered-21",
+                  nodeId: "axioms-postulates",
+                  front: "Boundary 21-day card",
+                  back: "Exact interval=21 mastery boundary",
+                  state: 2,
+                  easeFactor: 2.5,
+                  interval: 21,
+                  repetitions: 5,
+                  stability: 21,
+                  difficulty: 4.5,
+                  lastReviewed: nowIso,
+                  nextReview: future21Iso,
+                  createdAt: nowIso,
+                  updatedAt: nowIso,
+                },
+              ],
+            }),
+            "utf8",
+          ),
+        },
+      ]);
+
+      const form = new FormData();
+      form.append(
+        "file",
+        new Blob([Uint8Array.from(masteredZip)], { type: "application/zip" }),
+        "mastered-boundary.toolbox-backup.zip",
+      );
+      const importRes = await fetch(`${fresh.baseURL}/api/kits/import-backup`, {
+        method: "POST",
+        body: form,
+      });
+      expect(importRes.ok).toBe(true);
+
+      const graphRes = await fresh.api<{
+        nodes: Array<{ id: string; health: string }>;
+      }>("GET", "/graph", undefined, { "X-Toolbox-Kit": "mastered-node-lab" });
+      expect(
+        graphRes.nodes.find((n) => n.id === "axioms-postulates")?.health,
+      ).toBe("mastered");
+
+      await page.goto(`${fresh.baseURL}/k/mastered-node-lab/graph`);
+      await page.getByRole("button", { name: "Mastered" }).click();
+      await expect(page.getByText("Euclid's Five Postulates").first()).toBeVisible();
+      expect(errors).toEqual([]);
+    } finally {
+      await fresh.stop();
+    }
+  });
+
+  test("7c. isolates chat_sessions across Kits so Kit B cannot overwrite or delete Kit A sessions", async ({
+    page,
+    instance,
+  }) => {
+    const { buildEuclideanGeometryKit } = await import("./fixtures/kits.ts");
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+
+    await instance.api("POST", "/kits/import-kit", {
+      skeleton: buildEuclideanGeometryKit({
+        slug: "chat-iso-kit-a",
+        name: "Chat Isolation Kit A",
+        includeStarterContent: false,
+      }),
+    });
+    await instance.api("POST", "/kits/import-kit", {
+      skeleton: buildEuclideanGeometryKit({
+        slug: "chat-iso-kit-b",
+        name: "Chat Isolation Kit B",
+        includeStarterContent: false,
+      }),
+    });
+
+    const sharedSessionId = "e2e-chat-iso-session";
+    await instance.api(
+      "POST",
+      "/chat/sessions",
+      {
+        session: {
+          id: sharedSessionId,
+          name: "Kit A Private Thread",
+          messages: [
+            {
+              role: "user",
+              content: "Confidential Kit A theorem proof prompt",
+            },
+          ],
+        },
+      },
+      { "X-Toolbox-Kit": "chat-iso-kit-a" },
+    );
+
+    // Attempt overwrite & delete from Kit B using the same session ID
+    await instance.api(
+      "POST",
+      "/chat/sessions",
+      {
+        session: {
+          id: sharedSessionId,
+          name: "Hijacked From Kit B",
+          messages: [],
+        },
+      },
+      { "X-Toolbox-Kit": "chat-iso-kit-b" },
+    );
+    await instance.api("DELETE", `/chat/sessions/${sharedSessionId}`, undefined, {
+      "X-Toolbox-Kit": "chat-iso-kit-b",
+    });
+
+    const kitASessions = await instance.api<
+      Record<string, { id: string; name: string; messages: Array<{ content: string }> }>
+    >("GET", "/chat/sessions", undefined, { "X-Toolbox-Kit": "chat-iso-kit-a" });
+    expect(kitASessions[sharedSessionId]?.name).toBe("Kit A Private Thread");
+    expect(kitASessions[sharedSessionId]?.messages[0]?.content).toBe(
+      "Confidential Kit A theorem proof prompt",
+    );
+
+    const kitBSessions = await instance.api<Record<string, unknown>>(
+      "GET",
+      "/chat/sessions",
+      undefined,
+      { "X-Toolbox-Kit": "chat-iso-kit-b" },
+    );
+    expect(kitBSessions[sharedSessionId]).toBeUndefined();
+
+    // Verify in browser UI across both Kit chat routes
+    await page.goto("/k/chat-iso-kit-a/chat");
+    await expect(
+      page.getByText("Confidential Kit A theorem proof prompt"),
+    ).toBeVisible();
+
+    await page.goto("/k/chat-iso-kit-b/chat");
+    await expect(
+      page.getByText("Confidential Kit A theorem proof prompt"),
+    ).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
 });

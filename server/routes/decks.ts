@@ -12,6 +12,8 @@ import { resolveActiveKit, resolveKitById } from "../kits/kitContext.ts";
 import {
   deleteRagChunksBySource,
   deleteRagChunksForDeck,
+  formatFlashcardRagContent,
+  markRagDirty,
   upsertRagChunk,
 } from "../search/hybridSearch.ts";
 import {
@@ -91,14 +93,14 @@ function getOwnedCard(scope: Scope, cardId: string): FlashcardRow | undefined {
 /**
  * Prerequisite gate that NEVER deadlocks if the prerequisite card was deleted:
  * unlocked when prerequisite_id is empty OR there is NO existing prerequisite
- * card for this owner whose mastery falls short of (state = 2 AND ease_factor >= 2.5).
+ * card for this owner that has not graduated with at least a 1-day interval.
  */
 const PREREQ_UNLOCKED_SQL = `
   (prerequisite_id IS NULL OR prerequisite_id = '' OR NOT EXISTS (
     SELECT 1 FROM flashcards p
     WHERE p.ownerId = flashcards.ownerId
       AND p.id = flashcards.prerequisite_id
-      AND NOT (p.state = 2 AND p.ease_factor >= 2.5)
+      AND NOT (p.state = 2 AND COALESCE(p.interval, 0) >= 1)
   ))
 `;
 
@@ -106,17 +108,25 @@ function applyRemediation<T extends FlashcardRow>(
   scope: Scope,
   sessionCards: T[],
   deckId: string | null,
+  kitId: string | null,
 ): Array<T | FlashcardRow> {
   const rows = db
     .prepare(
       `SELECT f.*, r.reason AS remediation_reason, r.node_name AS remediation_node
        FROM remediation_queue r
        JOIN flashcards f ON f.ownerId = r.ownerId AND f.id = r.card_id
-       WHERE r.ownerId = ? AND r.resolved_at IS NULL ${deckId ? "AND f.deck_id = ?" : ""}
-       ORDER BY r.created_at ASC
+       WHERE r.ownerId = ?
+         AND r.resolved_at IS NULL
+         AND (? IS NULL OR r.kit_id = ?)
+         ${deckId ? "AND f.deck_id = ?" : ""}
+       ORDER BY r.id ASC
        LIMIT 10`,
     )
-    .all(...(deckId ? [scope.ownerId, deckId] : [scope.ownerId])) as FlashcardRow[];
+    .all(
+      ...(deckId
+        ? [scope.ownerId, kitId, kitId, deckId]
+        : [scope.ownerId, kitId, kitId]),
+    ) as FlashcardRow[];
 
   if (rows.length === 0) return sessionCards;
 
@@ -262,8 +272,8 @@ export function collectDueReviewQueue(
   const todayCounts = db
     .prepare(
       `SELECT f.deck_id,
-              COALESCE(SUM(CASE WHEN f.repetitions = 1 THEN 1 ELSE 0 END), 0) AS new_today,
-              COALESCE(SUM(CASE WHEN f.repetitions > 1 THEN 1 ELSE 0 END), 0) AS rev_today
+              COALESCE(SUM(CASE WHEN f.repetitions = 1 AND COALESCE(f.lapses, 0) = 0 THEN 1 ELSE 0 END), 0) AS new_today,
+              COALESCE(SUM(CASE WHEN f.repetitions > 1 OR COALESCE(f.lapses, 0) > 0 THEN 1 ELSE 0 END), 0) AS rev_today
        FROM flashcards f
        JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
        WHERE f.ownerId = ? ${resolvedKitId ? "AND d.kit_id = ?" : ""}
@@ -375,7 +385,7 @@ export function collectDueReviewQueue(
     [allDueCards[i], allDueCards[j]] = [allDueCards[j], allDueCards[i]];
   }
 
-  return applyRemediation(scope, allDueCards, null)
+  return applyRemediation(scope, allDueCards, null, resolvedKitId)
     .filter((c) => deckMeta.has(c.deck_id))
     .map((c) => {
       const meta = deckMeta.get(c.deck_id)!;
@@ -756,11 +766,17 @@ router.delete("/:id", (req, res) => {
 
   db.transaction(() => {
     deleteRagChunksForDeck(db, scope, existing.kit_id, req.params.id);
+    db.prepare(
+      `UPDATE flashcards SET reverse_of_id = NULL
+       WHERE ownerId = ?
+         AND reverse_of_id IN (SELECT id FROM flashcards WHERE ownerId = ? AND deck_id = ?)`,
+    ).run(scope.ownerId, scope.ownerId, req.params.id);
     db.prepare("DELETE FROM decks WHERE ownerId = ? AND id = ?").run(
       scope.ownerId,
       req.params.id,
     );
   })();
+  markRagDirty(scope.ownerId, existing.kit_id);
   res.status(204).send();
 });
 
@@ -787,8 +803,8 @@ export function deckSessionCards(
   const todayRow = db
     .prepare(
       `SELECT
-         COALESCE(SUM(CASE WHEN repetitions = 1 THEN 1 ELSE 0 END), 0) AS newToday,
-         COALESCE(SUM(CASE WHEN repetitions > 1 THEN 1 ELSE 0 END), 0) AS reviewsToday
+         COALESCE(SUM(CASE WHEN repetitions = 1 AND COALESCE(lapses, 0) = 0 THEN 1 ELSE 0 END), 0) AS newToday,
+         COALESCE(SUM(CASE WHEN repetitions > 1 OR COALESCE(lapses, 0) > 0 THEN 1 ELSE 0 END), 0) AS reviewsToday
        FROM flashcards
        WHERE ownerId = ? AND deck_id = ?
          AND last_reviewed IS NOT NULL
@@ -859,7 +875,12 @@ router.get("/:deckId/cards/due", (req, res) => {
   }
 
   const settings = parseDeckSettings(deck.settings);
-  const combined = applyRemediation(scope, deckSessionCards(scope, deckId, settings), deckId);
+  const combined = applyRemediation(
+    scope,
+    deckSessionCards(scope, deckId, settings),
+    deckId,
+    deck.kit_id,
+  );
 
   res.json(
     combined.map((c) => ({
@@ -965,6 +986,8 @@ router.post("/:deckId/cards/check-duplicates", (req, res) => {
   res.json({ results });
 });
 
+const MAX_PREREQ_CHAIN_HOPS = 64;
+
 function resolveValidPrereqId(
   scope: Scope,
   kitId: string,
@@ -973,7 +996,9 @@ function resolveValidPrereqId(
 ): string | null {
   if (typeof prereqId !== "string" || !prereqId.trim()) return null;
   const candidate = prereqId.trim();
-  if (selfId && candidate === selfId) return null;
+  if (selfId && candidate === selfId) {
+    throw new ValidationError("A card cannot be a prerequisite of itself");
+  }
   const exists = db
     .prepare(
       `SELECT 1 FROM flashcards f
@@ -981,7 +1006,36 @@ function resolveValidPrereqId(
        WHERE f.ownerId = ? AND f.id = ? AND d.kit_id = ?`,
     )
     .get(scope.ownerId, candidate, kitId);
-  return exists ? candidate : null;
+  if (!exists) return null;
+
+  if (selfId) {
+    const stepStmt = db.prepare(
+      `SELECT f.prerequisite_id
+       FROM flashcards f
+       JOIN decks d ON d.ownerId = f.ownerId AND d.id = f.deck_id
+       WHERE f.ownerId = ? AND f.id = ? AND d.kit_id = ?`,
+    );
+    const visited = new Set<string>([selfId]);
+    let cur: string | null = candidate;
+    for (let hop = 0; hop < MAX_PREREQ_CHAIN_HOPS && cur; hop++) {
+      if (visited.has(cur)) {
+        throw new ValidationError(
+          "Setting this prerequisite would create a prerequisite cycle",
+        );
+      }
+      visited.add(cur);
+      const row = stepStmt.get(scope.ownerId, cur, kitId) as
+        | { prerequisite_id: string | null }
+        | undefined;
+      cur = row?.prerequisite_id ?? null;
+    }
+    if (cur && visited.has(cur)) {
+      throw new ValidationError(
+        "Setting this prerequisite would create a prerequisite cycle",
+      );
+    }
+  }
+  return candidate;
 }
 
 router.post(
@@ -1069,8 +1123,9 @@ router.post(
       sourceRefId: id,
       nodeId,
       title: frontText,
-      content: `${frontText}\n${backText}`,
+      content: formatFlashcardRagContent(frontText, backText),
     });
+    markRagDirty(scope.ownerId, deck.kit_id);
 
     res.status(201).json(getOwnedCard(scope, id));
   }),
@@ -1173,18 +1228,29 @@ router.put(
         sourceRefId: card.id,
         nodeId: card.node_id,
         title: card.front,
-        content: `${card.front}\n${card.back}`,
+        content: formatFlashcardRagContent(card.front, card.back),
       });
     } else {
       deleteRagChunksBySource(db, scope, deck.kit_id, "flashcard", card.id);
     }
+    markRagDirty(scope.ownerId, deck.kit_id);
 
     res.json(card);
   }),
 );
 
-/** Saves a review's SRS state, counts it in study_sessions, and resolves the card's open remediation rows. */
-export function saveReview(scope: Scope, cardId: string, updated: SrsNextState): void {
+/** Saves a review's SRS state, counts it in study_sessions, and resolves open remediation rows on passing recall. */
+export function saveReview(
+  scope: Scope,
+  cardId: string,
+  updated: SrsNextState,
+  quality?: number,
+): void {
+  const shouldResolveRemediation =
+    quality !== undefined
+      ? quality >= 3
+      : updated.state === 2 || updated.learning_step > 0;
+
   db.transaction(() => {
     db.prepare(
       `UPDATE flashcards SET
@@ -1221,10 +1287,12 @@ export function saveReview(scope: Scope, cardId: string, updated: SrsNextState):
        ON CONFLICT(ownerId, date) DO UPDATE SET count = count + 1`,
     ).run(scope.ownerId);
 
-    db.prepare(
-      `UPDATE remediation_queue SET resolved_at = datetime('now')
-       WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL`,
-    ).run(scope.ownerId, cardId);
+    if (shouldResolveRemediation) {
+      db.prepare(
+        `UPDATE remediation_queue SET resolved_at = datetime('now')
+         WHERE ownerId = ? AND card_id = ? AND resolved_at IS NULL`,
+      ).run(scope.ownerId, cardId);
+    }
   })();
 }
 
@@ -1282,7 +1350,7 @@ function handleReview(req: Request, res: Response): void {
     settings,
     typeof confidence === "string" ? confidence : null,
   );
-  saveReview(scope, card.id, updated);
+  saveReview(scope, card.id, updated, quality);
 
   let implicitCreditCount = 0;
   if (quality >= 4 && (card.state === 2 || updated.state === 2)) {
@@ -1329,6 +1397,9 @@ router.delete("/:deckId/cards/:cardId", (req, res) => {
     return;
   }
   db.transaction(() => {
+    db.prepare(
+      "UPDATE flashcards SET reverse_of_id = NULL WHERE ownerId = ? AND reverse_of_id = ?",
+    ).run(scope.ownerId, req.params.cardId);
     const info = db
       .prepare("DELETE FROM flashcards WHERE ownerId = ? AND id = ? AND deck_id = ?")
       .run(scope.ownerId, req.params.cardId, req.params.deckId);
@@ -1337,6 +1408,7 @@ router.delete("/:deckId/cards/:cardId", (req, res) => {
       db.prepare(
         "UPDATE decks SET updated_at = datetime('now') WHERE ownerId = ? AND id = ?",
       ).run(scope.ownerId, req.params.deckId);
+      markRagDirty(scope.ownerId, deck.kit_id);
     }
   })();
   res.status(204).send();

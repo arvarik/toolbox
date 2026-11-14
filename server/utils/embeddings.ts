@@ -3,14 +3,56 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import {
+  canUsePrivateEndpoint,
   getEmbeddingsConfig,
   resolveEmbeddingsEndpointCredentials,
   resolveInstanceProviderKeyForEmbeddings,
 } from "../platform/ai/aiSettingsService.ts";
+import { guardedFetch } from "../platform/net/originAndFetch.ts";
 import { embedTextsLocal } from "../platform/workers/cpuHost.ts";
 import logger from "./logger.ts";
 
 const EMBED_TIMEOUT_MS = 30_000;
+
+function toValidatedFloat32Vectors(
+  vectors: ReadonlyArray<ArrayLike<number>>,
+  expectedCount: number,
+  expectedDimension: number,
+  providerLabel: string,
+): Float32Array[] {
+  if (!Array.isArray(vectors) || vectors.length !== expectedCount) {
+    throw new Error(
+      `[embeddings] ${providerLabel} returned ${Array.isArray(vectors) ? vectors.length : 0} vector(s); expected ${expectedCount}`,
+    );
+  }
+
+  return vectors.map((vec, rowIdx) => {
+    if (!vec || typeof vec.length !== "number" || vec.length !== expectedDimension) {
+      const actualLen = vec && typeof vec.length === "number" ? vec.length : 0;
+      throw new Error(
+        `[embeddings] ${providerLabel} vector[${rowIdx}] dimension mismatch: got ${actualLen}, expected ${expectedDimension}`,
+      );
+    }
+
+    const out = new Float32Array(expectedDimension);
+    for (let i = 0; i < expectedDimension; i += 1) {
+      const rawVal = vec[i];
+      if (typeof rawVal !== "number" || !Number.isFinite(rawVal)) {
+        throw new Error(
+          `[embeddings] ${providerLabel} vector[${rowIdx}][${i}] is non-finite (${String(rawVal)})`,
+        );
+      }
+      const f32 = Math.fround(rawVal);
+      if (!Number.isFinite(f32)) {
+        throw new Error(
+          `[embeddings] ${providerLabel} vector[${rowIdx}][${i}] overflows Float32 (${String(rawVal)})`,
+        );
+      }
+      out[i] = f32;
+    }
+    return out;
+  });
+}
 
 export async function embedTexts(
   texts: string[],
@@ -20,10 +62,11 @@ export async function embedTexts(
   const cfg = getEmbeddingsConfig();
 
   if (cfg.provider === "local") {
-    return embedTextsLocal(texts, {
+    const vectors = await embedTextsLocal(texts, {
       signal: opts.signal,
       dim: cfg.dimension,
     });
+    return toValidatedFloat32Vectors(vectors, texts.length, cfg.dimension, "local");
   }
 
   const signals: AbortSignal[] = [AbortSignal.timeout(EMBED_TIMEOUT_MS)];
@@ -41,7 +84,7 @@ export async function embedTexts(
       },
       abortSignal,
     });
-    return embeddings.map((v) => Float32Array.from(v));
+    return toValidatedFloat32Vectors(embeddings, texts.length, cfg.dimension, "gemini");
   }
 
   if (cfg.provider === "openai") {
@@ -55,7 +98,7 @@ export async function embedTexts(
       },
       abortSignal,
     });
-    return embeddings.map((v) => Float32Array.from(v));
+    return toValidatedFloat32Vectors(embeddings, texts.length, cfg.dimension, "openai");
   }
 
   const ep = resolveEmbeddingsEndpointCredentials(cfg.endpointId);
@@ -63,13 +106,17 @@ export async function embedTexts(
     name: ep.name,
     baseURL: ep.baseUrl,
     apiKey: ep.apiKey || undefined,
+    fetch: guardedFetch({
+      allowPrivate: canUsePrivateEndpoint({ isAdmin: true }),
+      timeoutMs: EMBED_TIMEOUT_MS,
+    }),
   });
   const { embeddings } = await embedMany({
     model: compat.textEmbeddingModel(cfg.modelId),
     values: texts,
     abortSignal,
   });
-  return embeddings.map((v) => Float32Array.from(v));
+  return toValidatedFloat32Vectors(embeddings, texts.length, cfg.dimension, "custom");
 }
 
 export async function generateEmbedding(text: string): Promise<number[]> {

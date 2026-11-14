@@ -18,6 +18,7 @@ import { SYSTEM_DESIGN_KIT_SKELETON } from "../../shared/kits/systemDesignKit.ts
 import {
   deleteRagChunksBySource,
   deleteRagChunksForKit,
+  markRagDirty,
   upsertRagChunk,
 } from "../search/hybridSearch.ts";
 
@@ -370,6 +371,10 @@ export function seedKitStarterContent(
         );
         if (info.changes > 0) addedGuideNotes++;
       }
+    }
+
+    if (addedCards > 0 || addedGuideNotes > 0) {
+      markRagDirty(scope.ownerId, kitId);
     }
 
     return { addedCards, addedDrills, addedGuideNotes };
@@ -726,6 +731,7 @@ export function deleteOwnedKit(db: Database.Database, scope: Scope, slugOrId: st
     deleteRagChunksForKit(db, scope, current.id);
     db.prepare("DELETE FROM kits WHERE ownerId = ? AND id = ?").run(scope.ownerId, current.id);
   })();
+  markRagDirty(scope.ownerId, current.id);
   fs.rmSync(kitUploadsDir(scope.ownerId, current.id), { recursive: true, force: true });
 }
 
@@ -1383,19 +1389,20 @@ export function forkSharedKit(
     };
 
     if (existing) {
-      // If `ensureDefaultSystemDesignKit` lazily created a bare shell with 0 decks & 0 drills,
-      // hydrate it seamlessly in-place instead of failing with a slug conflict!
+      // If `ensureDefaultSystemDesignKit` lazily created a bare shell with 0 decks & 0 guide notes
+      // (even if drills were hydrated earlier via GET /api/drills), hydrate it seamlessly in-place
+      // instead of failing with a slug conflict.
       const deckCount = (
         db.prepare("SELECT COUNT(*) as c FROM decks WHERE ownerId = ? AND kit_id = ?").get(scope.ownerId, existing.id) as { c: number }
       ).c;
-      const drillCount = (
-        db.prepare("SELECT COUNT(*) as c FROM drills WHERE ownerId = ? AND kit_id = ?").get(scope.ownerId, existing.id) as { c: number }
+      const guideCount = (
+        db.prepare("SELECT COUNT(*) as c FROM guide_content WHERE ownerId = ? AND kit_id = ?").get(scope.ownerId, existing.id) as { c: number }
       ).c;
       if (
         !opts.customSlug &&
         existing.forked_from_shared_id === shared.id &&
         deckCount === 0 &&
-        drillCount === 0
+        guideCount === 0
       ) {
         db.prepare(
           `UPDATE kits

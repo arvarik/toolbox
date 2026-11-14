@@ -19,7 +19,12 @@ import {
 } from "../kits/kitService.ts";
 import { AppError, getErrorMessage, log } from "../platform/net/errors.ts";
 import { scopeForOwnerId, type Scope } from "../platform/tenancy/scope.ts";
-import { upsertRagChunksBatch, type UpsertRagChunkInput } from "../search/hybridSearch.ts";
+import {
+  formatFlashcardRagContent,
+  markRagDirty,
+  upsertRagChunksBatch,
+  type UpsertRagChunkInput,
+} from "../search/hybridSearch.ts";
 import { normalizeEditedDraftSkeleton } from "./dagCompiler.ts";
 import { commitStagedSourcesToKit, type LoadedStagedSource } from "./sourceIngest.ts";
 import { sanitizeUntrustedExcerpt, UNTRUSTED_POOL_INSTRUCTION } from "./verifiedPool.ts";
@@ -644,6 +649,10 @@ export async function runSeedKitJob(
         }
       })();
 
+      if (newCardSeeds.length > 0 || newBaselineNotes.length > 0) {
+        markRagDirty(scope.ownerId, kitRow.id);
+      }
+
       const ragInputs: UpsertRagChunkInput[] = [];
       if (newCardSeeds.length > 0) {
         const cardRows = db
@@ -669,8 +678,8 @@ export async function runSeedKitJob(
             kind: "flashcard",
             sourceRefId: r.id,
             nodeId: r.node_id,
-            title: r.front.slice(0, 140),
-            content: `Q: ${r.front}\nA: ${r.back}`,
+            title: r.front,
+            content: formatFlashcardRagContent(r.front, r.back),
           });
         }
       }

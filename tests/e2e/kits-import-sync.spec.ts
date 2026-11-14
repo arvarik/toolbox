@@ -79,6 +79,14 @@ test.describe("Kits Library, Import/Export, Shared Sync & Studio", () => {
     await expect(page.getByTestId("kit-card-system-design")).toBeVisible();
     await expect(page.getByTestId("kit-card-euclidean-geometry")).toBeVisible();
 
+    // Immediate post-Mode-1-import RAG/FTS search without any prior chat turn
+    const mode1Search = await instance.api<{
+      flashcards: Array<{ id: string; front: string }>;
+      chunks: Array<{ kind: string; kitId: string }>;
+    }>("GET", "/search?q=Playfair&kitId=euclidean-geometry");
+    expect(mode1Search.flashcards.length).toBeGreaterThanOrEqual(1);
+    expect(mode1Search.chunks.length).toBeGreaterThanOrEqual(1);
+
     // 4. Record personal progress (Guide note + FSRS review) on Euclidean Geometry
     const noteRes = await page.request.put(
       "/api/guide-content/foundations/parallel-postulate/core-postulates",
@@ -171,6 +179,25 @@ test.describe("Kits Library, Import/Export, Shared Sync & Studio", () => {
     expect(restoredGuide["core-postulates"]?.content).toContain(
       "Backup round-trip proof note",
     );
+
+    // Immediate post-Mode-2-backup-restore RAG/FTS search without any prior chat turn
+    const backupSearch = await instance.api<{
+      guideContent: Array<{ topicId: string }>;
+      flashcards: Array<{ id: string }>;
+      chunks: Array<{ kind: string; content: string }>;
+    }>(
+      "GET",
+      `/search?q=${encodeURIComponent("Backup round-trip proof note")}&kitId=euclidean-geometry`,
+    );
+    expect(backupSearch.guideContent.length).toBeGreaterThanOrEqual(1);
+    expect(backupSearch.chunks.some((c) => c.kind === "guide")).toBe(true);
+
+    const backupCardSearch = await instance.api<{
+      flashcards: Array<{ id: string }>;
+      chunks: Array<{ kind: string }>;
+    }>("GET", "/search?q=Playfair&kitId=euclidean-geometry");
+    expect(backupCardSearch.flashcards.length).toBeGreaterThanOrEqual(1);
+    expect(backupCardSearch.chunks.length).toBeGreaterThanOrEqual(1);
     expect(pageErrors).toEqual([]);
   });
 

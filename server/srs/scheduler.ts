@@ -381,25 +381,37 @@ function highConfidenceAgainMins(stepMins: number): number {
   return stepMins / 2;
 }
 
-function deriveReviewElapsedDays(
-  card: SrsCardInput,
+export function deriveReviewElapsedDays(
+  card: Pick<SrsCardInput, "last_reviewed" | "next_review" | "interval">,
   fallbackStability: number,
   nowMs: number,
+  opts: { minDays?: number } = {},
 ): number {
-  if (card.last_reviewed) {
-    const lastMs = parseUtcTimestampMs(card.last_reviewed);
-    if (Number.isFinite(lastMs)) {
-      return Math.max(0, (nowMs - lastMs) / DAY_MS);
+  const minDays = opts.minDays ?? 0.5;
+  const scheduledInterval = card.interval || fallbackStability;
+  const lastMs = card.last_reviewed
+    ? parseUtcTimestampMs(card.last_reviewed)
+    : Number.NaN;
+  const nextMs = card.next_review
+    ? parseUtcTimestampMs(card.next_review)
+    : Number.NaN;
+
+  if (Number.isFinite(lastMs)) {
+    // If FIRe extended next_review into the future without modifying last_reviewed,
+    // measure elapsed time from the implied post-credit anchor when it is newer than last_reviewed.
+    if (Number.isFinite(nextMs) && nextMs > nowMs && scheduledInterval > 0) {
+      const anchorMs = nextMs - scheduledInterval * DAY_MS;
+      if (anchorMs > lastMs) {
+        return Math.max(0, (nowMs - anchorMs) / DAY_MS);
+      }
     }
+    return Math.max(0, (nowMs - lastMs) / DAY_MS);
   }
-  if (card.next_review) {
-    const nextMs = parseUtcTimestampMs(card.next_review);
-    if (Number.isFinite(nextMs)) {
-      const daysUntilDue = (nextMs - nowMs) / DAY_MS;
-      return Math.max(0.5, (card.interval || fallbackStability) - daysUntilDue);
-    }
+  if (Number.isFinite(nextMs)) {
+    const daysUntilDue = (nextMs - nowMs) / DAY_MS;
+    return Math.max(minDays, scheduledInterval - daysUntilDue);
   }
-  return Math.max(0.5, card.interval || fallbackStability);
+  return Math.max(minDays, scheduledInterval);
 }
 
 export function calculateNextSrsState(
@@ -591,7 +603,7 @@ export function calculateNextSrsState(
       nextState = 3;
       nextLearningStep = 0;
       nextInterval = 0;
-      nextRepetitions = 0;
+      nextRepetitions = Math.max(1, prevReps);
       nextLapses = prevLapses + 1;
       nextStability = nextForgetStability(prevD, prevS, r);
       const againMins =

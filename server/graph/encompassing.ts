@@ -8,6 +8,7 @@ import {
 } from "../../shared/kits/kitSkeleton.ts";
 import {
   bootstrapSm2Card,
+  deriveReviewElapsedDays,
   easeFromDifficulty,
   nextIntervalDays,
   nextRecallStability,
@@ -75,7 +76,6 @@ export function applyImplicitPrerequisiteCredit(
 
   const now = opts.now ?? new Date();
   const nowMs = now.getTime();
-  const nowIso = now.toISOString();
 
   const prereqIndex = prerequisitesOf(kit.skeleton.graph.edges);
   const alphaByNode = new Map<string, number>();
@@ -129,7 +129,6 @@ export function applyImplicitPrerequisiteCredit(
          ease_factor = ?,
          interval = ?,
          next_review = ?,
-         last_reviewed = ?,
          updated_at = datetime('now')
      WHERE ownerId = ? AND id = ?`,
   );
@@ -154,19 +153,9 @@ export function applyImplicitPrerequisiteCredit(
       if (bestAlpha <= 0 || !hitNode) continue;
 
       const { stability: s, difficulty: d } = bootstrapSm2Card(card);
-      let elapsedDays = s;
-      if (card.last_reviewed) {
-        const parsed = parseUtcTimestampMs(card.last_reviewed);
-        if (Number.isFinite(parsed)) {
-          elapsedDays = Math.max(0, (nowMs - parsed) / DAY_MS);
-        }
-      } else if (card.next_review) {
-        const nextMs = parseUtcTimestampMs(card.next_review);
-        if (Number.isFinite(nextMs)) {
-          const daysUntilDue = (nextMs - nowMs) / DAY_MS;
-          elapsedDays = Math.max(0, (card.interval || s) - daysUntilDue);
-        }
-      }
+      const elapsedDays = deriveReviewElapsedDays(card, s, nowMs, {
+        minDays: 0,
+      });
 
       const r = retrievability(elapsedDays, s);
       const delta = bestAlpha * weight * (1 - r);
@@ -196,7 +185,6 @@ export function applyImplicitPrerequisiteCredit(
         easeFromDifficulty(d),
         newInterval,
         new Date(finalNextMs).toISOString(),
-        nowIso,
         scope.ownerId,
         card.id,
       );
