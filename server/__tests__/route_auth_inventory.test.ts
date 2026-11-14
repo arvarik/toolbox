@@ -149,11 +149,15 @@ describe("Route authorization inventory (AUTH_REQUIRED=true)", () => {
     const adminOnly = routes.filter((r) => r.chain.includes("requireAdmin"));
     // Every /api/admin route, and these instance-wide routes elsewhere, must sit behind requireAdmin.
     const adminOutsidePrefix = [
+      "PUT /api/config",
+      "POST /api/config/test-key",
+      "POST /api/config/refresh-models",
       "POST /api/endpoints/test",
       "POST /api/endpoints",
       "PUT /api/endpoints/:id",
       "POST /api/endpoints/:id/refresh-models",
       "DELETE /api/endpoints/:id",
+      "GET /api/system/export-db",
     ];
     expect(
       routes

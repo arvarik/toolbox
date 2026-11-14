@@ -187,6 +187,7 @@ A source install reads these from `.env` (see [`.env.example`](../.env.example))
 | `MODELS_DIR` | `${DATA_DIR}/models` | Directory for local ONNX embedding models |
 | `TRANSFORMERS_OFFLINE` | — | Set `1` to forbid runtime HuggingFace network fetches |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | — | Optional OIDC SSO credentials (`OIDC_NAME`, `OIDC_MATCH_BY_EMAIL`) |
+| `OIDC_ALLOW_PRIVATE` | `false` | Set `true` to allow OIDC discovery and token/userinfo fetches to private or loopback network addresses (for example a self-hosted LAN Authentik or Keycloak IdP); blocked by default to prevent SSRF |
 | `SMTP_URL` / `MAIL_FROM` / `MAIL_REPLY_TO` | — | Optional SMTP transport for invitations. Password-reset, sign-in, and email-change emails link to pages the web app does not have yet |
 | `BACKUP_KEEP` | `7` | Number of SQLite backups to keep (`1`–`50`); older ones are deleted after each new backup |
 | `BACKUP_INTERVAL_HOURS` | `24` | Hours between automatic SQLite backups (`0`–`168`, `0` turns them off). When unset, the admin setting applies. See [section 7](#7-data-persistence-backups--upgrading) |

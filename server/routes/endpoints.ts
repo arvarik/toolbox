@@ -1,14 +1,9 @@
-import {
-  Router,
-  type NextFunction,
-  type Request,
-  type Response,
-} from "express";
+import { Router, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import db from "../db.ts";
+import { adminRefusal, requireAdmin } from "../platform/auth/authMiddleware.ts";
 import { sealCredential } from "../platform/crypto/secretBox.ts";
 import { validateEndpointBaseUrl } from "../platform/ai/aiSettingsService.ts";
-import { ForbiddenError } from "../platform/net/errors.ts";
 import { fetchEndpointModels } from "../providers/defs.ts";
 import {
   getCustomEndpoint,
@@ -23,14 +18,6 @@ import {
 import { maskSecret, isMaskedValue } from "../utils/mask.ts";
 
 const router = Router();
-
-function requireAdmin(req: Request, _res: Response, next: NextFunction): void {
-  if (req.principal?.user.role !== "admin") {
-    next(new ForbiddenError("Only administrators can manage instance endpoints"));
-    return;
-  }
-  next();
-}
 
 function toClientEndpoint(row: CustomEndpointRow, isAdmin: boolean) {
   const catalog = loadCatalog(`custom:${row.id}`);
@@ -71,7 +58,7 @@ async function probeModelsOrFail(
 }
 
 router.get("/", (req, res) => {
-  const isAdmin = req.principal?.user.role === "admin";
+  const isAdmin = adminRefusal(req) === null;
   res.json(listCustomEndpoints().map((ep) => toClientEndpoint(ep, isAdmin)));
 });
 

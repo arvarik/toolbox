@@ -1,12 +1,8 @@
-import {
-  Router,
-  type NextFunction,
-  type Request,
-  type Response,
-} from "express";
+import { Router } from "express";
 import db from "../db.ts";
+import { adminRefusal, requireAdmin } from "../platform/auth/authMiddleware.ts";
 import { openCredential, sealCredential } from "../platform/crypto/secretBox.ts";
-import { ForbiddenError, ValidationError } from "../platform/net/errors.ts";
+import { ValidationError } from "../platform/net/errors.ts";
 import {
   getAvailableModels,
   getApiKeyStatus,
@@ -27,18 +23,8 @@ const UPSERT_CONFIG_SQL = `INSERT INTO config (key, value, updated_at)
   VALUES (?, ?, datetime('now'))
   ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`;
 
-const requireAdmin =
-  (msg: string) =>
-  (req: Request, _res: Response, next: NextFunction): void => {
-    if (req.principal?.user.role !== "admin") {
-      next(new ForbiddenError(msg));
-      return;
-    }
-    next();
-  };
-
 router.get("/", (req, res) => {
-  const isAdmin = req.principal?.user.role === "admin";
+  const isAdmin = adminRefusal(req) === null;
   const keyStatus = getApiKeyStatus();
   if (!isAdmin) {
     res.json({
@@ -63,64 +49,57 @@ router.get("/", (req, res) => {
   res.json(config);
 });
 
-router.put(
-  "/",
-  requireAdmin("Only administrators can modify instance configuration"),
-  (req, res) => {
-    const rawBody = req.body;
-    if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
-      throw new ValidationError("Configuration payload must be a JSON object");
-    }
-    const apiKeyFields = getApiKeyFields();
-    const body = rawBody as Record<string, unknown>;
-    const entries = Object.entries(body);
-    if (entries.length > 100) {
-      throw new ValidationError("Too many configuration keys in single update");
-    }
-    const upsert = db.prepare(UPSERT_CONFIG_SQL);
+router.put("/", requireAdmin, (req, res) => {
+  const rawBody = req.body;
+  if (!rawBody || typeof rawBody !== "object" || Array.isArray(rawBody)) {
+    throw new ValidationError("Configuration payload must be a JSON object");
+  }
+  const apiKeyFields = getApiKeyFields();
+  const allowedKeys = new Set(apiKeyFields);
+  const body = rawBody as Record<string, unknown>;
+  const entries = Object.entries(body);
+  if (entries.length > 100) {
+    throw new ValidationError("Too many configuration keys in single update");
+  }
+  const upsert = db.prepare(UPSERT_CONFIG_SQL);
 
-    const removedProviders: string[] = [];
-    db.transaction(() => {
-      for (const [key, value] of entries) {
-        if (!key.trim() || key.length > 100) {
-          throw new ValidationError("Invalid configuration key");
-        }
-        if (value !== null && value !== undefined && typeof value === "object") {
-          throw new ValidationError(`Configuration value for "${key}" must be a primitive`);
-        }
-        if (typeof value === "number" && !Number.isFinite(value)) {
-          throw new ValidationError(`Configuration value for "${key}" must be finite`);
-        }
-        const strValue = String(value ?? "");
-        if (strValue.length > 10_000) {
-          throw new ValidationError(`Configuration value for "${key}" exceeds maximum length`);
-        }
-        if (apiKeyFields.includes(key)) {
-          if (isMaskedValue(strValue)) continue;
-          if (strValue === "") {
-            const providerId = getProviderIdForConfigKey(key);
-            if (providerId) removedProviders.push(providerId);
-            upsert.run(key, "");
-          } else {
-            upsert.run(key, sealCredential(strValue));
-          }
-          continue;
-        }
-        upsert.run(key, strValue);
+  const removedProviders: string[] = [];
+  db.transaction(() => {
+    for (const [key, value] of entries) {
+      if (!key.trim() || key.length > 100) {
+        throw new ValidationError("Invalid configuration key");
       }
-    })();
-
-    for (const providerId of removedProviders) {
-      handleProviderKeyRemoved(providerId);
+      if (!allowedKeys.has(key)) {
+        throw new ValidationError(`Unknown configuration key: "${key}"`);
+      }
+      if (value !== null && value !== undefined && typeof value === "object") {
+        throw new ValidationError(`Configuration value for "${key}" must be a primitive`);
+      }
+      if (typeof value === "number" && !Number.isFinite(value)) {
+        throw new ValidationError(`Configuration value for "${key}" must be finite`);
+      }
+      const strValue = String(value ?? "");
+      if (strValue.length > 10_000) {
+        throw new ValidationError(`Configuration value for "${key}" exceeds maximum length`);
+      }
+      if (isMaskedValue(strValue)) continue;
+      if (strValue === "") {
+        const providerId = getProviderIdForConfigKey(key);
+        if (providerId) removedProviders.push(providerId);
+        upsert.run(key, "");
+      } else {
+        upsert.run(key, sealCredential(strValue));
+      }
     }
-    res.json({ success: true });
-  },
-);
+  })();
 
-router.post(
-  "/test-key",
-  requireAdmin("Only administrators can configure instance API keys"),
-  async (req, res) => {
+  for (const providerId of removedProviders) {
+    handleProviderKeyRemoved(providerId);
+  }
+  res.json({ success: true });
+});
+
+router.post("/test-key", requireAdmin, async (req, res) => {
     const { key, provider = "gemini" } = (req.body ?? {}) as {
       key?: unknown;
       provider?: unknown;
@@ -164,10 +143,7 @@ router.get("/available-models", (_req, res) => {
   });
 });
 
-router.post(
-  "/refresh-models",
-  requireAdmin("Only administrators can refresh instance catalogs"),
-  async (_req, res) => {
+router.post("/refresh-models", requireAdmin, async (_req, res) => {
     const { refreshed, errors } = await refreshAllCatalogs();
     res.json({
       refreshed,

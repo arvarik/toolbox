@@ -6,14 +6,18 @@
  * WebAuthn authenticator. No external service is called.
  */
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
+import path from "node:path";
 import { isoCBOR } from "@simplewebauthn/server/helpers";
 import type { Express } from "express";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { BACKUPS_DIR, BACKUP_FILE_PREFIX } from "../appConfig.ts";
 import { createApp } from "../app.ts";
-import { sqlite } from "../platform/db/connection.ts";
+import { listBackups, runBackup, verifyBackup } from "../platform/auth/adminAndBackup.ts";
+import { getOwnerDataHooks, registerOwnerDataHooks, sqlite } from "../platform/db/connection.ts";
 import { __resetAdminRateLimits } from "../platform/routes/adminRoutes.ts";
 import { __resetAuthRateLimits } from "../platform/routes/authRoutes.ts";
 import { setupTwoTenants } from "./testHelpers.ts";
@@ -106,6 +110,7 @@ async function fakeIdp() {
   const jwk = { ...publicKey.export({ format: "jwk" }), kid: "k1", alg: "ES256", use: "sig" };
   const grants = new Map<string, { claims: Record<string, unknown>; challenge: string; redirectUri: string }>();
   let issuer = "";
+  let discoveryHits = 0;
   const b64 = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
   const server = http.createServer(async (req, res) => {
     const send = (status: number, body: unknown) => {
@@ -114,6 +119,7 @@ async function fakeIdp() {
     };
     const { pathname } = new URL(req.url ?? "/", issuer);
     if (pathname === "/.well-known/openid-configuration") {
+      discoveryHits++;
       return send(200, {
         issuer,
         authorization_endpoint: `${issuer}/authorize`,
@@ -155,6 +161,7 @@ async function fakeIdp() {
   return {
     server,
     issuer,
+    discoveryHits: () => discoveryHits,
     /** The user consents at the provider: returns the authorization code the browser carries back. */
     authorize(authUrl: string, claims: Record<string, unknown>): string {
       const q = new URL(authUrl).searchParams;
@@ -488,6 +495,11 @@ describe("Credential lifecycle, email links, passkeys, OIDC SSO & instance admin
     sqlite.prepare("UPDATE users SET status = 'disabled' WHERE id = ?").run(aliceId);
     try {
       expect((await passkeyLogin(request(app), (c) => key.assert(c, 4))).body.error.code).toBe("ACCOUNT_DISABLED");
+      // Disabled user login rejection must NOT mutate passkeys.counter or lastUsedAt
+      const rowAfterDisabled = sqlite
+        .prepare("SELECT counter FROM passkeys WHERE id = ?")
+        .get(key.id) as { counter: number };
+      expect(rowAfterDisabled.counter).toBe(3);
     } finally {
       sqlite.prepare("UPDATE users SET status = 'active' WHERE id = ?").run(aliceId);
     }
@@ -508,13 +520,35 @@ describe("Credential lifecycle, email links, passkeys, OIDC SSO & instance admin
     expect((await passkeyLogin(request(app), (c) => key.assert(c, 5))).status).toBe(404);
   });
 
-  it("4. signs in and links accounts through a local OIDC issuer with PKCE, nonce, browser binding and email-trust checks", async () => {
+  it("4. blocks private-network OIDC discovery unless OIDC_ALLOW_PRIVATE=true, sanitizes discovery errors, and signs in with PKCE + nonce", async () => {
     const idp = await fakeIdp();
+    const brokenServer = http.createServer((_req, res) => {
+      res.writeHead(500, { "Content-Type": "text/html" });
+      res.end("<html><body>INTERNAL_SECRET_STACK_BODY</body></html>");
+    });
+    const brokenPort = await listen(brokenServer);
+    const prevOidcAllowPrivate = process.env.OIDC_ALLOW_PRIVATE;
+    delete process.env.OIDC_ALLOW_PRIVATE;
     try {
       const provider = { issuer: idp.issuer, clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, name: "Corp SSO", matchByEmail: false };
       await alice.put("/api/admin/integrations").send({ oidc: { ...provider, issuer: "http://idp.example.com" } }).expect(400);
+
+      // Default OIDC_ALLOW_PRIVATE=false refuses private/loopback OIDC discovery without connecting or leaking internals
+      const blockedPrivate = await alice.put("/api/admin/integrations").send({ oidc: provider }).expect(400);
+      expect(blockedPrivate.body.error.code).toBe("OIDC_DISCOVERY_FAILED");
+      expect(blockedPrivate.body.message).not.toMatch(/ECONNREFUSED|127\.0\.0\.1/);
+      expect(idp.discoveryHits()).toBe(0);
+
+      process.env.OIDC_ALLOW_PRIVATE = "true";
       const dead = await alice.put("/api/admin/integrations").send({ oidc: { ...provider, issuer: `http://127.0.0.1:${await closedPort()}` } }).expect(400);
       expect(dead.body.error.code).toBe("OIDC_DISCOVERY_FAILED");
+      expect(dead.body.message).not.toMatch(/ECONNREFUSED|127\.0\.0\.1/);
+
+      const badHtml = await alice.put("/api/admin/integrations").send({ oidc: { ...provider, issuer: `http://127.0.0.1:${brokenPort}` } }).expect(400);
+      expect(badHtml.body.error.code).toBe("OIDC_DISCOVERY_FAILED");
+      expect(badHtml.body.message).not.toContain("INTERNAL_SECRET_STACK_BODY");
+      expect(badHtml.body.message).not.toContain("127.0.0.1");
+
       const saved = (await alice.put("/api/admin/integrations").send({ oidc: provider }).expect(200)).body;
       expect(saved.oidc).toMatchObject({ configured: true, source: "setting", clientSecretPreview: "••••et42", redirectUri: `${ORIGIN}/api/auth/oidc/callback` });
       const sealed = sqlite.prepare("SELECT value FROM app_settings WHERE key = 'auth.oidc'").get() as { value: string };
@@ -595,6 +629,9 @@ describe("Credential lifecycle, email links, passkeys, OIDC SSO & instance admin
       await bob.post("/api/auth/change-password").send({ currentPassword: temporaryPassword, newPassword: "bob-final-password-321" }).expect(200);
       bobPassword = "bob-final-password-321";
     } finally {
+      if (prevOidcAllowPrivate === undefined) delete process.env.OIDC_ALLOW_PRIVATE;
+      else process.env.OIDC_ALLOW_PRIVATE = prevOidcAllowPrivate;
+      await new Promise((resolve) => brokenServer.close(resolve));
       await new Promise((resolve) => idp.server.close(resolve));
     }
   });
@@ -624,11 +661,16 @@ describe("Credential lifecycle, email links, passkeys, OIDC SSO & instance admin
     await carol.get("/api/admin/users").expect(200);
     expect((await alice.patch(`/api/admin/users/${carolId}`).send({ role: "member" }).expect(200)).body.user).toMatchObject({ role: "member", displayName: "Carol C." });
 
+    const carolToken = (await carol.post("/api/auth/tokens").send({ name: "carol-cli" }).expect(201)).body.token as string;
+    secrets.push(carolToken);
     const disabled = (await alice.post(`/api/admin/users/${carolId}/disable`).expect(200)).body.user;
     expect(disabled).toMatchObject({ status: "disabled", sessionCount: 0 });
     await carol.get("/api/decks").expect(401);
+    await request(app).get("/api/decks").set("Authorization", `Bearer ${carolToken}`).expect(401);
     expect((await login("carol", "carol-strong-password-1").expect(403)).body.error.code).toBe("ACCOUNT_DISABLED");
     await alice.post(`/api/admin/users/${carolId}/enable`).expect(200);
+    // Re-enabling a disabled user never resurrects personal tokens minted before disable
+    await request(app).get("/api/decks").set("Authorization", `Bearer ${carolToken}`).expect(401);
     await login("carol", "carol-strong-password-1", carol).expect(200);
 
     // Invitations: revoked, expired and used links all die with 410; accepted ones cannot be revoked
@@ -687,14 +729,54 @@ describe("Credential lifecycle, email links, passkeys, OIDC SSO & instance admin
       expect(backup.verification).toMatchObject({ ok: true, integrity: "ok" });
       expect(backup.verification.rows.users).toBe(backup.verification.liveRows.users);
     }
-    const backups = (await alice.get("/api/admin/backups").expect(200)).body.backups as Array<{ filename: string; verification: unknown }>;
+    const backups = (await alice.get("/api/admin/backups").expect(200)).body.backups as Array<{ filename: string; verification: { rows?: Record<string, number> } | null }>;
     expect(backups).toHaveLength(2);
     expect(backups.every((b) => b.verification !== null)).toBe(true);
 
-    const download = await alice.get(`/api/admin/backups/${backups[0]!.filename}`).responseType("blob").expect(200);
+    // verifyBackup loads sqlite-vec so vector virtual tables (rag_chunks_vec) are readable without errors.
+    const prevHooks = getOwnerDataHooks();
+    registerOwnerDataHooks({
+      ...prevHooks,
+      countedTables: [...prevHooks.countedTables, "rag_chunks_vec"],
+    });
+    try {
+      const vecCheck = verifyBackup(path.join(BACKUPS_DIR, backups[0]!.filename));
+      expect(vecCheck.ok).toBe(true);
+      expect(vecCheck.rows.rag_chunks_vec).toBeTypeOf("number");
+    } finally {
+      registerOwnerDataHooks(prevHooks);
+    }
+
+    // Failed backup verification inside runBackup removes .partial, preserves prior healthy snapshots
+    // (does not rotate them out), and refuses with BACKUP_VERIFICATION_FAILED.
+    const corruptCheck = verifyBackup(path.join(BACKUPS_DIR, "nonexistent-corrupt.db"));
+    expect(corruptCheck.ok).toBe(false);
+    const keepBefore = await alice.put("/api/admin/settings").send({ backupKeep: 1 }).expect(200);
+    expect(keepBefore.body.backupKeep).toBe(1);
+    const healthySnapshot = (await runBackup()).filename;
+    registerOwnerDataHooks({
+      ...prevHooks,
+      countedTables: [...prevHooks.countedTables, "missing_required_canary_table"],
+    });
+    try {
+      await expect(runBackup()).rejects.toMatchObject({
+        code: "BACKUP_VERIFICATION_FAILED",
+        statusCode: 500,
+      });
+    } finally {
+      registerOwnerDataHooks(prevHooks);
+    }
+    expect(listBackups().map((b) => b.filename)).toEqual([healthySnapshot]);
+    expect(
+      fs
+        .readdirSync(BACKUPS_DIR)
+        .filter((f) => f.startsWith(BACKUP_FILE_PREFIX) && f.endsWith(".partial")),
+    ).toEqual([]);
+
+    const download = await alice.get(`/api/admin/backups/${healthySnapshot}`).responseType("blob").expect(200);
     expect((download.body as Buffer).subarray(0, 15).toString()).toBe("SQLite format 3");
-    expect(download.headers["content-disposition"]).toContain(backups[0]!.filename);
-    for (const probe of ["..%2F..%2Fsecret.key", "toolbox-missing.db", `${backups[0]!.filename}.json`]) {
+    expect(download.headers["content-disposition"]).toContain(healthySnapshot);
+    for (const probe of ["..%2F..%2Fsecret.key", "toolbox-missing.db", `${healthySnapshot}.json`]) {
       expect((await alice.get(`/api/admin/backups/${probe}`).expect(404)).body.error.code).toBe("BACKUP_NOT_FOUND");
     }
 

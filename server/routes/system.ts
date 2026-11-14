@@ -1,13 +1,96 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { Router } from "express";
+import { BACKUPS_DIR } from "../appConfig.ts";
 import db from "../db.ts";
+import { requireAdmin } from "../platform/auth/authMiddleware.ts";
 import { scopeOf } from "../platform/tenancy/scope.ts";
-import { ForbiddenError } from "../platform/net/errors.ts";
 import logger from "../utils/logger.ts";
 
 const router = Router();
+const EXPORT_TMP_DIRNAME = ".tmp";
+
+interface StagedExport {
+  tmpDir: string;
+  tmpFile: string;
+  activeReaders: number;
+}
+
+let inFlightExport: {
+  promise: Promise<StagedExport>;
+  waiters: number;
+} | null = null;
+
+function removeDirQuietly(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // Ignore temp cleanup failure
+  }
+}
+
+async function acquireStagedExport(): Promise<{
+  tmpFile: string;
+  release: () => void;
+}> {
+  if (!inFlightExport) {
+    const tmpRoot = path.join(BACKUPS_DIR, EXPORT_TMP_DIRNAME);
+    const entry: {
+      promise: Promise<StagedExport>;
+      waiters: number;
+    } = {
+      waiters: 0,
+      promise: (async () => {
+        fs.mkdirSync(tmpRoot, { recursive: true, mode: 0o700 });
+        if (process.platform !== "win32") {
+          fs.chmodSync(tmpRoot, 0o700);
+        }
+        const tmpDir = fs.mkdtempSync(path.join(tmpRoot, "toolbox-backup-"));
+        if (process.platform !== "win32") {
+          fs.chmodSync(tmpDir, 0o700);
+        }
+        const tmpFile = path.join(tmpDir, "toolbox_backup.db");
+        try {
+          await db.backup(tmpFile);
+          if (process.platform !== "win32") {
+            fs.chmodSync(tmpFile, 0o600);
+          }
+          return { tmpDir, tmpFile, activeReaders: 0 };
+        } catch (err) {
+          removeDirQuietly(tmpDir);
+          throw err;
+        }
+      })(),
+    };
+    inFlightExport = entry;
+  }
+
+  const current = inFlightExport;
+  current.waiters += 1;
+  let staged: StagedExport;
+  try {
+    staged = await current.promise;
+    staged.activeReaders += 1;
+  } finally {
+    current.waiters -= 1;
+    if (current.waiters === 0 && inFlightExport === current) {
+      inFlightExport = null;
+    }
+  }
+
+  let released = false;
+  return {
+    tmpFile: staged.tmpFile,
+    release: () => {
+      if (released) return;
+      released = true;
+      staged.activeReaders -= 1;
+      if (staged.activeReaders <= 0 && current.waiters <= 0) {
+        removeDirQuietly(staged.tmpDir);
+      }
+    },
+  };
+}
 
 router.get("/stats", (req, res) => {
   const scope = scopeOf(req);
@@ -52,36 +135,34 @@ router.post("/clear-cache", (req, res) => {
   }
 });
 
-router.get("/export-db", async (req, res, next) => {
-  if (req.principal?.user.role !== "admin") {
-    next(new ForbiddenError("Only administrators can export the instance database"));
-    return;
-  }
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "toolbox-backup-"));
-  const cleanup = () => {
-    try {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {
-      // Ignore temp cleanup failure
-    }
-  };
+router.get("/export-db", requireAdmin, async (_req, res, next) => {
+  let release: (() => void) | null = null;
   try {
-    if (process.platform !== "win32") {
-      fs.chmodSync(tmpDir, 0o700);
+    const staged = await acquireStagedExport();
+    release = staged.release;
+    if (res.closed || res.destroyed || res.writableEnded) {
+      release();
+      return;
     }
-    const tmpFile = path.join(tmpDir, "toolbox_backup.db");
-    await db.backup(tmpFile);
-    if (process.platform !== "win32") {
-      fs.chmodSync(tmpFile, 0o600);
-    }
-    res.download(tmpFile, "toolbox_backup.db", () => {
-      cleanup();
-    });
+    res.once("close", release);
+    res.download(
+      staged.tmpFile,
+      "toolbox_backup.db",
+      { dotfiles: "allow" },
+      (err) => {
+        release?.();
+        if (err && !res.headersSent) {
+          next(err);
+        }
+      },
+    );
   } catch (err) {
-    cleanup();
+    release?.();
     const msg = err instanceof Error ? err.message : String(err);
     logger.error("[system] Error exporting db:", msg);
-    res.status(500).json({ message: "Failed to export database" });
+    if (!res.headersSent) {
+      res.status(500).json({ message: "Failed to export database" });
+    }
   }
 });
 

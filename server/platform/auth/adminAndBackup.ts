@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import * as sqliteVec from "sqlite-vec";
 import type {
   BackupInfo,
   BackupVerification,
@@ -366,6 +367,12 @@ export function disableUser(ctx: AdminContext, id: string): AdminUserSummary {
       )
       .run(id);
     revokeOtherSessions(id, null);
+    sqlite
+      .prepare(
+        `UPDATE api_tokens SET revokedAt = CURRENT_TIMESTAMP
+          WHERE userId = ? AND revokedAt IS NULL`,
+      )
+      .run(id);
   })();
 
   auditService.record({
@@ -518,6 +525,7 @@ export function verifyBackup(file: string): BackupVerification {
   let snapshot: Database.Database | null = null;
   try {
     snapshot = new Database(file, { readonly: true, fileMustExist: true });
+    sqliteVec.load(snapshot);
     const integrity = String(
       snapshot.pragma("quick_check", { simple: true }) ?? "unknown",
     );
@@ -654,6 +662,13 @@ export async function runBackup(): Promise<BackupInfo> {
         await sqlite.backup(partial);
         stat = fs.statSync(partial);
         verification = verifyBackup(partial);
+        if (!verification.ok) {
+          throw new AppError(
+            `Backup verification failed: ${verification.problem ?? "unknown error"}`,
+            500,
+            { code: "BACKUP_VERIFICATION_FAILED" },
+          );
+        }
         fs.renameSync(partial, dest);
       } catch (err) {
         fs.rmSync(partial, { force: true });

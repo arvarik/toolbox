@@ -259,6 +259,17 @@ export function requirePasswordCurrent(
   );
 }
 
+const READ_ONLY_DENIED_GET_PATHS: ReadonlyArray<string | RegExp> = [
+  "/api/chat/starters",
+  /^\/api\/drills\/challenge\//,
+];
+
+function isReadOnlyDeniedGet(path: string): boolean {
+  return READ_ONLY_DENIED_GET_PATHS.some((pattern) =>
+    typeof pattern === "string" ? path === pattern : pattern.test(path),
+  );
+}
+
 export function guardReadOnlyToken(
   req: Request,
   _res: Response,
@@ -268,7 +279,9 @@ export function guardReadOnlyToken(
   if (principal?.via !== "token" || !principal.readOnly) return next();
 
   const path = trimTrailingSlashes(req.originalUrl.split("?")[0].toLowerCase());
-  if (READ_METHODS.has(req.method) || (req.method === "POST" && path === "/api/mcp")) {
+  const blockedGet =
+    (req.method === "GET" || req.method === "HEAD") && isReadOnlyDeniedGet(path);
+  if (!blockedGet && (READ_METHODS.has(req.method) || (req.method === "POST" && path === "/api/mcp"))) {
     return next();
   }
 

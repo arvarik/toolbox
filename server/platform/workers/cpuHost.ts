@@ -81,116 +81,163 @@ interface Pending {
   transfer?: ArrayBuffer[];
   timeoutMs: number;
   signal?: AbortSignal;
+  aborted?: boolean;
   resolve: (reply: WorkerReply) => void;
   reject: (err: unknown) => void;
-  cleanup?: () => void;
+  cleanupTimeout?: () => void;
+  cleanupAbort?: () => void;
 }
 
-// Single persistent worker per process. Once `onnxruntime-node` has initialized
-// inside a worker thread (`modelSpent = true`), NEVER terminate & respawn it in
-// the same process — native ONNX Runtime global state is not multi-init safe.
-let worker: Worker | null = null;
-let modelSpent = false;
-let unavailableReason: string | null = null;
-let active: Pending | null = null;
-const queue: Pending[] = [];
+interface WorkerSlot {
+  name: "pdf" | "embed";
+  disposable: boolean;
+  worker: Worker | null;
+  modelSpent: boolean;
+  unavailableReason: string | null;
+  active: Pending | null;
+  queue: Pending[];
+}
+
+function createSlot(name: "pdf" | "embed", disposable: boolean): WorkerSlot {
+  return {
+    name,
+    disposable,
+    worker: null,
+    modelSpent: false,
+    unavailableReason: null,
+    active: null,
+    queue: [],
+  };
+}
+
+// Isolated worker slots:
+// - `pdfSlot` runs disposable PDF extraction workers that never load ONNX and
+//   are ALWAYS terminated on timeout or caller abort.
+// - `embedSlot` hosts the single persistent ONNX Runtime worker (`modelSpent`),
+//   which must never be terminated and respawned in-process after initialization.
+const pdfSlot = createSlot("pdf", true);
+const embedSlot = createSlot("embed", false);
 let nextId = 1;
 
-function spawnPersistentWorker(): Worker {
+function terminateSlotWorker(slot: WorkerSlot, w: Worker): void {
+  if (slot.worker === w) {
+    slot.worker = null;
+  }
+  void w.terminate().catch(() => {});
+}
+
+function spawnSlotWorker(slot: WorkerSlot): Worker {
   const w = new Worker(new URL("./cpuWorker.ts", import.meta.url));
   w.on("message", (reply: WorkerReply) => {
-    if (!active || active.job.id !== reply.id) return;
-    const done = active;
-    active = null;
-    done.cleanup?.();
+    if (w !== slot.worker || !slot.active || slot.active.job.id !== reply.id) {
+      return;
+    }
+    const done = slot.active;
+    slot.active = null;
+    done.cleanupTimeout?.();
+    done.cleanupAbort?.();
     w.unref();
-    done.resolve(reply);
-    pump();
+    if (!done.aborted) {
+      done.resolve(reply);
+    }
+    pumpSlot(slot);
   });
-  w.on("error", (err) =>
-    failWorker(w, err instanceof Error ? err : new Error(String(err))),
-  );
+  w.on("error", (err) => {
+    failSlotWorker(slot, w, err instanceof Error ? err : new Error(String(err)));
+  });
   w.on("exit", (code) => {
-    if (w !== worker) return;
-    failWorker(w, new Error(`cpuWorker exited (code ${code})`));
+    if (w !== slot.worker) return;
+    failSlotWorker(slot, w, new Error(`${slot.name} cpuWorker exited (code ${code})`));
   });
   w.unref();
   return w;
 }
 
-function failWorker(dead: Worker, err: Error): void {
-  if (dead === worker) worker = null;
-  if (modelSpent) {
-    unavailableReason = err.message;
+function failSlotWorker(slot: WorkerSlot, dead: Worker, err: Error): void {
+  if (dead !== slot.worker) return;
+  slot.worker = null;
+  if (!slot.disposable && slot.modelSpent) {
+    slot.unavailableReason = err.message;
     log.warn(
       "cpuHost",
       `Local ONNX worker exited after initialization (${err.message}); falling back without respawning onnxruntime-node.`,
     );
   }
-  if (active) {
-    const failed = active;
-    active = null;
-    failed.cleanup?.();
-    failed.reject(err);
+  if (slot.active) {
+    const failed = slot.active;
+    slot.active = null;
+    failed.cleanupTimeout?.();
+    failed.cleanupAbort?.();
+    if (!failed.aborted) {
+      failed.reject(err);
+    }
   }
-  pump();
+  pumpSlot(slot);
 }
 
-function pump(): void {
-  if (active) return;
-  while (queue.length > 0) {
-    const next = queue.shift()!;
-    next.cleanup?.();
+function pumpSlot(slot: WorkerSlot): void {
+  if (slot.active) return;
+  while (slot.queue.length > 0) {
+    const next = slot.queue.shift()!;
     if (next.signal?.aborted) {
+      next.cleanupAbort?.();
       next.reject(CANCELLED);
       continue;
     }
-    if (unavailableReason) {
-      next.reject(new Error(`cpuWorker unavailable: ${unavailableReason}`));
+    if (slot.unavailableReason) {
+      next.cleanupAbort?.();
+      next.reject(new Error(`cpuWorker unavailable: ${slot.unavailableReason}`));
       continue;
     }
-    let w = worker;
+    let w = slot.worker;
     if (!w) {
       try {
-        w = spawnPersistentWorker();
-        worker = w;
+        w = spawnSlotWorker(slot);
+        slot.worker = w;
       } catch (err) {
-        unavailableReason = err instanceof Error ? err.message : String(err);
+        if (!slot.disposable) {
+          slot.unavailableReason = err instanceof Error ? err.message : String(err);
+        }
+        next.cleanupAbort?.();
         next.reject(err);
         continue;
       }
     }
-    if (next.job.kind === "embed") {
-      modelSpent = true;
+    if (!slot.disposable && next.job.kind === "embed") {
+      slot.modelSpent = true;
     }
-    active = next;
+    slot.active = next;
     const timeoutMs = next.timeoutMs;
+    const activeWorker = w;
     const timer = setTimeout(() => {
-      if (active !== next) return;
-      log.warn("cpuHost", `cpuWorker job ${next.job.id} timed out`);
-      active = null;
-      next.cleanup?.();
-      next.reject(
-        new Error(`cpuWorker ${next.job.kind} timed out after ${timeoutMs}ms`),
-      );
-      if (w && !modelSpent) {
-        if (w === worker) worker = null;
-        void w.terminate().catch(() => {});
+      if (slot.active !== next) return;
+      log.warn("cpuHost", `${slot.name} cpuWorker job ${next.job.id} timed out`);
+      slot.active = null;
+      next.cleanupAbort?.();
+      activeWorker.unref();
+      if (!next.aborted) {
+        next.reject(
+          new Error(`cpuWorker ${next.job.kind} timed out after ${timeoutMs}ms`),
+        );
       }
-      pump();
+      if (slot.disposable || !slot.modelSpent) {
+        terminateSlotWorker(slot, activeWorker);
+      }
+      pumpSlot(slot);
     }, timeoutMs);
     timer.unref();
-    next.cleanup = () => {
+    next.cleanupTimeout = () => {
       clearTimeout(timer);
-      w?.unref();
+      activeWorker.unref();
     };
-    w.ref();
-    w.postMessage(next.job, next.transfer ?? []);
+    activeWorker.ref();
+    activeWorker.postMessage(next.job, next.transfer ?? []);
     return;
   }
 }
 
-function submitJob(
+function submitToSlot(
+  slot: WorkerSlot,
   job: WorkerJob,
   opts: {
     transfer?: ArrayBuffer[];
@@ -199,8 +246,8 @@ function submitJob(
   } = {},
 ): Promise<WorkerReply> {
   if (opts.signal?.aborted) return Promise.reject(CANCELLED);
-  if (unavailableReason) {
-    return Promise.reject(new Error(`cpuWorker unavailable: ${unavailableReason}`));
+  if (slot.unavailableReason) {
+    return Promise.reject(new Error(`cpuWorker unavailable: ${slot.unavailableReason}`));
   }
   return new Promise<WorkerReply>((resolve, reject) => {
     const entry: Pending = {
@@ -213,17 +260,29 @@ function submitJob(
     };
     if (opts.signal) {
       const onAbort = () => {
-        const idx = queue.indexOf(entry);
-        if (idx === -1) return;
-        queue.splice(idx, 1);
-        entry.cleanup?.();
+        const idx = slot.queue.indexOf(entry);
+        if (idx !== -1) {
+          slot.queue.splice(idx, 1);
+          entry.cleanupTimeout?.();
+          reject(CANCELLED);
+          return;
+        }
+        if (slot.active !== entry || entry.aborted) return;
+        entry.aborted = true;
+        entry.cleanupTimeout?.();
         reject(CANCELLED);
+        if (slot.disposable || !slot.modelSpent) {
+          const w = slot.worker;
+          slot.active = null;
+          if (w) terminateSlotWorker(slot, w);
+          pumpSlot(slot);
+        }
       };
       opts.signal.addEventListener("abort", onAbort, { once: true });
-      entry.cleanup = () => opts.signal?.removeEventListener("abort", onAbort);
+      entry.cleanupAbort = () => opts.signal?.removeEventListener("abort", onAbort);
     }
-    queue.push(entry);
-    pump();
+    slot.queue.push(entry);
+    pumpSlot(slot);
   });
 }
 
@@ -231,7 +290,8 @@ function submitEmbedJob(
   texts: string[],
   signal?: AbortSignal,
 ): Promise<WorkerReply> {
-  return submitJob(
+  return submitToSlot(
+    embedSlot,
     { id: nextId++, kind: "embed", texts },
     { timeoutMs: JOB_TIMEOUT_MS, signal },
   );
@@ -271,20 +331,20 @@ export async function extractPdfText(
   owned.set(bytes);
   const transferBuf = owned.buffer as ArrayBuffer;
 
-  const reply = await submitJob(
-    {
-      id: nextId++,
-      kind: "extract_pdf",
-      bytes: owned,
-      maxPages: opts.maxPages ?? DEFAULT_PDF_MAX_PAGES,
-      maxChars: opts.maxChars ?? DEFAULT_PDF_MAX_CHARS,
-    },
-    {
-      transfer: [transferBuf],
-      timeoutMs: opts.timeoutMs ?? DEFAULT_PDF_TIMEOUT_MS,
-      signal: opts.signal,
-    },
-  );
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_PDF_TIMEOUT_MS;
+  const pdfJob: WorkerJob & { timeoutMs?: number } = {
+    id: nextId++,
+    kind: "extract_pdf",
+    bytes: owned,
+    maxPages: opts.maxPages ?? DEFAULT_PDF_MAX_PAGES,
+    maxChars: opts.maxChars ?? DEFAULT_PDF_MAX_CHARS,
+    timeoutMs,
+  };
+  const reply = await submitToSlot(pdfSlot, pdfJob, {
+    transfer: [transferBuf],
+    timeoutMs,
+    signal: opts.signal,
+  });
 
   if (!reply.ok) {
     throw new Error(`PDF extraction failed (${reply.stage}): ${reply.error}`);

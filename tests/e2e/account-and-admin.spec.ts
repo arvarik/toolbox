@@ -22,8 +22,61 @@ gatedTest.describe("Account Security & Instance Administration", () => {
       });
       expect(setup.status()).toBe(201);
 
-      // 1. Admin creates an invitation link in Settings
-      await page.goto("/settings");
+      // 1. Admin checks security headers, config/export-db admin fences, and creates an invitation link
+      const settingsRes = await page.goto("/settings");
+      expect(settingsRes?.headers()["permissions-policy"]).toBe(
+        "camera=(), microphone=(self), geolocation=()",
+      );
+      expect(settingsRes?.headers()["content-security-policy"]).toContain(
+        "img-src 'self' data: blob:",
+      );
+      expect(settingsRes?.headers()["content-security-policy"]).not.toContain(
+        "img-src 'self' data: blob: https:",
+      );
+
+      // Admin session enforces PUT /api/config allowlist; Admin tbk_ token gets redacted config and 403 SESSION_REQUIRED on admin routes
+      expect(
+        (await page.request.put("/api/config", { data: { gemini_api_key: "AIza-e2e-admin-secret-9999" } })).status(),
+      ).toBe(200);
+      expect(
+        (await page.request.put("/api/config", { data: { unallowlisted_key: "nope" } })).status(),
+      ).toBe(400);
+
+      const adminAccount = page.locator("#account-security-section");
+      await adminAccount.getByPlaceholder("Token name (e.g. Claude Desktop MCP)").fill("Admin CLI");
+      await adminAccount.getByRole("button", { name: "Create Token" }).click();
+      const adminToken = (
+        await adminAccount.locator("code").filter({ hasText: /^tbk_[\w-]{40,}$/ }).textContent()
+      )!.trim();
+      const adminTokenConfig = await fetch(`${gated.baseURL}/api/config`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+      });
+      expect(adminTokenConfig.status).toBe(200);
+      const adminTokenConfigJson = (await adminTokenConfig.json()) as Record<string, unknown>;
+      expect(adminTokenConfigJson.gemini_api_key).toBeUndefined();
+      expect(adminTokenConfigJson.api_key_configured).toBe(true);
+      for (const [method, endpointPath] of [
+        ["PUT", "/api/config"],
+        ["POST", "/api/config/test-key"],
+        ["POST", "/api/endpoints/test"],
+        ["GET", "/api/system/export-db"],
+      ] as const) {
+        const res = await fetch(`${gated.baseURL}${endpointPath}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${adminToken}`,
+            ...(method !== "GET" ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(method !== "GET" ? { body: "{}" } : {}),
+        });
+        expect(res.status, `${method} ${endpointPath}`).toBe(403);
+        expect(((await res.json()) as { error: { code: string } }).error.code).toBe("SESSION_REQUIRED");
+      }
+      const sysExport = await page.request.get("/api/system/export-db");
+      expect(sysExport.status()).toBe(200);
+      expect((await sysExport.body()).subarray(0, 15).toString("utf8")).toBe("SQLite format 3");
+      await page.request.put("/api/config", { data: { gemini_api_key: "" } });
+
       const admin = page.locator("#instance-admin-section");
       await admin.getByRole("button", { name: "Create Invite Link" }).click();
       const inviteLink = (await admin.locator("code").filter({ hasText: "/join?token=" }).textContent())!.trim();
@@ -75,6 +128,45 @@ gatedTest.describe("Account Security & Instance Administration", () => {
       await expect(account.getByText("Laptop script")).toHaveCount(0);
       expect((await withToken()).status).toBe(401);
 
+      // 5b. Member mints a Read-only token via UI: allowed on reads, blocked on writes AND mutating LLM GET routes
+      await account.getByPlaceholder("Token name (e.g. Claude Desktop MCP)").fill("RO Observer");
+      await account.getByLabel("Read-only").check();
+      await account.getByRole("button", { name: "Create Token" }).click();
+      await expect(account.getByText("RO Observer")).toBeVisible();
+      await expect(revealed).not.toHaveText(token);
+      const roToken = (await revealed.textContent())!.trim();
+      expect(
+        (await fetch(`${gated.baseURL}/api/decks`, { headers: { Authorization: `Bearer ${roToken}` } })).status,
+      ).toBe(200);
+      for (const [method, roPath] of [
+        ["POST", "/api/decks"],
+        ["GET", "/api/chat/starters?pillarId=p&topicId=t"],
+        ["GET", "/api/drills/challenge/node-1"],
+      ] as const) {
+        const res = await fetch(`${gated.baseURL}${roPath}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${roToken}`,
+            ...(method === "POST" ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(method === "POST" ? { body: JSON.stringify({ name: "Blocked" }) } : {}),
+        });
+        expect(res.status, `${method} ${roPath}`).toBe(403);
+        expect(((await res.json()) as { error: { code: string } }).error.code).toBe("TOKEN_READ_ONLY");
+      }
+
+      // Mint a persistent active token to verify disabling permanently revokes tokens across re-enable
+      await account.getByPlaceholder("Token name (e.g. Claude Desktop MCP)").fill("Persistent CLI");
+      const roToggle = account.getByLabel("Read-only");
+      if (await roToggle.isChecked()) await roToggle.uncheck();
+      await account.getByRole("button", { name: "Create Token" }).click();
+      await expect(account.getByText("Persistent CLI")).toBeVisible();
+      await expect(revealed).not.toHaveText(roToken);
+      const persistentToken = (await revealed.textContent())!.trim();
+      expect(
+        (await fetch(`${gated.baseURL}/api/decks`, { headers: { Authorization: `Bearer ${persistentToken}` } })).status,
+      ).toBe(200);
+
       // 6. Member rotates the password; only the new one signs in
       await account.getByPlaceholder("Current password").fill("Member-Permanent-Pass-2");
       await account.getByPlaceholder("New password (12+ chars)").fill("Member-Rotated-Pass-3");
@@ -89,15 +181,25 @@ gatedTest.describe("Account Security & Instance Administration", () => {
       await member.getByRole("button", { name: "Sign In" }).click();
       await expect(member.locator("#account-security-section")).toBeVisible();
 
-      // 7. Admin disables the member: the open session dies and sign-in explains why
+      // 7. Admin disables the member: the open session and tokens die, sign-in explains why,
+      // and re-enabling does NOT resurrect previously revoked personal API tokens.
       await page.reload();
       await admin.getByRole("button", { name: "Disable" }).click();
       await expect(admin.getByText(`(@${MEMBER.username} · member · disabled)`)).toBeVisible();
+      expect(
+        (await fetch(`${gated.baseURL}/api/decks`, { headers: { Authorization: `Bearer ${persistentToken}` } })).status,
+      ).toBe(401);
       await member.reload();
       await member.locator("#signin-identifier").fill(MEMBER.username);
       await member.locator("#signin-password").fill("Member-Rotated-Pass-3");
       await member.getByRole("button", { name: "Sign In" }).click();
       await expect(member.getByRole("alert")).toContainText("This account has been disabled");
+
+      await admin.getByRole("button", { name: "Enable", exact: true }).click();
+      await expect(admin.getByText(`(@${MEMBER.username} · member)`)).toBeVisible();
+      expect(
+        (await fetch(`${gated.baseURL}/api/decks`, { headers: { Authorization: `Bearer ${persistentToken}` } })).status,
+      ).toBe(401);
 
       // 8. Admin takes a verified backup and downloads a readable SQLite snapshot
       await admin.getByRole("button", { name: "Create Verified Backup" }).click();
