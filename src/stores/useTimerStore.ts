@@ -55,6 +55,7 @@ export interface TimerStoreState {
   setMode: (newMode: TimerMode) => void
   tick: () => void
   killPlant: () => void
+  reset: () => void
 }
 
 const useTimerStore = create<TimerStoreState>()(
@@ -169,6 +170,20 @@ const useTimerStore = create<TimerStoreState>()(
           plantState: 'dead',
           status: 'paused',
           endTime: null,
+        })
+      },
+
+      reset: () => {
+        set({
+          durations: POMODORO_DURATIONS,
+          isStrictMode: true,
+          mode: 'pomodoro',
+          status: 'idle',
+          timeLeft: POMODORO_DURATIONS.pomodoro,
+          endTime: null,
+          focusLost: false,
+          plantState: 'seed',
+          taskName: '',
         })
       },
     }),

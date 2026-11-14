@@ -7,6 +7,8 @@ import { create } from 'zustand'
 import { configApi } from '../utils/api'
 import type { AvailableModelsResponse, ModelGroup } from '../utils/api'
 import useKitStore from './useKitStore'
+import useCalcStore from './useCalcStore'
+import useTimerStore from './useTimerStore'
 
 export type ThemeMode = 'dark' | 'light'
 export type ToastType = 'success' | 'error' | 'info' | 'warning'
@@ -244,6 +246,12 @@ const useAppStore = create<AppStoreState>((set, get) => ({
     for (const timer of pendingActions.values()) clearTimeout(timer)
     pendingActions.clear()
     set({
+      chatOpen: {
+        chat: false,
+        guide: false,
+        builder: false,
+        study: false,
+      },
       nodes: [],
       edges: [],
       toasts: [],
@@ -254,6 +262,43 @@ const useAppStore = create<AppStoreState>((set, get) => ({
     })
   },
 }))
+
+/**
+ * Purges all authenticated user workspace state and user-scoped storage entries.
+ * Preserves UI theme and model display preferences (`toolbox_theme`, `toolbox_model`).
+ */
+export function clearClientUserData(): void {
+  useAppStore.getState().resetWorkspaceState()
+  useKitStore.getState().resetSessionData()
+  useCalcStore.getState().reset()
+  useTimerStore.getState().reset()
+
+  if (typeof window === 'undefined') return
+  try {
+    const exactLocalKeys = [
+      'toolbox_calc_state',
+      'toolbox_timer_settings',
+      'toolbox_chat_history',
+      'toolbox_chat_quote',
+    ]
+    for (const key of exactLocalKeys) {
+      window.localStorage.removeItem(key)
+    }
+    const dynamicLocalPrefixes = [
+      'toolbox_learning_sessions',
+      'toolbox_learning_current',
+    ]
+    for (let i = window.localStorage.length - 1; i >= 0; i -= 1) {
+      const key = window.localStorage.key(i)
+      if (key && dynamicLocalPrefixes.some((prefix) => key.startsWith(prefix))) {
+        window.localStorage.removeItem(key)
+      }
+    }
+    window.sessionStorage.removeItem('toolbox_chat_draft')
+  } catch {
+    // Ignore storage access errors in restricted browsing contexts
+  }
+}
 
 // Clear cross-Kit canvas/modal state whenever the active Kit changes.
 useKitStore.subscribe((state, prevState) => {
@@ -270,7 +315,7 @@ useKitStore.subscribe((state, prevState) => {
 // Clear sensitive/pending workspace state on session expiration or sign-out.
 if (typeof window !== 'undefined') {
   window.addEventListener('toolbox:unauthorized', () => {
-    useAppStore.getState().resetWorkspaceState()
+    clearClientUserData()
   })
 }
 

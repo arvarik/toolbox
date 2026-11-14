@@ -1,9 +1,24 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+const mermaidMocks = vi.hoisted(() => ({
+  initialize: vi.fn(),
+  render: vi.fn(async (id: string, chart: string) => ({
+    svg: `<svg id="${id}" data-len="${chart.length}"><text>Diagram</text></svg>`,
+  })),
+}))
+
+vi.mock('mermaid', () => ({
+  default: mermaidMocks,
+  ...mermaidMocks,
+}))
+
 import CommitModal from '../components/chat/CommitModal'
 import LearningChat from '../components/chat/LearningChat'
 import ChatPanel from '../components/shared/ChatPanel'
+import MarkdownRenderer from '../components/shared/MarkdownRenderer'
+import MermaidRenderer from '../components/shared/MermaidRenderer'
 import SearchDialog from '../components/shared/SearchDialog'
 import ChatPage from '../pages/ChatPage'
 import useAppStore from '../stores/appStore'
@@ -565,5 +580,99 @@ describe('ChatPanel, LearningChat, SSE Streaming, XSS Safety & Multi-Kit Isolati
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     expect((init.headers as Record<string, string>)['X-Toolbox-Kit']).toBe('distributed-rust')
     expect(await screen.findByText('Explain ownership transfer in Rust')).toBeInTheDocument()
+  })
+
+  it('renders a single AI loading bubble, removes drag listeners on unmount, secures Markdown links/images, and portals debounced Mermaid diagrams', async () => {
+    // 1. Single AI row transitions from skeleton -> streaming -> removed if stopped early
+    let pushChunk!: (chunk: string) => void
+    let finishStream!: () => void
+    const encoder = new TextEncoder()
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          pushChunk = (chunk: string) => controller.enqueue(encoder.encode(chunk))
+          finishStream = () => controller.close()
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+    })
+
+    const removeDocListenerSpy = vi.spyOn(document, 'removeEventListener')
+    const { container, unmount } = render(<ChatPanel page="guide" />)
+
+    // Start resize drag then unmount mid-drag -> listeners must detach cleanly
+    fireEvent.mouseDown(screen.getByTestId('chat-drag-handle'), { clientX: 500 })
+    fireEvent.change(screen.getByPlaceholderText('Ask a question...'), {
+      target: { value: 'Check single loading bubble' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }))
+
+    await waitFor(() => expect(screen.getAllByTestId('message-ai')).toHaveLength(1))
+    expect(screen.getAllByTestId('chat-loading')).toHaveLength(1)
+    expect(screen.getByTestId('message-ai').querySelector('[data-testid="chat-loading"]')).not.toBeNull()
+
+    await act(async () => {
+      pushChunk('data: {"text":"First token"}\n\n')
+    })
+    await waitFor(() => expect(screen.getByText('First token')).toBeInTheDocument())
+    expect(screen.queryByTestId('chat-loading')).toBeNull()
+    expect(screen.getAllByTestId('message-ai')).toHaveLength(1)
+
+    await act(async () => {
+      pushChunk('data: [DONE]\n\n')
+      finishStream()
+    })
+
+    unmount()
+    expect(
+      removeDocListenerSpy.mock.calls.filter(([type]) => type === 'mousemove').length,
+    ).toBeGreaterThanOrEqual(1)
+
+    // 2. MarkdownRenderer safe a & img + memo stability
+    const md = [
+      '[Safe Ext](https://docs.example.com/a)',
+      '[Local](/guide)',
+      '![Tracker](https://tracker.example.com/pixel.png)',
+      '![Inline](data:image/png;base64,iVBORw0KGgo=)',
+      '![LocalImg](/assets/arch.png)',
+    ].join('\n\n')
+    const mdView = render(<MarkdownRenderer content={md} />)
+    const extLink = screen.getByRole('link', { name: 'Safe Ext' })
+    expect(extLink).toHaveAttribute('target', '_blank')
+    expect(extLink).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(screen.getByRole('link', { name: 'Local' })).not.toHaveAttribute('target')
+    expect(mdView.container.querySelector('img[src*="tracker.example"]')).toBeNull()
+    expect(screen.getByTestId('external-image-link')).toHaveAttribute('rel', 'noopener noreferrer')
+    expect(mdView.container.querySelector('img[src^="data:image/png"]')).not.toBeNull()
+    expect(mdView.container.querySelector('img[src="/assets/arch.png"]')).not.toBeNull()
+    mdView.unmount()
+
+    // 3. MermaidRenderer debounces rapid edits, initializes once per theme, and portals fullscreen to document.body
+    mermaidMocks.initialize.mockClear()
+    mermaidMocks.render.mockClear()
+
+    const transformParent = document.createElement('div')
+    transformParent.style.transform = 'translateX(10px)'
+    document.body.appendChild(transformParent)
+
+    const { rerender, unmount: unmountMermaid } = render(
+      <MermaidRenderer chart={'graph TD\n  A-->'} />,
+      { container: transformParent },
+    )
+    rerender(<MermaidRenderer chart={'graph TD\n  A-->B'} />)
+    rerender(<MermaidRenderer chart={'graph TD\n  A-->B\n  B-->C'} />)
+
+    await waitFor(() => expect(mermaidMocks.render).toHaveBeenCalledTimes(1))
+    expect(mermaidMocks.initialize).toHaveBeenCalledTimes(1)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Diagram' }))
+    const portaled = document.body.querySelector(':scope > .mermaid-wrapper.expanded')
+    expect(portaled).not.toBeNull()
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(document.body.querySelector(':scope > .mermaid-wrapper.expanded')).toBeNull()
+
+    unmountMermaid()
+    transformParent.remove()
+    expect(container).toBeTruthy()
   })
 })

@@ -377,9 +377,23 @@ export function auditArchitecture(
   }
 
   // 3. Single Point of Failure (SPOF) in Compute Tier
-  const appServers = compute.filter(
-    (n) => !['load-balancer', 'api-gateway', 'cdn'].includes(n.data?.icon ?? ''),
-  )
+  const nonAppServerIcons = new Set([
+    'split',
+    'door-open',
+    'globe',
+    'mail',
+    'radio',
+    'load-balancer',
+    'api-gateway',
+    'cdn',
+  ])
+  const nonAppServerNameRe =
+    /\b(load balancer|api gateway|gateway|cdn|queue|bus|stream)\b/i
+  const appServers = compute.filter((n) => {
+    const icon = n.data?.icon ?? ''
+    const name = n.data?.name ?? ''
+    return !nonAppServerIcons.has(icon) && !nonAppServerNameRe.test(name)
+  })
   if (appServers.length === 1 && !hasLoadBalancer) {
     findings.push({
       id: 'compute-spof',

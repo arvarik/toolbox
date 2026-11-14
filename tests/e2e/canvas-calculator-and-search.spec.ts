@@ -271,4 +271,104 @@ test.describe("Architecture Canvas, BotE Calculator & Global Search", () => {
       expect(pageErrors).toEqual([]);
     },
   );
+
+  test("flags single-app-server compute SPOF, recognizes URL Shortener rate limiter, and enforces ChatPanel streaming & shortcut guards", async ({
+    page,
+    instance,
+  }) => {
+    const pageErrors = collectPageErrors(page);
+
+    // 1. Seed Client -> API Gateway -> 1 App Server board to verify SPOF & circuit-breaker fix
+    const spofBoard = await instance.api<{ id: string }>(
+      "POST",
+      "/boards",
+      {
+        name: "Gateway SPOF Topology",
+        data: {
+          nodes: [
+            { id: "c1", type: "arch", name: "Web Client", category: "Clients", icon: "monitor", x: 80, y: 120 },
+            { id: "gw1", type: "arch", name: "API Gateway", category: "Compute", icon: "door-open", x: 280, y: 120 },
+            { id: "app1", type: "arch", name: "Core Service", category: "Compute", icon: "box", x: 480, y: 120 },
+          ],
+          edges: [
+            { id: "e1", source: "c1", target: "gw1" },
+            { id: "e2", source: "gw1", target: "app1" },
+          ],
+        },
+      },
+      { "X-Toolbox-Kit": "system-design" },
+    );
+
+    await page.goto(`/k/system-design/builder?board=${spofBoard.id}`);
+    await expect(page.locator("#builder-canvas .builder-node")).toHaveCount(3);
+    await page.locator("#builder-audit-btn").click();
+    await expect(page.getByText("Single Point of Failure (Compute)")).toBeVisible();
+    await expect(page.getByText("No Circuit Breaker Protection")).toHaveCount(0);
+    await page.getByRole("button", { name: /Close/i }).last().click();
+
+    // 2. Load URL Shortener template -> verify Rate Limiter is counted under Resiliency
+    await page.locator("#template-btn").click();
+    await page.locator("#template-gallery .template-card", { hasText: "URL Shortener" }).click();
+    await page.locator("#builder-audit-btn").click();
+    await expect(
+      page.getByText("Traffic Protection: Rate limiter guards against abuse and burst exhaustion."),
+    ).toBeVisible();
+    await expect(page.getByText("Missing Ingress Rate Limiter")).toHaveCount(0);
+    await page.getByRole("button", { name: /Close/i }).last().click();
+
+    // 3. Control+Shift+J must NOT toggle ChatPanel, while Control+j toggles it open
+    await page.keyboard.press("Control+Shift+J");
+    await expect(page.getByTestId("chat-panel-container")).toBeHidden();
+
+    await page.keyboard.press("Control+j");
+    const chatPanel = page.getByTestId("chat-panel-container");
+    await expect(chatPanel).toBeVisible();
+
+    // 4. Verify single loading bubble before first token and safe external link/image rendering
+    let releaseStream!: () => void;
+    const streamGate = new Promise<void>((resolve) => {
+      releaseStream = resolve;
+    });
+    await page.route("**/api/chat/stream", async (route) => {
+      await streamGate;
+      const body = [
+        'data: {"text":"Read [External Docs](https://example.com/guide) and ![Tracker](https://tracker.example/pixel.png)"}\n\n',
+        "data: [DONE]\n\n",
+      ].join("");
+      await route.fulfill({
+        status: 200,
+        headers: { "Content-Type": "text/event-stream; charset=utf-8" },
+        body,
+      });
+    });
+
+    await chatPanel.locator("#chat-input-builder").fill("Check streaming bubble and safety");
+    await chatPanel.getByRole("button", { name: "Send message" }).click();
+
+    // While stream hasn't delivered first token: exactly 1 AI row containing chat-loading
+    await expect(chatPanel.getByTestId("message-ai")).toHaveCount(1);
+    await expect(chatPanel.getByTestId("chat-loading")).toHaveCount(1);
+    await expect(
+      chatPanel.getByTestId("message-ai").getByTestId("chat-loading"),
+    ).toBeVisible();
+
+    releaseStream();
+
+    await expect(chatPanel.getByTestId("chat-loading")).toHaveCount(0);
+    await expect(chatPanel.getByTestId("message-ai")).toHaveCount(1);
+
+    const extLink = chatPanel.getByRole("link", { name: "External Docs" });
+    await expect(extLink).toHaveAttribute("target", "_blank");
+    await expect(extLink).toHaveAttribute("rel", "noopener noreferrer");
+
+    await expect(
+      chatPanel.locator('img[src*="tracker.example"]'),
+    ).toHaveCount(0);
+    await expect(chatPanel.getByTestId("external-image-link")).toHaveAttribute(
+      "rel",
+      "noopener noreferrer",
+    );
+
+    expect(pageErrors).toEqual([]);
+  });
 });

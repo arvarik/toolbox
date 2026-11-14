@@ -159,7 +159,7 @@ export const ARCHITECTURE_TEMPLATES: ArchitectureTemplate[] = [
       { id: 'tpl-url-4', name: 'Shortener API', icon: 'box', category: 'Compute', x: 440, y: 250 },
       { id: 'tpl-url-5', name: 'Cache (Redis)', icon: 'zap', category: 'Storage', x: 120, y: 370 },
       { id: 'tpl-url-6', name: 'SQL Database', icon: 'database', category: 'Storage', x: 320, y: 370 },
-      { id: 'tpl-url-7', name: 'Rate Limiter', icon: 'shield', category: 'Observability', x: 520, y: 370 },
+      { id: 'tpl-url-7', name: 'Rate Limiter', icon: 'shield', category: 'Resiliency', x: 520, y: 370 },
       { id: 'tpl-url-8', name: 'Metrics Collector', icon: 'bar-chart', category: 'Observability', x: 320, y: 480 },
     ],
     edges: [

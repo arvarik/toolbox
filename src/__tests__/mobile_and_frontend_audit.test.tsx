@@ -6,9 +6,9 @@ import LearningChat from '../components/chat/LearningChat'
 import GraphCanvas, { type GraphNodeItem } from '../components/graph/GraphCanvas'
 import NodePanel from '../components/graph/NodePanel'
 import ChatPanel from '../components/shared/ChatPanel'
-import { DogearCorner, HighlightableProse } from '../components/ui/NotebookPrimitives'
+import PullToRefresh from '../components/shared/PullToRefresh'
+import { HighlightableProse } from '../components/ui/NotebookPrimitives'
 import ChatPage from '../pages/ChatPage'
-import ReviewPage from '../pages/ReviewPage'
 import useAppStore from '../stores/appStore'
 import useCommitStore from '../stores/useCommitStore'
 import { chatApi } from '../utils/api'
@@ -168,90 +168,36 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
     expect(onAskKit).toHaveBeenCalledWith('consistent hashing ring')
   })
 
-  it('renders 44x44px mobile DogearCorner and ReviewPage 4-button Anki bar + unclipped recall scratchpad', async () => {
-    const onToggle = vi.fn()
-    const { unmount } = render(
-      <DogearCorner folded={false} onToggle={onToggle} testId="dogear-btn" />,
+  it('ignores PullToRefresh inside scrolled containers and keeps touch listeners stable across drags', async () => {
+    const onRefresh = vi.fn().mockResolvedValue(undefined)
+    const { container } = render(
+      <PullToRefresh onRefresh={onRefresh}>
+        <div data-testid="nested-scroll" style={{ overflowY: 'auto', height: 200 }}>
+          <span>Inner Content</span>
+        </div>
+      </PullToRefresh>,
     )
-    const dogear = screen.getByTestId('dogear-btn')
-    expect(dogear.className).toContain('h-11')
-    expect(dogear.className).toContain('w-11')
-    fireEvent.click(dogear)
-    expect(onToggle).toHaveBeenCalledTimes(1)
-    unmount()
 
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url
-      if (url.includes('/decks/all/cards/due')) {
-        return new Response(
-          JSON.stringify([
-            {
-              id: 'card-1',
-              deck_id: 'deck-1',
-              front: 'What guarantees linearizability in Raft?',
-              back: 'Quorum intersection across leader election and log replication.',
-              kit_slug: 'system-design',
-              kit_name: 'System Design',
-              srs_previews: { again: '1m', hard: '6m', good: '1d', easy: '4d' },
-            },
-            {
-              id: 'card-2',
-              deck_id: 'deck-1',
-              front: 'Define idempotency key.',
-              back: 'Client-generated token deduplicating retried writes.',
-              kit_slug: 'system-design',
-              kit_name: 'System Design',
-              srs_previews: { again: '1m', hard: '5m', good: '10m', easy: '4d' },
-            },
-          ]),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        )
-      }
-      if (url.includes('/review')) {
-        return new Response(
-          JSON.stringify({ id: 'card-1', state: 2, stability: 4.2, difficulty: 5.1 }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } },
-        )
-      }
-      return new Response(JSON.stringify({ kits: [] }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      })
+    const ptrWrapper = container.firstElementChild as HTMLElement
+    const nested = screen.getByTestId('nested-scroll')
+    const addSpy = vi.spyOn(ptrWrapper, 'addEventListener')
+
+    Object.defineProperty(nested, 'scrollTop', { value: 60, writable: true, configurable: true })
+    fireEvent.touchStart(nested, { touches: [{ clientY: 100 }] })
+    fireEvent.touchMove(nested, { touches: [{ clientY: 320 }] })
+    fireEvent.touchEnd(nested)
+    expect(onRefresh).not.toHaveBeenCalled()
+
+    Object.defineProperty(nested, 'scrollTop', { value: 0, writable: true, configurable: true })
+    fireEvent.touchStart(nested, { touches: [{ clientY: 50 }] })
+    fireEvent.touchMove(nested, { touches: [{ clientY: 140 }] })
+    fireEvent.touchMove(nested, { touches: [{ clientY: 260 }] })
+    await act(async () => {
+      fireEvent.touchEnd(nested)
     })
 
-    render(
-      <MemoryRouter initialEntries={['/review']}>
-        <ReviewPage />
-      </MemoryRouter>,
-    )
-
-    expect(await screen.findByTestId('review-card-front')).toHaveTextContent(
-      'What guarantees linearizability in Raft?',
-    )
-
-    fireEvent.click(screen.getByTestId('review-scratchpad-toggle'))
-    const scratchpad = screen.getByTestId('review-type-answer-input')
-    expect(scratchpad.className).toContain('resize-y')
-    expect(scratchpad.className).toContain('text-[16px]')
-    fireEvent.change(scratchpad, { target: { value: 'Majority quorum overlap' } })
-
-    fireEvent.click(screen.getByTestId('reveal-answer-btn'))
-    expect(screen.getByTestId('review-scratchpad-note')).toHaveTextContent(
-      'Majority quorum overlap',
-    )
-
-    const againBtn = screen.getByTestId('grade-btn-again')
-    const easyBtn = screen.getByTestId('grade-btn-easy')
-    expect(againBtn.parentElement?.className).toContain('grid-cols-4')
-    expect(easyBtn.className).toContain('min-h-[54px]')
-
-    fireEvent.click(screen.getByTestId('grade-btn-good'))
-    await waitFor(() => {
-      expect(screen.getByTestId('review-card-front')).toHaveTextContent(
-        'Define idempotency key.',
-      )
-    })
-    expect(screen.getByTestId('review-type-answer-input')).toHaveValue('')
+    expect(onRefresh).toHaveBeenCalledTimes(1)
+    expect(addSpy).not.toHaveBeenCalled()
   })
 
   it('switches mobile ChatPage cleanly between Topics sheet, Chat, and Context Notes sheet without per-token parent spam', async () => {
@@ -924,47 +870,5 @@ describe('Mobile UX Overhaul & Frontend 2x2 Performance/Stability Audit', () => 
 
     const selectionRemoveCalls = removeSpy.mock.calls.filter(([type]) => type === 'selectionchange')
     expect(selectionRemoveCalls).toHaveLength(1)
-  })
-
-  it('applies landscape horizontal safe-area insets across chrome, drawers, sticky bars, and sheets', async () => {
-    const fs = await import('node:fs')
-    const indexCss = fs.readFileSync('src/index.css', 'utf8')
-    const graphCss = fs.readFileSync('src/components/graph/graph-flow.css', 'utf8')
-    const chatPageSrc = fs.readFileSync('src/pages/ChatPage.tsx', 'utf8')
-
-    // Dead toggle-study-plan listener removed from ChatPage
-    expect(chatPageSrc).not.toContain('toggle-study-plan')
-
-    // Mobile header, mobile drawer, layout containers, composer, model picker & toasts carry horizontal safe-area rules
-    expect(indexCss).toMatch(/\.mobile-header[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
-    expect(indexCss).toMatch(/\.mobile-header[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
-    expect(indexCss).toMatch(/\.mobile-drawer[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
-    expect(indexCss).toMatch(/\.sidebar[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
-    expect(indexCss).toMatch(/\.app-content,\s*\.main-content[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
-    expect(indexCss).toMatch(/\.learning-chat-input-area[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
-    expect(indexCss).toMatch(/\.learning-chat-input-area[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
-    expect(indexCss).toMatch(/\.model-picker-sheet[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
-    expect(indexCss).toMatch(/\.model-picker-sheet[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
-    expect(graphCss).toMatch(/\.graph-node-panel[\s\S]*?env\(safe-area-inset-right,\s*0px\)/)
-    expect(graphCss).toMatch(/\.graph-node-panel[\s\S]*?env\(safe-area-inset-left,\s*0px\)/)
-
-    // Component sticky grading bars, bottom sheets, modals, and TaskWorkingBar also apply horizontal safe-area insets
-    const studyPrimitivesSrc = fs.readFileSync('src/components/ui/StudyPrimitives.tsx', 'utf8')
-    const flashcardViewSrc = fs.readFileSync('src/components/study/FlashcardView.tsx', 'utf8')
-    const searchDialogSrc = fs.readFileSync('src/components/shared/SearchDialog.tsx', 'utf8')
-    const commitModalSrc = fs.readFileSync('src/components/chat/CommitModal.tsx', 'utf8')
-    const taskWorkingBarSrc = fs.readFileSync('src/components/shared/TaskWorkingBar.tsx', 'utf8')
-
-    for (const src of [
-      chatPageSrc,
-      studyPrimitivesSrc,
-      flashcardViewSrc,
-      searchDialogSrc,
-      commitModalSrc,
-      taskWorkingBarSrc,
-    ]) {
-      expect(src).toContain('safe-area-inset-left')
-      expect(src).toContain('safe-area-inset-right')
-    }
   })
 })

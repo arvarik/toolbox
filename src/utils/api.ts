@@ -158,6 +158,7 @@ export interface SharedKitDetailEntry extends SharedKitListEntry {
 interface RequestOptions extends Omit<RequestInit, 'body' | 'headers'> {
   body?: unknown
   headers?: Record<string, string>
+  kitSlug?: string | null
 }
 
 interface ErrorPayload {
@@ -172,11 +173,23 @@ interface ErrorPayload {
 /**
  * Resolves the active Kit header (`X-Toolbox-Kit`) synchronously from the
  * `/k/:slug` URL pathname first, falling back to `useKitStore`'s synced global slug.
+ * When `kitSlugOverride` is provided (including `null` for the default workspace),
+ * it takes precedence so debounced/in-flight saves always hit the originating Kit.
  */
-export function getActiveKitHeaders(): Record<string, string> {
+export function getActiveKitHeaders(kitSlugOverride?: string | null): Record<string, string> {
+  if (kitSlugOverride !== undefined) {
+    return kitSlugOverride ? { 'X-Toolbox-Kit': kitSlugOverride } : {}
+  }
   if (typeof window !== 'undefined' && window.location?.pathname) {
     const match = window.location.pathname.match(/^\/k\/([^/]+)/)
-    if (match) return { 'X-Toolbox-Kit': decodeURIComponent(match[1]) }
+    if (match) {
+      try {
+        const decoded = decodeURIComponent(match[1])
+        return decoded ? { 'X-Toolbox-Kit': decoded } : {}
+      } catch {
+        return {}
+      }
+    }
   }
   const slug = (globalThis as { __toolboxActiveKitSlug?: unknown }).__toolboxActiveKitSlug
   return typeof slug === 'string' && slug ? { 'X-Toolbox-Kit': slug } : {}
@@ -195,7 +208,7 @@ export async function request<T = unknown>(
 
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-    ...getActiveKitHeaders(),
+    ...getActiveKitHeaders(options.kitSlug),
     ...(options.headers ?? {}),
   }
 
@@ -208,7 +221,12 @@ export async function request<T = unknown>(
     serializedBody = JSON.stringify(options.body)
   }
 
-  const { body: _rawBody, headers: _rawHeaders, ...restOptions } = options
+  const {
+    body: _rawBody,
+    headers: _rawHeaders,
+    kitSlug: _rawKitSlug,
+    ...restOptions
+  } = options
   const config: RequestInit = {
     ...restOptions,
     headers,
@@ -263,61 +281,76 @@ export const endpointsApi = {
   create: (data: { name: string; baseUrl: string; apiKey?: string }) =>
     request('/endpoints', { method: 'POST', body: data }),
   update: (id: string, data: object) =>
-    request(`/endpoints/${id}`, { method: 'PUT', body: data }),
-  delete: (id: string) => request(`/endpoints/${id}`, { method: 'DELETE' }),
+    request(`/endpoints/${encodeURIComponent(id)}`, { method: 'PUT', body: data }),
+  delete: (id: string) => request(`/endpoints/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   test: (data: { baseUrl: string; apiKey?: string; endpointId?: string }) =>
     request<{ ok: boolean; modelCount?: number; message?: string }>('/endpoints/test', {
       method: 'POST',
       body: data,
     }),
   refreshModels: (id: string) =>
-    request(`/endpoints/${id}/refresh-models`, { method: 'POST' }),
+    request(`/endpoints/${encodeURIComponent(id)}/refresh-models`, { method: 'POST' }),
 }
 
 /* ---- Decks ---- */
 export const decksApi = {
   list: () => request<DeckRecord[]>('/decks'),
-  get: (id: string) => request<DeckRecord>(`/decks/${id}`),
+  get: (id: string) => request<DeckRecord>(`/decks/${encodeURIComponent(id)}`),
   create: (data: { name: string; description?: string; tags?: string; color_index?: number }) =>
     request<DeckRecord>('/decks', { method: 'POST', body: data }),
   update: (id: string, data: object) =>
-    request<DeckRecord>(`/decks/${id}`, { method: 'PUT', body: data }),
-  delete: (id: string) => request(`/decks/${id}`, { method: 'DELETE' }),
+    request<DeckRecord>(`/decks/${encodeURIComponent(id)}`, { method: 'PUT', body: data }),
+  delete: (id: string) => request(`/decks/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   updateSettings: (id: string, settings: object) =>
-    request(`/decks/${id}/settings`, { method: 'PUT', body: settings }),
+    request(`/decks/${encodeURIComponent(id)}/settings`, { method: 'PUT', body: settings }),
 }
 
 /* ---- Flashcards ---- */
 export const flashcardsApi = {
-  due: (deckId: string) => request<FlashcardRecord[]>(`/decks/${deckId}/cards/due`),
+  due: (deckId: string) =>
+    request<FlashcardRecord[]>(`/decks/${encodeURIComponent(deckId)}/cards/due`),
   dueAll: (kit?: string) =>
     request<FlashcardRecord[]>(
       kit ? `/decks/all/cards/due?kit=${encodeURIComponent(kit)}` : '/decks/all/cards/due',
     ),
   create: (deckId: string, data: object) =>
-    request<FlashcardRecord>(`/decks/${deckId}/cards`, { method: 'POST', body: data }),
-  update: (deckId: string, cardId: string, data: object) =>
-    request<FlashcardRecord>(`/decks/${deckId}/cards/${cardId}`, {
-      method: 'PUT',
+    request<FlashcardRecord>(`/decks/${encodeURIComponent(deckId)}/cards`, {
+      method: 'POST',
       body: data,
     }),
+  update: (deckId: string, cardId: string, data: object) =>
+    request<FlashcardRecord>(
+      `/decks/${encodeURIComponent(deckId)}/cards/${encodeURIComponent(cardId)}`,
+      {
+        method: 'PUT',
+        body: data,
+      },
+    ),
   delete: (deckId: string, cardId: string) =>
-    request(`/decks/${deckId}/cards/${cardId}`, { method: 'DELETE' }),
+    request(`/decks/${encodeURIComponent(deckId)}/cards/${encodeURIComponent(cardId)}`, {
+      method: 'DELETE',
+    }),
   review: (
     deckId: string,
     cardId: string,
     quality: number,
     confidence?: string | number | null,
   ) =>
-    request(`/decks/${deckId}/cards/${cardId}/review`, {
-      method: 'PUT',
-      body: { quality, confidence },
-    }),
+    request(
+      `/decks/${encodeURIComponent(deckId)}/cards/${encodeURIComponent(cardId)}/review`,
+      {
+        method: 'PUT',
+        body: { quality, confidence },
+      },
+    ),
   checkDuplicates: (deckId: string, cards: Array<{ front: string; back: string }>) =>
-    request<{ results?: DuplicateMatchItem[] }>(`/decks/${deckId}/cards/check-duplicates`, {
-      method: 'POST',
-      body: { cards },
-    }),
+    request<{ results?: DuplicateMatchItem[] }>(
+      `/decks/${encodeURIComponent(deckId)}/cards/check-duplicates`,
+      {
+        method: 'POST',
+        body: { cards },
+      },
+    ),
 }
 
 /* ---- Study Sessions ---- */
@@ -327,15 +360,28 @@ export const studySessionsApi = {
 
 /* ---- Boards ---- */
 export const boardsApi = {
-  list: <T = Record<string, unknown>>() => request<T[]>('/boards'),
-  get: <T = Record<string, unknown>>(id: string) => request<T>(`/boards/${id}`),
-  create: <T = Record<string, unknown>>(data: object) =>
-    request<T>('/boards', { method: 'POST', body: data }),
-  update: <T = Record<string, unknown>>(id: string, data: object) =>
-    request<T>(`/boards/${id}`, { method: 'PUT', body: data }),
-  delete: (id: string) => request(`/boards/${id}`, { method: 'DELETE' }),
+  list: <T = Record<string, unknown>>(kitSlug?: string | null) =>
+    request<T[]>('/boards', kitSlug !== undefined ? { kitSlug } : {}),
+  get: <T = Record<string, unknown>>(id: string, kitSlug?: string | null) =>
+    request<T>(
+      `/boards/${encodeURIComponent(id)}`,
+      kitSlug !== undefined ? { kitSlug } : {},
+    ),
+  create: <T = Record<string, unknown>>(data: object, kitSlug?: string | null) =>
+    request<T>('/boards', {
+      method: 'POST',
+      body: data,
+      ...(kitSlug !== undefined ? { kitSlug } : {}),
+    }),
+  update: <T = Record<string, unknown>>(id: string, data: object, kitSlug?: string | null) =>
+    request<T>(`/boards/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: data,
+      ...(kitSlug !== undefined ? { kitSlug } : {}),
+    }),
+  delete: (id: string) => request(`/boards/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   rename: (id: string, name: string) =>
-    request(`/boards/${id}/rename`, { method: 'PATCH', body: { name } }),
+    request(`/boards/${encodeURIComponent(id)}/rename`, { method: 'PATCH', body: { name } }),
   reorder: (ids: string[]) =>
     request('/boards/reorder', { method: 'PATCH', body: { ids } }),
 }
@@ -484,7 +530,7 @@ export const chatApi = {
   saveSession: (session: object) =>
     request('/chat/sessions', { method: 'POST', body: { session } }),
   deleteSession: (id: string) =>
-    request(`/chat/sessions/${id}`, { method: 'DELETE' }),
+    request(`/chat/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   migrateBulk: (sessions: object) =>
     request('/chat/sessions/bulk', { method: 'POST', body: { sessions } }),
 }
@@ -524,21 +570,40 @@ export interface GuideResumeRef {
 export const guideContentApi = {
   getForTopic: (pillarId: string, topicId: string) =>
     request<Record<string, { content: string; committedAt?: string | null }>>(
-      `/guide-content/${pillarId}/${topicId}`,
+      `/guide-content/${encodeURIComponent(pillarId)}/${encodeURIComponent(topicId)}`,
     ),
   getSection: (pillarId: string, topicId: string, sectionId: string) =>
     request<{ content: string; committedAt?: string | null }>(
-      `/guide-content/${pillarId}/${topicId}/${sectionId}`,
+      `/guide-content/${encodeURIComponent(pillarId)}/${encodeURIComponent(topicId)}/${encodeURIComponent(sectionId)}`,
     ),
-  upsert: (pillarId: string, topicId: string, sectionId: string, content: string) =>
-    request(`/guide-content/${pillarId}/${topicId}/${sectionId}`, {
-      method: 'PUT',
-      body: { content },
-    }),
-  clear: (pillarId: string, topicId: string, sectionId: string) =>
-    request(`/guide-content/${pillarId}/${topicId}/${sectionId}`, {
-      method: 'DELETE',
-    }),
+  upsert: (
+    pillarId: string,
+    topicId: string,
+    sectionId: string,
+    content: string,
+    kitSlug?: string | null,
+  ) =>
+    request(
+      `/guide-content/${encodeURIComponent(pillarId)}/${encodeURIComponent(topicId)}/${encodeURIComponent(sectionId)}`,
+      {
+        method: 'PUT',
+        body: { content },
+        ...(kitSlug !== undefined ? { kitSlug } : {}),
+      },
+    ),
+  clear: (
+    pillarId: string,
+    topicId: string,
+    sectionId: string,
+    kitSlug?: string | null,
+  ) =>
+    request(
+      `/guide-content/${encodeURIComponent(pillarId)}/${encodeURIComponent(topicId)}/${encodeURIComponent(sectionId)}`,
+      {
+        method: 'DELETE',
+        ...(kitSlug !== undefined ? { kitSlug } : {}),
+      },
+    ),
   progress: () => request<Record<string, boolean>>('/guide-content/progress'),
   exportUrl: () => `${API_BASE}/guide-content/export`,
   listDogears: () => request<GuideDogearItem[]>('/guide-content/dogears'),
@@ -622,11 +687,12 @@ export const searchApi = {
 /* ---- Knowledge Graph ---- */
 export const graphApi = {
   get: <T = unknown>() => request<T>('/graph'),
-  getNode: <T = unknown>(id: string) => request<T>(`/graph/nodes/${id}`),
+  getNode: <T = unknown>(id: string) =>
+    request<T>(`/graph/nodes/${encodeURIComponent(id)}`),
   nodeSession: (id: string) =>
-    request(`/graph/nodes/${id}/session`, { method: 'POST' }),
+    request(`/graph/nodes/${encodeURIComponent(id)}/session`, { method: 'POST' }),
   trackSession: (id: string) =>
-    request(`/graph/tracks/${id}/session`, { method: 'POST' }),
+    request(`/graph/tracks/${encodeURIComponent(id)}/session`, { method: 'POST' }),
 }
 
 /* ---- BotE Calculator ---- */
@@ -700,6 +766,13 @@ export const kitsApi = {
       const body = (await res
         .json()
         .catch(() => ({ message: res.statusText }))) as ErrorPayload
+      if (res.status === 401 && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('toolbox:unauthorized', {
+            detail: { code: body?.error?.code },
+          }),
+        )
+      }
       const msg =
         body?.error?.message || body?.message || `Export failed (${res.status})`
       throw new ApiError(msg, res.status, body?.error?.code, body?.error?.details)

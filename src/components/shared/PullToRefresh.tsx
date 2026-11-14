@@ -16,6 +16,11 @@ export default function PullToRefresh({
   const [pullDistance, setPullDistance] = useState(0)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const startY = useRef(0)
+  const pullDistanceRef = useRef(0)
+  const isRefreshingRef = useRef(false)
+  const isPullingRef = useRef(false)
+  const onRefreshRef = useRef(onRefresh)
+  onRefreshRef.current = onRefresh
   const contentRef = useRef<HTMLDivElement | null>(null)
 
   const MAX_PULL = 120
@@ -26,31 +31,61 @@ export default function PullToRefresh({
     const el = contentRef.current
     if (!el) return
 
+    const hasScrolledOffset = (target: EventTarget | null): boolean => {
+      if (window.scrollY > 0) return true
+      if ((document.scrollingElement?.scrollTop ?? 0) > 0) return true
+      let node = target instanceof Element ? target : null
+      while (node) {
+        if (node.scrollTop > 0) return true
+        node = node.parentElement
+      }
+      return false
+    }
+
     const handleTouchStart = (e: TouchEvent) => {
-      if (window.scrollY > 0 || isRefreshing || !e.touches[0]) return
+      if (isRefreshingRef.current || hasScrolledOffset(e.target) || !e.touches[0]) {
+        isPullingRef.current = false
+        return
+      }
+      isPullingRef.current = true
       startY.current = e.touches[0].clientY
     }
 
     const handleTouchMove = (e: TouchEvent) => {
-      if (window.scrollY > 0 || isRefreshing || !e.touches[0]) return
+      if (!isPullingRef.current || isRefreshingRef.current || !e.touches[0]) return
+      if (hasScrolledOffset(e.target)) {
+        isPullingRef.current = false
+        pullDistanceRef.current = 0
+        setPullDistance(0)
+        return
+      }
       const dist = e.touches[0].clientY - startY.current
       if (dist > 0) {
         if (e.cancelable) e.preventDefault()
-        setPullDistance(Math.min(dist * 0.4, MAX_PULL))
+        const nextPull = Math.min(dist * 0.4, MAX_PULL)
+        pullDistanceRef.current = nextPull
+        setPullDistance(nextPull)
       }
     }
 
     const handleTouchEnd = async () => {
-      if (pullDistance >= THRESHOLD && !isRefreshing) {
+      if (!isPullingRef.current) return
+      isPullingRef.current = false
+      if (pullDistanceRef.current >= THRESHOLD && !isRefreshingRef.current) {
+        isRefreshingRef.current = true
         setIsRefreshing(true)
+        pullDistanceRef.current = THRESHOLD
         setPullDistance(THRESHOLD)
         try {
-          await onRefresh()
+          await onRefreshRef.current()
         } finally {
+          isRefreshingRef.current = false
           setIsRefreshing(false)
+          pullDistanceRef.current = 0
           setPullDistance(0)
         }
       } else {
+        pullDistanceRef.current = 0
         setPullDistance(0)
       }
     }
@@ -58,13 +93,15 @@ export default function PullToRefresh({
     el.addEventListener('touchstart', handleTouchStart, { passive: true })
     el.addEventListener('touchmove', handleTouchMove, { passive: false })
     el.addEventListener('touchend', handleTouchEnd)
+    el.addEventListener('touchcancel', handleTouchEnd)
 
     return () => {
       el.removeEventListener('touchstart', handleTouchStart)
       el.removeEventListener('touchmove', handleTouchMove)
       el.removeEventListener('touchend', handleTouchEnd)
+      el.removeEventListener('touchcancel', handleTouchEnd)
     }
-  }, [isMobile, isRefreshing, pullDistance, onRefresh])
+  }, [isMobile])
 
   if (!isMobile) return <>{children}</>
 

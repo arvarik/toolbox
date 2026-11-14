@@ -144,6 +144,13 @@ export default function BlueprintShell({
   const [isGeneratingCards, setIsGeneratingCards] = useState(false)
   const [pendingHighlightIdForCard, setPendingHighlightIdForCard] = useState<string | null>(null)
   const userInteractedContextRef = useRef<string>('')
+  const contextKeyRef = useRef(contextKey)
+  contextKeyRef.current = contextKey
+  const editingContextRef = useRef<{
+    sectionId: string
+    kitSlug: string | null
+    contextKey: string
+  } | null>(null)
 
   // Reset expanded/edit state when Kit, pillar, or topic changes
   if (contextKey !== prevContextKey) {
@@ -445,27 +452,47 @@ export default function BlueprintShell({
 
   const startEdit = (sectionId: string) => {
     const existing = sectionContent[sectionId]?.content || ''
+    editingContextRef.current = {
+      sectionId,
+      kitSlug: kitSlug ?? null,
+      contextKey,
+    }
     setEditDraft(existing)
     setEditingSection(sectionId)
     recordSectionResume(sectionId)
   }
 
   const cancelEdit = () => {
+    editingContextRef.current = null
     setEditingSection(null)
     setEditDraft('')
   }
 
   const saveEdit = async (sectionId: string) => {
     if (!pillarId || !topicId) return
+    const captured =
+      editingContextRef.current?.sectionId === sectionId
+        ? editingContextRef.current
+        : { sectionId, kitSlug: kitSlug ?? null, contextKey }
+    const draftToSave = editDraft
     setIsSaving(true)
     try {
-      await guideContentApi.upsert(pillarId, topicId, sectionId, editDraft)
-      setSectionContent((prev) => ({
-        ...prev,
-        [sectionId]: { content: editDraft, committedAt: new Date().toISOString() },
-      }))
-      setEditingSection(null)
-      setEditDraft('')
+      await guideContentApi.upsert(
+        pillarId,
+        topicId,
+        sectionId,
+        draftToSave,
+        captured.kitSlug,
+      )
+      if (contextKeyRef.current === captured.contextKey) {
+        setSectionContent((prev) => ({
+          ...prev,
+          [sectionId]: { content: draftToSave, committedAt: new Date().toISOString() },
+        }))
+        setEditingSection(null)
+        setEditDraft('')
+        editingContextRef.current = null
+      }
       window.dispatchEvent(new Event('guide-progress-updated'))
       addToast({ type: 'success', message: 'Section updated' })
     } catch (err) {
@@ -478,6 +505,8 @@ export default function BlueprintShell({
   const clearSection = (sectionId: string) => {
     if (!pillarId || !topicId) return
     const oldContent = sectionContent[sectionId]
+    const capturedKitSlug = kitSlug ?? null
+    const capturedContextKey = contextKey
 
     setSectionContent((prev) => {
       const next = { ...prev }
@@ -485,12 +514,17 @@ export default function BlueprintShell({
       return next
     })
 
-    const actionId = `clear-section-${pillarId}-${topicId}-${sectionId}`
+    const actionId = `clear-section-${capturedKitSlug ?? 'default'}-${pillarId}-${topicId}-${sectionId}`
     useAppStore.getState().scheduleAction(
       actionId,
       async () => {
         try {
-          await guideContentApi.clear(pillarId, topicId, sectionId)
+          await guideContentApi.clear(
+            pillarId,
+            topicId,
+            sectionId,
+            capturedKitSlug,
+          )
           window.dispatchEvent(new Event('guide-progress-updated'))
         } catch (err) {
           useAppStore.getState().addToast({
@@ -508,7 +542,11 @@ export default function BlueprintShell({
       action: {
         label: 'Undo',
         onClick: () => {
-          if (useAppStore.getState().cancelAction(actionId) && oldContent) {
+          if (
+            useAppStore.getState().cancelAction(actionId) &&
+            oldContent &&
+            contextKeyRef.current === capturedContextKey
+          ) {
             setSectionContent((prev) => ({ ...prev, [sectionId]: oldContent }))
           }
         },

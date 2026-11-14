@@ -20,6 +20,7 @@ export default function useKeyboardShortcuts(): void {
     const handler = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey
       if (!mod) return
+      if (e.shiftKey || e.altKey) return
 
       const target = e.target as HTMLElement | null
       const tag = target?.tagName ? target.tagName.toLowerCase() : ''
@@ -31,14 +32,17 @@ export default function useKeyboardShortcuts(): void {
 
       switch (e.key) {
         case '1':
+          if (isEditable) break
           e.preventDefault()
           navigate(`${prefix}/chat`)
           break
         case '2':
+          if (isEditable) break
           e.preventDefault()
           navigate(`${prefix}/guide`)
           break
         case '3':
+          if (isEditable) break
           e.preventDefault()
           if (slug && caps?.canvas === 'none') break
           navigate(
@@ -48,27 +52,33 @@ export default function useKeyboardShortcuts(): void {
           )
           break
         case '4':
+          if (isEditable) break
           e.preventDefault()
           navigate(`${prefix}/study`)
           break
         case '5':
+          if (isEditable) break
           e.preventDefault()
           navigate(`${prefix}/feynman`)
           break
         case '6':
+          if (isEditable) break
           e.preventDefault()
           navigate(`${prefix}/interleaved`)
           break
         case '7':
+          if (isEditable) break
           e.preventDefault()
           navigate(`${prefix}/graph`)
           break
         case '8':
+          if (isEditable) break
           e.preventDefault()
           if (slug && caps?.calculator === false) break
           navigate(`${prefix}/calculator`)
           break
         case '9':
+          if (isEditable) break
           e.preventDefault()
           window.dispatchEvent(new CustomEvent('toggle-pomodoro'))
           break

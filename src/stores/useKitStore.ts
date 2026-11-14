@@ -71,6 +71,7 @@ interface KitStoreState {
     dogearCount?: number;
   }) => void;
   removeKitFromState: (slugOrId: string) => void;
+  resetSessionData: () => void;
 }
 
 function getKitsApi(): Record<string, (...args: unknown[]) => Promise<unknown>> | null {
@@ -86,12 +87,20 @@ function getKitsApi(): Record<string, (...args: unknown[]) => Promise<unknown>> 
 
 export function extractKitSlugFromPathname(pathname: string): string | null {
   const match = pathname.match(/^\/k\/([^/]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
 }
 
 function syncGlobalActiveSlug(slug: string | null): void {
   (globalThis as Record<string, unknown>).__toolboxActiveKitSlug = slug;
 }
+
+let selectKitSeq = 0;
+let fetchListSeq = 0;
 
 export const useKitStore = create<KitStoreState>((set, get) => ({
   kits: [],
@@ -103,20 +112,25 @@ export const useKitStore = create<KitStoreState>((set, get) => ({
   fetchKits: async () => {
     const kitsApi = getKitsApi();
     if (!kitsApi?.list) return get().kits;
+    const seq = ++fetchListSeq;
     set({ isLoadingList: true });
     try {
       const res = (await kitsApi.list()) as { kits?: KitSummaryItem[] } | null;
+      if (seq !== fetchListSeq) return get().kits;
       const list = Array.isArray(res?.kits) ? res.kits : [];
       set({ kits: list });
       return list;
     } catch {
       return get().kits;
     } finally {
-      set({ isLoadingList: false });
+      if (seq === fetchListSeq) {
+        set({ isLoadingList: false });
+      }
     }
   },
 
   selectKitBySlug: async (slug: string | null) => {
+    const seq = ++selectKitSeq;
     if (!slug) {
       if (get().activeKitSlug !== null || get().activeKit !== null) {
         set({ activeKitSlug: null, activeKit: null });
@@ -132,6 +146,9 @@ export const useKitStore = create<KitStoreState>((set, get) => ({
 
     try {
       const res = (await kitsApi.get(slug)) as { kit?: KitDetailItem } | null;
+      if (seq !== selectKitSeq) {
+        return get().activeKit;
+      }
       const kit = res?.kit ?? null;
       if (kit) {
         set((state) => ({
@@ -146,6 +163,9 @@ export const useKitStore = create<KitStoreState>((set, get) => ({
       }
       return kit;
     } catch {
+      if (seq !== selectKitSeq) {
+        return get().activeKit;
+      }
       return cached ?? null;
     }
   },
@@ -225,6 +245,19 @@ export const useKitStore = create<KitStoreState>((set, get) => ({
         activeKitSlug: clearingActive ? null : state.activeKitSlug,
         activeKit: clearingActive ? null : state.activeKit,
       };
+    });
+  },
+
+  resetSessionData: () => {
+    selectKitSeq += 1;
+    fetchListSeq += 1;
+    syncGlobalActiveSlug(null);
+    set({
+      kits: [],
+      activeKitSlug: null,
+      activeKit: null,
+      kitCache: {},
+      isLoadingList: false,
     });
   },
 }));

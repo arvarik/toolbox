@@ -92,17 +92,25 @@ async function requestCompilerJson<T>(
     headers,
   });
 
+  if (res.status === 401 && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("toolbox:unauthorized"));
+  }
+
   if (!res.ok) {
     const errBody = (await res.json().catch(() => ({}))) as {
-      error?: string;
+      error?: string | { message?: string; code?: string };
       message?: string;
       code?: string;
     };
-    const err = new Error(
-      errBody.error || errBody.message || `Compiler request failed (${res.status})`,
-    ) as Error & { status?: number; code?: string };
+    const errorObj =
+      errBody.error && typeof errBody.error === "object" ? errBody.error : null;
+    const message =
+      (typeof errBody.error === "string" ? errBody.error : errorObj?.message) ||
+      errBody.message ||
+      `Compiler request failed (${res.status})`;
+    const err = new Error(message) as Error & { status?: number; code?: string };
     err.status = res.status;
-    err.code = errBody.code;
+    err.code = errBody.code || errorObj?.code;
     throw err;
   }
 
