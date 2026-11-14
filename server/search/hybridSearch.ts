@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   ensureVecExtensionLoaded,
+  getCurrentRagDirtySeq,
+  kindTokFor,
   kitTokFor,
+  markRagDirty,
   ownerTokFor,
 } from "../kits/kitsSchema.ts";
 import {
@@ -53,11 +56,13 @@ const VEC_WEIGHT = 1.2;
 const MAX_VEC_COSINE_DISTANCE = 0.78;
 const BATCH_SIZE = 32;
 
-export { ensureVecExtensionLoaded };
+export { ensureVecExtensionLoaded, kindTokFor, markRagDirty };
 
-export function kindTokFor(kind: string): string {
-  return `d_${kind.replace(/[^a-zA-Z0-9]/g, "_")}`;
+export function formatFlashcardRagContent(front: string, back: string): string {
+  return `${front}\n${back}`;
 }
+
+const syncWatermarksByDb = new WeakMap<Database.Database, Map<string, number>>();
 
 function sha256Hex(input: string): string {
   return crypto.createHash("sha256").update(input).digest("hex");
@@ -143,8 +148,10 @@ export async function upsertRagChunksBatch(
   const cfg = getEmbeddingsConfig();
   const { dimension, embeddingGen } = ensureEmbeddingStore(db, cfg.dimension);
 
-  let existingById: Map<string, { content_hash: string; embedding_gen: string | null }> | null =
-    null;
+  let existingById: Map<
+    string,
+    { rowid: number | bigint; content_hash: string; embedding_gen: string | null }
+  > | null = null;
   if (inputs.length > 1) {
     const kitIds = new Set(inputs.map((item) => item.kitId));
     const singleKitId = kitIds.size === 1 ? [...kitIds][0] : null;
@@ -152,30 +159,35 @@ export async function upsertRagChunksBatch(
       singleKitId
         ? db
             .prepare(
-              "SELECT chunk_id, content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ? AND kit_id = ?",
+              "SELECT chunk_id, rowid, content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ? AND kit_id = ?",
             )
             .all(scope.ownerId, singleKitId)
         : db
             .prepare(
-              "SELECT chunk_id, content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ?",
+              "SELECT chunk_id, rowid, content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ?",
             )
             .all(scope.ownerId)
     ) as Array<{
       chunk_id: string;
+      rowid: number | bigint;
       content_hash: string;
       embedding_gen: string | null;
     }>;
     existingById = new Map(
       rows.map((r) => [
         r.chunk_id,
-        { content_hash: r.content_hash, embedding_gen: r.embedding_gen },
+        {
+          rowid: r.rowid,
+          content_hash: r.content_hash,
+          embedding_gen: r.embedding_gen,
+        },
       ]),
     );
   }
   const selectSingleExisting =
     inputs.length === 1
       ? db.prepare(
-          "SELECT content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ? AND chunk_id = ?",
+          "SELECT rowid, content_hash, embedding_gen FROM rag_chunks WHERE ownerId = ? AND chunk_id = ?",
         )
       : null;
 
@@ -189,6 +201,7 @@ export async function upsertRagChunksBatch(
     content: string;
     contentHash: string;
     embedding: Float32Array | null;
+    prevRowid: number | bigint | null;
   }> = [];
 
   for (const item of inputs) {
@@ -197,20 +210,23 @@ export async function upsertRagChunksBatch(
     const title = (item.title ?? "").trim();
     const chunkId = resolveChunkId(scope.ownerId, item);
     const contentHash = sha256Hex(`${title}\n${trimmedContent}`);
+    const prev = existingById
+      ? existingById.get(chunkId)
+      : (selectSingleExisting?.get(scope.ownerId, chunkId) as
+          | {
+              rowid: number | bigint;
+              content_hash: string;
+              embedding_gen: string | null;
+            }
+          | undefined);
 
-    if (!item.embedding) {
-      const prev = existingById
-        ? existingById.get(chunkId)
-        : (selectSingleExisting?.get(scope.ownerId, chunkId) as
-            | { content_hash: string; embedding_gen: string | null }
-            | undefined);
-      if (
-        prev &&
-        prev.content_hash === contentHash &&
-        prev.embedding_gen === embeddingGen
-      ) {
-        continue;
-      }
+    if (
+      !item.embedding &&
+      prev &&
+      prev.content_hash === contentHash &&
+      prev.embedding_gen === embeddingGen
+    ) {
+      continue;
     }
 
     toProcess.push({
@@ -223,6 +239,7 @@ export async function upsertRagChunksBatch(
       content: trimmedContent,
       contentHash,
       embedding: item.embedding ?? null,
+      prevRowid: prev?.rowid ?? null,
     });
   }
 
@@ -272,11 +289,17 @@ export async function upsertRagChunksBatch(
       updated_at = datetime('now')
     WHERE rag_chunks.ownerId = excluded.ownerId
   `);
-  const delFtsStmt = db.prepare(
+  const selRowidStmt = db.prepare(
+    "SELECT rowid FROM rag_chunks WHERE ownerId = ? AND chunk_id = ?",
+  );
+  const delFtsByRowidStmt = db.prepare(
+    "DELETE FROM rag_chunks_fts WHERE rowid = ? AND ownerTok = ?",
+  );
+  const delFtsFallbackStmt = db.prepare(
     "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND chunk_id = ?",
   );
   const insFtsStmt = db.prepare(
-    "INSERT INTO rag_chunks_fts (chunk_id, ownerTok, kitTok, kindTok, title, content) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO rag_chunks_fts (rowid, chunk_id, ownerTok, kitTok, kindTok, title, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   const delVecStmt = db.prepare(
     "DELETE FROM rag_chunks_vec WHERE ownerId = ? AND chunk_id = ?",
@@ -291,7 +314,7 @@ export async function upsertRagChunksBatch(
     for (const row of toProcess) {
       const hasValidVec =
         row.embedding !== null && row.embedding.length === dimension;
-      upsertChunkStmt.run(
+      const upsertInfo = upsertChunkStmt.run(
         row.chunkId,
         scope.ownerId,
         row.kitId,
@@ -304,8 +327,25 @@ export async function upsertRagChunksBatch(
         hasValidVec ? embeddingGen : null,
       );
 
-      delFtsStmt.run(ownerTok, row.chunkId);
+      const targetRowid =
+        row.prevRowid ??
+        (upsertInfo.changes > 0
+          ? upsertInfo.lastInsertRowid
+          : (
+              selRowidStmt.get(scope.ownerId, row.chunkId) as
+                | { rowid: number | bigint }
+                | undefined
+            )?.rowid);
+      if (targetRowid === undefined) continue;
+
+      if (row.prevRowid !== null) {
+        const ftsDelInfo = delFtsByRowidStmt.run(row.prevRowid, ownerTok);
+        if (ftsDelInfo.changes === 0) {
+          delFtsFallbackStmt.run(ownerTok, row.chunkId);
+        }
+      }
       insFtsStmt.run(
+        targetRowid,
         row.chunkId,
         ownerTok,
         kitTokFor(row.kitId),
@@ -359,7 +399,13 @@ export function deleteRagChunksByIds(
   if (hasVec) ensureVecExtensionLoaded(db);
 
   const ownerTok = ownerTokFor(scope.ownerId);
-  const delFts = db.prepare(
+  const selRowId = db.prepare(
+    "SELECT rowid FROM rag_chunks WHERE ownerId = ? AND chunk_id = ?",
+  );
+  const delFtsByRowid = db.prepare(
+    "DELETE FROM rag_chunks_fts WHERE rowid = ? AND ownerTok = ?",
+  );
+  const delFtsFallback = db.prepare(
     "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND chunk_id = ?",
   );
   const delVec = hasVec
@@ -369,15 +415,24 @@ export function deleteRagChunksByIds(
     "DELETE FROM rag_chunks WHERE ownerId = ? AND chunk_id = ?",
   );
 
+  let deletedCount = 0;
   const tx = db.transaction(() => {
     for (const chunkId of chunkIds) {
-      delFts.run(ownerTok, chunkId);
+      const row = selRowId.get(scope.ownerId, chunkId) as
+        | { rowid: number | bigint }
+        | undefined;
+      if (row) {
+        const ftsInfo = delFtsByRowid.run(row.rowid, ownerTok);
+        if (ftsInfo.changes === 0) {
+          delFtsFallback.run(ownerTok, chunkId);
+        }
+      }
       delVec?.run(scope.ownerId, chunkId);
-      delChunk.run(scope.ownerId, chunkId);
+      deletedCount += delChunk.run(scope.ownerId, chunkId).changes;
     }
   });
   tx();
-  return chunkIds.length;
+  return deletedCount;
 }
 
 export function deleteRagChunksBySource(
@@ -415,14 +470,12 @@ export function deleteRagChunksForKit(
       scope,
       existing.map((r) => r.chunk_id),
     );
-    db.prepare(
-      "DELETE FROM rag_chunks_fts WHERE ownerTok = ? AND kitTok = ?",
-    ).run(ownerTokFor(scope.ownerId), kitTokFor(kitId));
     if (hasVec) {
       db.prepare(
         "DELETE FROM rag_chunks_vec WHERE ownerId = ? AND kit_id = ?",
       ).run(scope.ownerId, kitId);
     }
+    markRagDirty(scope.ownerId, kitId);
     return removed;
   })();
 }
@@ -533,6 +586,19 @@ export async function syncDomainSourcesToRag(
   opts: { pruneStale?: boolean } = {},
 ): Promise<number> {
   const k = kitId ?? null;
+  const initialCfg = getEmbeddingsConfig();
+  const initialGen = getEmbeddingGen();
+  const initialWatermarkKey = `${scope.ownerId}:${kitId ?? "*"}:${initialGen}:${initialCfg.dimension}`;
+  const startDirtySeq = getCurrentRagDirtySeq(scope.ownerId, kitId);
+  let dbWatermarks = syncWatermarksByDb.get(db);
+  if (!dbWatermarks) {
+    dbWatermarks = new Map();
+    syncWatermarksByDb.set(db, dbWatermarks);
+  }
+  if (!opts.pruneStale && dbWatermarks.get(initialWatermarkKey) === startDirtySeq) {
+    return 0;
+  }
+
   const inputs: UpsertRagChunkInput[] = [];
 
   const guideRows = db
@@ -582,7 +648,7 @@ export async function syncDomainSourcesToRag(
       sourceRefId: c.id,
       nodeId: c.node_id,
       title: c.front,
-      content: `${c.front}\n${c.back}`,
+      content: formatFlashcardRagContent(c.front, c.back),
     });
   }
 
@@ -650,7 +716,13 @@ export async function syncDomainSourcesToRag(
     }
   }
 
-  return upsertRagChunksBatch(db, scope, inputs);
+  const synced = await upsertRagChunksBatch(db, scope, inputs);
+  if (getCurrentRagDirtySeq(scope.ownerId, kitId) === startDirtySeq) {
+    const finalKey = `${scope.ownerId}:${kitId ?? "*"}:${getEmbeddingGen()}:${getEmbeddingsConfig().dimension}`;
+    dbWatermarks.set(initialWatermarkKey, startDirtySeq);
+    dbWatermarks.set(finalKey, startDirtySeq);
+  }
+  return synced;
 }
 
 export function safeFtsTokens(rawQuery: string): string[] {

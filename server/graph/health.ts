@@ -6,15 +6,17 @@ import {
   type CardForNodeMatching,
 } from "../../shared/kits/kitSkeleton.ts";
 import { SYSTEM_DESIGN_KIT_SKELETON } from "../../shared/kits/systemDesignKit.ts";
-import { parseUtcTimestampMs, retrievability } from "../srs/scheduler.ts";
+import {
+  deriveReviewElapsedDays,
+  parseUtcTimestampMs,
+  retrievability,
+} from "../srs/scheduler.ts";
 
 export const MASTERED_MIN_EASE = 2.5;
 export const MASTERED_MIN_INTERVAL_DAYS = 21;
 export const DUE_SOON_HOURS = 48;
 export const FRAGILE_EASE = 2.0;
 export const PREREQ_SATISFIED_RATIO = 0.6;
-
-const DAY_MS = 24 * 3600 * 1000;
 
 export type CardHealthStatus =
   | "new"
@@ -81,7 +83,7 @@ export function cardStatus(
   if (Number.isFinite(nextMs) && nextMs <= now.getTime()) return "due";
   if (
     ease >= MASTERED_MIN_EASE &&
-    (card.interval || 0) > MASTERED_MIN_INTERVAL_DAYS
+    (card.interval || 0) >= MASTERED_MIN_INTERVAL_DAYS
   ) {
     return "mastered";
   }
@@ -96,19 +98,7 @@ export function cardStrength(
   if (state === 2 && card.stability != null && card.stability > 0) {
     const nowMs =
       typeof nowOrMs === "number" ? nowOrMs : nowOrMs.getTime();
-    let elapsedDays = 0;
-    if (card.last_reviewed) {
-      const lastMs = parseUtcTimestampMs(card.last_reviewed);
-      if (Number.isFinite(lastMs)) {
-        elapsedDays = Math.max(0, (nowMs - lastMs) / DAY_MS);
-      }
-    } else if (card.next_review) {
-      const nextMs = parseUtcTimestampMs(card.next_review);
-      if (Number.isFinite(nextMs)) {
-        const daysUntilDue = (nextMs - nowMs) / DAY_MS;
-        elapsedDays = Math.max(0, (card.interval || 0) - daysUntilDue);
-      }
-    }
+    const elapsedDays = deriveReviewElapsedDays(card, 0, nowMs, { minDays: 0 });
     return retrievability(elapsedDays, card.stability);
   }
   const nowDate = typeof nowOrMs === "number" ? new Date(nowOrMs) : nowOrMs;

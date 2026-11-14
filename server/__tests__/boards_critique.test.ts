@@ -44,8 +44,8 @@ describe("Knowledge Graph Health Invariants (cardStatus, nodeHealth, computeGrap
     expect(cardStatus(makeCard({ state: 0 }), NOW)).toBe("new");
     expect(cardStatus(makeCard({ state: 1 }), NOW)).toBe("learning");
     expect(cardStatus(makeCard({ state: 3 }), NOW)).toBe("lapsed");
-    expect(cardStatus(makeCard({ ease_factor: 2.5, interval: 22 }), NOW)).toBe("mastered");
-    expect(cardStatus(makeCard({ ease_factor: 2.5, interval: 21 }), NOW)).toBe("maturing");
+    expect(cardStatus(makeCard({ ease_factor: 2.5, interval: 21 }), NOW)).toBe("mastered");
+    expect(cardStatus(makeCard({ ease_factor: 2.5, interval: 20 }), NOW)).toBe("maturing");
     expect(cardStatus(makeCard({ ease_factor: 2.49, interval: 30 }), NOW)).toBe("maturing");
     expect(cardStatus(makeCard({ next_review: daysFromNow(-1) }), NOW)).toBe("due");
     expect(cardStatus(makeCard({ ease_factor: 1.9 }), NOW)).toBe("lapsed");

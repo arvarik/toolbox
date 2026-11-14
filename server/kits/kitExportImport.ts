@@ -12,7 +12,7 @@ import {
 import { AppError, ValidationError } from "../platform/net/errors.ts";
 import type { Scope } from "../platform/tenancy/scope.ts";
 import type { KitSkeletonV1 } from "../../shared/kits/kitSkeleton.ts";
-import { deleteRagChunksForKit } from "../search/hybridSearch.ts";
+import { deleteRagChunksForKit, markRagDirty } from "../search/hybridSearch.ts";
 import {
   getOwnedKit,
   kitsUploadsBaseDir,
@@ -169,6 +169,7 @@ export function importKitMode1(
   if (replaceKitId) {
     fs.rmSync(kitUploadsDir(scope.ownerId, replaceKitId), { recursive: true, force: true });
   }
+  markRagDirty(scope.ownerId, newKitId);
   return { kit: getOwnedKit(db, scope, newKitId), mode };
 }
 
@@ -191,10 +192,11 @@ export const KitBackupUserdataV1Schema = z.object({
         pillarId: idStr,
         topicId: idStr,
         sectionId: idStr,
-        content: z.string(),
+        content: z.string().max(200_000),
         committedAt: tsStr,
       }),
     )
+    .max(2_000)
     .default([]),
   guideDogears: z
     .array(
@@ -256,8 +258,8 @@ export const KitBackupUserdataV1Schema = z.object({
         id: idStr,
         deckId: idStr,
         nodeId: nullStr,
-        front: z.string(),
-        back: z.string(),
+        front: z.string().max(50_000),
+        back: z.string().max(50_000),
         position: z.number().int().default(0),
         easeFactor: z.number().default(2.5),
         interval: z.number().int().default(0),
@@ -280,6 +282,7 @@ export const KitBackupUserdataV1Schema = z.object({
         updatedAt: tsStr,
       }),
     )
+    .max(20_000)
     .default([]),
   remediationQueue: z
     .array(
@@ -326,12 +329,13 @@ export const KitBackupUserdataV1Schema = z.object({
       z.object({
         id: idStr,
         name: idStr,
-        data: z.string().default("{}"),
+        data: z.string().max(2_000_000).default("{}"),
         position: z.number().int().default(0),
         createdAt: tsStr,
         updatedAt: tsStr,
       }),
     )
+    .max(500)
     .default([]),
   chatSessions: z
     .array(
@@ -347,6 +351,7 @@ export const KitBackupUserdataV1Schema = z.object({
         updatedAt: tsStr,
       }),
     )
+    .max(1_000)
     .default([]),
   episodicMemories: z
     .array(
@@ -657,6 +662,37 @@ function isAllowedBackupEntryPath(name: string): boolean {
   return parts.length === 3 && parts[0] === "files" && SAFE_ID_RE.test(parts[1]) && SAFE_BASENAME_RE.test(parts[2]);
 }
 
+function assertAcyclicFlashcardPrereqs(
+  cards: ReadonlyArray<{ id: string; prerequisiteId: string | null }>,
+): void {
+  const prereqById = new Map<string, string>();
+  for (const c of cards) {
+    if (c.prerequisiteId && c.prerequisiteId !== c.id) {
+      prereqById.set(c.id, c.prerequisiteId);
+    }
+  }
+  // 0 = unvisited, 1 = visiting (active chain), 2 = verified acyclic
+  const state = new Map<string, number>();
+  for (const startId of prereqById.keys()) {
+    if (state.get(startId) === 2) continue;
+    const chain: string[] = [];
+    let cur: string | undefined = startId;
+    while (cur !== undefined) {
+      const s = state.get(cur) ?? 0;
+      if (s === 2) break;
+      if (s === 1) {
+        throw new ValidationError(
+          `Flashcard prerequisite cycle detected in backup archive at card "${cur}"`,
+        );
+      }
+      state.set(cur, 1);
+      chain.push(cur);
+      cur = prereqById.get(cur);
+    }
+    for (const id of chain) state.set(id, 2);
+  }
+}
+
 export async function importKitBackupZip(
   db: Database.Database,
   scope: Scope,
@@ -714,6 +750,8 @@ export async function importKitBackupZip(
   assertUniqueIds(userdata.sources, "source");
   assertUniqueIds(userdata.sourceChunks, "sourceChunk");
   assertUniqueIds(userdata.guideHighlights, "guideHighlight");
+
+  assertAcyclicFlashcardPrereqs(userdata.flashcards);
 
   // Verify closed allowlist: every binary file entry must match a declared source in userdata.sources
   const declaredEntries = new Map<string, { oldSourceId: string; safeBasename: string }>();
@@ -1145,5 +1183,6 @@ export async function importKitBackupZip(
     throw err;
   }
 
+  markRagDirty(scope.ownerId, newKitId);
   return { kit: getOwnedKit(db, scope, newKitId), mode };
 }

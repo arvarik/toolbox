@@ -727,4 +727,201 @@ describe("Personal Kits, Shared Library Fork/Sync, Mode 1 & Mode 2 Archive Round
     await bobAgent.delete(`/api/kits/${bobRestoredKitId}`).expect(200);
     expect(fs.existsSync(bobRestoredUploadDir)).toBe(false);
   });
+
+  it("purges per-owner disk upload trees in purgeOwnerData while blocking path traversal", async () => {
+    const os = await import("node:os");
+    const { getOwnerDataHooks } = await import("../platform/db/connection.ts");
+    const { withEnv } = await import("./testHelpers.ts");
+    const { DATA_DIR } = await import("../appConfig.ts");
+
+    const diskRoot =
+      db.name && db.name !== ":memory:"
+        ? path.dirname(path.resolve(db.name))
+        : fs.mkdtempSync(path.join(os.tmpdir(), "toolbox-purge-test-"));
+    const isTempRoot = !(db.name && db.name !== ":memory:");
+    const ownerDir = path.join(diskRoot, "uploads", "u", "ephemeral-purge-owner", "kits", "k1");
+    const traversalSentinelDir = path.join(diskRoot, "uploads", "keep-sentinel");
+    const traversalSentinelFile = path.join(traversalSentinelDir, "important.txt");
+
+    fs.mkdirSync(ownerDir, { recursive: true });
+    fs.writeFileSync(path.join(ownerDir, "notes.pdf"), "pdf-bytes");
+    fs.mkdirSync(traversalSentinelDir, { recursive: true });
+    fs.writeFileSync(traversalSentinelFile, "do-not-delete");
+
+    try {
+      const purgeOwner = getOwnerDataHooks().purgeOwnerData;
+      expect(purgeOwner).toBeTypeOf("function");
+      const runPurge = (id: string) => {
+        if (isTempRoot) {
+          return withEnv({ DATA_DIR: diskRoot }, () => purgeOwner!(id));
+        }
+        return purgeOwner!(id);
+      };
+
+      // Traversal ownerId must be ignored without escaping uploads/u/
+      await runPurge("../keep-sentinel");
+      expect(fs.existsSync(traversalSentinelFile)).toBe(true);
+
+      // Valid ownerId removes its entire upload subtree
+      await runPurge("ephemeral-purge-owner");
+      expect(fs.existsSync(path.join(diskRoot, "uploads", "u", "ephemeral-purge-owner"))).toBe(
+        false,
+      );
+      expect(fs.existsSync(traversalSentinelFile)).toBe(true);
+      expect(DATA_DIR).toBeTruthy();
+    } finally {
+      if (isTempRoot) {
+        fs.rmSync(diskRoot, { recursive: true, force: true });
+      } else {
+        fs.rmSync(traversalSentinelDir, { recursive: true, force: true });
+        fs.rmSync(path.join(diskRoot, "uploads", "u", "ephemeral-purge-owner"), {
+          recursive: true,
+          force: true,
+        });
+      }
+    }
+  });
+
+  it("enforces KitBackupUserdataV1Schema bounds and rejects multi-card prerequisiteId cycles on backup import", async () => {
+    const { KitBackupUserdataV1Schema, importKitBackupZip } = await import(
+      "../kits/kitExportImport.ts"
+    );
+    const { createZipArchive } = await import("../platform/archive/zip.ts");
+    const { ensureLocalOwner } = await import("../platform/db/connection.ts");
+    const { scopeForOwnerId } = await import("../platform/tenancy/scope.ts");
+    const { ValidationError } = await import("../platform/net/errors.ts");
+
+    const ts = "2026-04-08T12:00:00.000Z";
+    const baseUserdata = {
+      format: "toolbox-kit-userdata" as const,
+      schemaVersion: 1 as const,
+      exportedAt: ts,
+      originalKitId: "kit-orig",
+    };
+
+    expect(KitBackupUserdataV1Schema.safeParse(baseUserdata).success).toBe(true);
+
+    const expectTooBig = (candidate: unknown) => {
+      const parsed = KitBackupUserdataV1Schema.safeParse(candidate);
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(parsed.error.issues.some((i) => i.code === "too_big")).toBe(true);
+      }
+    };
+
+    expectTooBig({
+      ...baseUserdata,
+      guideContent: [
+        { pillarId: "p", topicId: "t", sectionId: "s", content: "x".repeat(200_001), committedAt: ts },
+      ],
+    });
+
+    expectTooBig({
+      ...baseUserdata,
+      guideContent: Array.from({ length: 2_001 }, (_, i) => ({
+        pillarId: "p",
+        topicId: "t",
+        sectionId: `s-${i}`,
+        content: "ok",
+        committedAt: ts,
+      })),
+    });
+
+    expectTooBig({
+      ...baseUserdata,
+      flashcards: [
+        { id: "c1", deckId: "d1", front: "f".repeat(50_001), back: "ok", createdAt: ts, updatedAt: ts },
+      ],
+    });
+
+    expectTooBig({
+      ...baseUserdata,
+      flashcards: Array.from({ length: 20_001 }, (_, i) => ({
+        id: `c-${i}`,
+        deckId: "d1",
+        front: "q",
+        back: "a",
+        createdAt: ts,
+        updatedAt: ts,
+      })),
+    });
+
+    expectTooBig({
+      ...baseUserdata,
+      boards: [{ id: "b1", name: "Board", data: "x".repeat(2_000_001), createdAt: ts, updatedAt: ts }],
+    });
+
+    expectTooBig({
+      ...baseUserdata,
+      boards: Array.from({ length: 501 }, (_, i) => ({
+        id: `b-${i}`,
+        name: "Board",
+        data: "{}",
+        createdAt: ts,
+        updatedAt: ts,
+      })),
+    });
+
+    expectTooBig({
+      ...baseUserdata,
+      chatSessions: Array.from({ length: 1_001 }, (_, i) => ({
+        id: `s-${i}`,
+        name: "Session",
+        createdAt: ts,
+        updatedAt: ts,
+      })),
+    });
+
+    // Reject 2-hop (A -> B -> A) and 3-hop (A -> B -> C -> A) prerequisiteId cycles inside userdata.json
+    const localScope = scopeForOwnerId(ensureLocalOwner());
+    const cycleSkeleton = makeKitSkeleton((s) => {
+      s.identity.slug = "backup-prereq-cycle-probe";
+      s.identity.name = "Backup Prereq Cycle Probe";
+    });
+
+    const twoHopZip = await createZipArchive([
+      { name: "kit.json", data: Buffer.from(JSON.stringify(cycleSkeleton), "utf8") },
+      {
+        name: "userdata.json",
+        data: Buffer.from(
+          JSON.stringify({
+            ...baseUserdata,
+            decks: [{ id: "deck-cyc", name: "Cycle Deck", description: "", createdAt: ts, updatedAt: ts }],
+            flashcards: [
+              { id: "c-a", deckId: "deck-cyc", front: "A", back: "A", prerequisiteId: "c-b", createdAt: ts, updatedAt: ts },
+              { id: "c-b", deckId: "deck-cyc", front: "B", back: "B", prerequisiteId: "c-a", createdAt: ts, updatedAt: ts },
+            ],
+          }),
+          "utf8",
+        ),
+      },
+    ]);
+
+    await expect(
+      importKitBackupZip(db, localScope, twoHopZip, { onCollision: "copy" }),
+    ).rejects.toThrow(ValidationError);
+
+    const threeHopZip = await createZipArchive([
+      { name: "kit.json", data: Buffer.from(JSON.stringify(cycleSkeleton), "utf8") },
+      {
+        name: "userdata.json",
+        data: Buffer.from(
+          JSON.stringify({
+            ...baseUserdata,
+            decks: [{ id: "deck-cyc3", name: "Cycle3 Deck", description: "", createdAt: ts, updatedAt: ts }],
+            flashcards: [
+              { id: "c-1", deckId: "deck-cyc3", front: "1", back: "1", prerequisiteId: "c-2", createdAt: ts, updatedAt: ts },
+              { id: "c-2", deckId: "deck-cyc3", front: "2", back: "2", prerequisiteId: "c-3", createdAt: ts, updatedAt: ts },
+              { id: "c-3", deckId: "deck-cyc3", front: "3", back: "3", prerequisiteId: "c-1", createdAt: ts, updatedAt: ts },
+            ],
+          }),
+          "utf8",
+        ),
+      },
+    ]);
+
+    await expect(
+      importKitBackupZip(db, localScope, threeHopZip, { onCollision: "copy" }),
+    ).rejects.toThrow(/cycle/i);
+  });
 });

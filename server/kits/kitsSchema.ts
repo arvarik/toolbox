@@ -1,7 +1,9 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type Database from "better-sqlite3";
 import * as sqliteVec from "sqlite-vec";
-import { LOCAL_OWNER_EMAIL } from "../appConfig.ts";
+import { DATA_DIR, LOCAL_OWNER_EMAIL } from "../appConfig.ts";
 import { sealCredential } from "../platform/crypto/secretBox.ts";
 import { ensureLocalOwner as ensureLocalOwnerOnDb } from "../platform/db/platformSchema.ts";
 import { registerOwnerDataHooks } from "../platform/db/connection.ts";
@@ -352,6 +354,7 @@ function createV2Tables(db: Database.Database): void {
   `);
   ensureV2Indexes(db);
   db.exec(RAG_TABLES_DDL);
+  repairFtsRowidAlignment(db);
 }
 
 function ensureV2Indexes(db: Database.Database): void {
@@ -413,6 +416,96 @@ export function kitTokFor(kitId: string): string {
   return `k_${kitId.replace(/[^a-zA-Z0-9]/g, "_")}`;
 }
 
+export function kindTokFor(kind: string): string {
+  return `d_${kind.replace(/[^a-zA-Z0-9]/g, "_")}`;
+}
+
+let ragDirtySeq = 0;
+const ragOwnerDirtySeq = new Map<string, number>();
+const ragOwnerAnyKitDirtySeq = new Map<string, number>();
+const ragKitDirtySeq = new Map<string, number>();
+
+export function markRagDirty(ownerId: string, kitId?: string | null): void {
+  ragDirtySeq += 1;
+  if (kitId) {
+    ragKitDirtySeq.set(`${ownerId}:${kitId}`, ragDirtySeq);
+    ragOwnerAnyKitDirtySeq.set(ownerId, ragDirtySeq);
+  } else {
+    ragOwnerDirtySeq.set(ownerId, ragDirtySeq);
+  }
+}
+
+export function getCurrentRagDirtySeq(
+  ownerId: string,
+  kitId?: string | null,
+): number {
+  const ownerAll = ragOwnerDirtySeq.get(ownerId) ?? 0;
+  if (kitId) {
+    return Math.max(ownerAll, ragKitDirtySeq.get(`${ownerId}:${kitId}`) ?? 0);
+  }
+  return Math.max(ownerAll, ragOwnerAnyKitDirtySeq.get(ownerId) ?? 0);
+}
+
+/**
+ * Repairs drifted FTS5 docids (`rowid`) on existing DBs so `rag_chunks_fts.rowid`
+ * always matches `rag_chunks.rowid` for O(log N) deletes and upserts.
+ */
+export function repairFtsRowidAlignment(db: Database.Database): void {
+  if (!hasTable(db, "rag_chunks") || !hasTable(db, "rag_chunks_fts")) return;
+  const drift = db
+    .prepare(
+      // tenant-lint: allow boot migration
+      `SELECT (
+        EXISTS (
+          SELECT 1 FROM rag_chunks c
+          WHERE NOT EXISTS (
+            SELECT 1 FROM rag_chunks_fts f
+            WHERE f.rowid = c.rowid AND f.chunk_id = c.chunk_id
+          )
+        )
+        OR (SELECT COUNT(*) FROM rag_chunks_fts) != (SELECT COUNT(*) FROM rag_chunks)
+      ) AS drifted`,
+    )
+    .get() as { drifted: number } | undefined;
+  if (!drift?.drifted) return;
+
+  db.transaction(() => {
+    db.exec(
+      // tenant-lint: allow boot migration
+      "DELETE FROM rag_chunks_fts",
+    );
+    const rows = db
+      .prepare(
+        // tenant-lint: allow boot migration
+        "SELECT rowid, chunk_id, ownerId, kit_id, kind, title, content FROM rag_chunks",
+      )
+      .all() as Array<{
+      rowid: number | bigint;
+      chunk_id: string;
+      ownerId: string;
+      kit_id: string;
+      kind: string;
+      title: string;
+      content: string;
+    }>;
+    const ins = db.prepare(
+      // tenant-lint: allow boot migration
+      "INSERT INTO rag_chunks_fts (rowid, chunk_id, ownerTok, kitTok, kindTok, title, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    );
+    for (const r of rows) {
+      ins.run(
+        r.rowid,
+        r.chunk_id,
+        ownerTokFor(r.ownerId),
+        kitTokFor(r.kit_id),
+        kindTokFor(r.kind),
+        r.title,
+        r.content,
+      );
+    }
+  })();
+}
+
 function ensureV2ColumnMigrations(db: Database.Database): void {
   const addCol = (table: string, col: string, def: string) => {
     if (hasTable(db, table) && !hasColumn(db, table, col)) {
@@ -461,6 +554,7 @@ function ensureV2ColumnMigrations(db: Database.Database): void {
   `);
   ensureV2Indexes(db);
   db.exec(RAG_TABLES_DDL);
+  repairFtsRowidAlignment(db);
 }
 
 function seedOfficialStarterKits(db: Database.Database): void {
@@ -894,8 +988,39 @@ export function initKitsSchema(db: Database.Database): void {
         db.prepare("DELETE FROM user_learning_profile WHERE ownerId = ?").run(ownerId);
         db.prepare("DELETE FROM user_ai_settings WHERE ownerId = ?").run(ownerId);
       })();
+      markRagDirty(ownerId);
+      removeOwnerUploadsDir(db, ownerId);
     },
   });
+}
+
+function removeOwnerUploadsDir(db: Database.Database, ownerId: string): void {
+  if (!ownerId || ownerId === "." || ownerId === ".." || /[\\/\0]/.test(ownerId)) {
+    log.warn("KitsSchema", `Skipped upload dir purge for unsafe ownerId "${ownerId}"`);
+    return;
+  }
+  const dataRoot =
+    db.name && db.name !== ":memory:"
+      ? path.dirname(path.resolve(db.name))
+      : path.resolve(process.env.DATA_DIR?.trim() || DATA_DIR);
+  const uploadsUsersRoot = path.resolve(dataRoot, "uploads", "u");
+  const targetDir = path.resolve(uploadsUsersRoot, ownerId);
+  const rel = path.relative(uploadsUsersRoot, targetDir);
+  if (
+    !rel ||
+    rel === "." ||
+    rel.startsWith("..") ||
+    path.isAbsolute(rel) ||
+    !targetDir.startsWith(uploadsUsersRoot + path.sep)
+  ) {
+    log.warn("KitsSchema", `Blocked upload purge path traversal for owner "${ownerId}"`);
+    return;
+  }
+  try {
+    fs.rmSync(targetDir, { recursive: true, force: true });
+  } catch (err) {
+    log.warn("KitsSchema", `Failed to remove upload directory for "${ownerId}": ${String(err)}`);
+  }
 }
 
 export interface ActiveKitContext {

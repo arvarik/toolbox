@@ -36,7 +36,8 @@ import {
   pullUpstreamKitUpdate,
   syncKitStructure,
 } from "../kits/kitSync.ts";
-import { syncDomainSourcesToRag } from "../search/hybridSearch.ts";
+import { markRagDirty, syncDomainSourcesToRag } from "../search/hybridSearch.ts";
+import logger from "../utils/logger.ts";
 
 const router = Router();
 
@@ -107,17 +108,17 @@ function sendAttachment(
   res.send(payload);
 }
 
-async function syncRagIfPopulated(
+async function syncImportedKitRag(
   scope: ReturnType<typeof scopeOf>,
   kitId: string,
 ): Promise<void> {
-  const existingChunks = (
-    db
-      .prepare("SELECT COUNT(*) as c FROM rag_chunks WHERE ownerId = ? AND kit_id = ?")
-      .get(scope.ownerId, kitId) as { c: number }
-  ).c;
-  if (existingChunks > 0) {
+  markRagDirty(scope.ownerId, kitId);
+  try {
     await syncDomainSourcesToRag(db, scope, kitId, { pruneStale: true });
+  } catch (err) {
+    logger.warn(
+      `[kits] Non-blocking RAG sync after import/sync failed for kit "${kitId}": ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 
@@ -137,9 +138,7 @@ async function handleSkeletonImport(
     (hasWrapper ? body.onCollision : undefined) ?? req.query.onCollision,
   );
   const result = importKitMode1(db, scope, rawSkeleton, { onCollision });
-  if (result.mode === "updated") {
-    await syncRagIfPopulated(scope, result.kit.id);
-  }
+  await syncImportedKitRag(scope, result.kit.id);
   res
     .status(result.mode === "created" || result.mode === "copied" ? 201 : 200)
     .json(result);
@@ -158,9 +157,7 @@ async function handleBackupUpload(req: Request, res: Response): Promise<void> {
     );
     const zipBuf = await fs.promises.readFile(uploadPath);
     const result = await importKitBackupZip(db, scope, zipBuf, { onCollision });
-    if (result.mode === "updated") {
-      await syncRagIfPopulated(scope, result.kit.id);
-    }
+    await syncImportedKitRag(scope, result.kit.id);
     res
       .status(result.mode === "created" || result.mode === "copied" ? 201 : 200)
       .json(result);
@@ -292,7 +289,7 @@ const handleSyncKit = asyncHandler(async (req, res) => {
     body && typeof body === "object" && body.skeleton !== undefined
       ? syncKitStructure(db, scope, kitId, body.skeleton)
       : pullUpstreamKitUpdate(db, scope, kitId);
-  await syncRagIfPopulated(scope, result.kit.id);
+  await syncImportedKitRag(scope, result.kit.id);
   res.json(result);
 });
 

@@ -859,4 +859,489 @@ describe("AI Capability Router, Per-User BYOK, Hybrid RAG (FTS5 + sqlite-vec), S
       __resetAppRateLimits();
     }
   });
+
+  it("10. routes custom embeddings through guardedFetch SSRF guards and validates vector count, dimension, and finiteness", async () => {
+    const { embedTexts } = await import("../utils/embeddings.ts");
+    const { sealCredential } = await import("../platform/crypto/secretBox.ts");
+    const { getEmbeddingsConfig, updateAdminAiSettings } = await import(
+      "../platform/ai/aiSettingsService.ts"
+    );
+
+    let mode: "redirect_metadata" | "wrong_dim" | "wrong_count" | "non_finite" | "valid" = "valid";
+    let requestHits = 0;
+
+    const mockEmbedServer = await listenLocal(async (req, res) => {
+      if (req.url === "/v1/embeddings" && req.method === "POST") {
+        requestHits += 1;
+        let raw = "";
+        for await (const chunk of req) raw += chunk;
+        const body = JSON.parse(raw) as { input?: string[] | string; model?: string };
+        const count = Array.isArray(body.input) ? body.input.length : 1;
+
+        if (mode === "redirect_metadata") {
+          res.writeHead(302, { Location: "http://169.254.169.254/latest/meta-data/iam" }).end();
+          return;
+        }
+
+        const makeVec = (dim: number, fill = 0.02) => Array.from({ length: dim }, () => fill);
+        let data: Array<{ object: string; index: number; embedding: unknown }> = [];
+        if (mode === "wrong_dim") {
+          data = Array.from({ length: count }, (_, i) => ({
+            object: "embedding",
+            index: i,
+            embedding: makeVec(383),
+          }));
+        } else if (mode === "wrong_count") {
+          data = [{ object: "embedding", index: 0, embedding: makeVec(384) }];
+        } else if (mode === "non_finite") {
+          const badVec: unknown[] = makeVec(384);
+          badVec[5] = null;
+          data = Array.from({ length: count }, (_, i) => ({
+            object: "embedding",
+            index: i,
+            embedding: i === 0 ? badVec : makeVec(384),
+          }));
+        } else {
+          data = Array.from({ length: count }, (_, i) => ({
+            object: "embedding",
+            index: i,
+            embedding: makeVec(384, 0.05 * (i + 1)),
+          }));
+        }
+
+        sendJson(res, 200, {
+          object: "list",
+          data,
+          model: body.model ?? "nomic-embed",
+          usage: { prompt_tokens: 4, total_tokens: 4 },
+        });
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    const epId = "ep-custom-embed-ssrf";
+    const metadataEpId = "ep-custom-embed-imds";
+    const prevEmbeddings = getEmbeddingsConfig();
+    db.prepare(
+      "INSERT OR REPLACE INTO custom_endpoints (id, name, base_url, api_key) VALUES (?, ?, ?, ?)",
+    ).run(epId, "Mock Custom Embedder", `${mockEmbedServer.baseUrl}/v1`, sealCredential("embed-key"));
+    db.prepare(
+      "INSERT OR REPLACE INTO custom_endpoints (id, name, base_url, api_key) VALUES (?, ?, ?, ?)",
+    ).run(metadataEpId, "Metadata SSRF Trap", "http://169.254.169.254/v1", sealCredential("embed-key"));
+
+    try {
+      // Cloud metadata SSRF endpoint is always blocked by guardedFetch even for admin instance endpoints
+      updateAdminAiSettings({
+        embeddings: {
+          provider: "custom",
+          endpointId: metadataEpId,
+          modelId: "nomic-embed",
+          dimension: 384,
+        },
+      });
+      await expect(embedTexts(["imds ssrf probe"])).rejects.toThrow();
+      expect(requestHits).toBe(0);
+
+      updateAdminAiSettings({
+        embeddings: {
+          provider: "custom",
+          endpointId: epId,
+          modelId: "nomic-embed",
+          dimension: 384,
+        },
+      });
+
+      await withEnv({ ALLOW_PRIVATE_BYOK_ENDPOINTS: "true" }, async () => {
+        mode = "redirect_metadata";
+        await expect(embedTexts(["metadata redirect probe"])).rejects.toThrow();
+
+        mode = "wrong_dim";
+        await expect(embedTexts(["dim check", "second check"])).rejects.toThrow(/383.*384|dimension/i);
+
+        mode = "wrong_count";
+        await expect(embedTexts(["first", "second"])).rejects.toThrow(
+          /expected 2 embeddings.*received 1|count/i,
+        );
+
+        mode = "non_finite";
+        await expect(embedTexts(["finite check"])).rejects.toThrow();
+
+        mode = "valid";
+        const vecs = await embedTexts(["first", "second"]);
+        expect(vecs).toHaveLength(2);
+        expect(vecs[0]).toBeInstanceOf(Float32Array);
+        expect(vecs[0]!.length).toBe(384);
+        expect(vecs[1]!.length).toBe(384);
+      });
+    } finally {
+      updateAdminAiSettings({ embeddings: prevEmbeddings });
+      db.prepare("DELETE FROM custom_endpoints WHERE id IN (?, ?)").run(epId, metadataEpId);
+      await mockEmbedServer.close();
+    }
+  });
+
+  it("11. aligns FTS5 rowids cleanly (including repair), emits 0 flashcard re-embeddings after seedHydrator, and honors sync watermarks", async () => {
+    const {
+      formatFlashcardRagContent,
+      syncDomainSourcesToRag,
+      upsertRagChunk,
+      deleteRagChunksByIds,
+      hybridSearch,
+      markRagDirty,
+    } = await import("../search/hybridSearch.ts");
+    const { repairFtsRowidAlignment } = await import("../kits/kitsSchema.ts");
+    const { commitCompiledKit, runSeedKitJob } = await import("../compiler/seedHydrator.ts");
+    const { makeKitSkeleton } = await import("./testHelpers.ts");
+    const { sealCredential } = await import("../platform/crypto/secretBox.ts");
+    const { getAdminAiSettingsView, updateAdminAiSettings } = await import(
+      "../platform/ai/aiSettingsService.ts"
+    );
+
+    expect(formatFlashcardRagContent("Front Term", "Back Def")).toBe("Front Term\nBack Def");
+
+    // 11a. FTS5 rowid == rag_chunks.rowid + drift repair
+    const chunkId = `${aliceId}:${aliceKit1Id}:guide:rowid-probe`;
+    await upsertRagChunk(db, aliceScope, {
+      kitId: aliceKit1Id,
+      kind: "guide",
+      sourceRefId: "rowid-probe",
+      title: "Linearizable Quorum Probe",
+      content: "Rowid alignment ensures B-tree O(log N) deletes and repairs drift cleanly.",
+    });
+
+    const chunkRow = db
+      .prepare("SELECT rowid AS rid FROM rag_chunks WHERE ownerId = ? AND chunk_id = ?")
+      .get(aliceId, chunkId) as { rid: number } | undefined;
+    expect(chunkRow?.rid).toBeGreaterThan(0);
+
+    const ftsRow = db
+      .prepare("SELECT rowid AS rid FROM rag_chunks_fts WHERE chunk_id = ?")
+      .get(chunkId) as { rid: number } | undefined;
+    expect(ftsRow?.rid).toBe(chunkRow!.rid);
+
+    // Simulate drifted FTS5 rowid and repair it
+    db.prepare("DELETE FROM rag_chunks_fts WHERE rowid = ?").run(chunkRow!.rid);
+    db.prepare(
+      "INSERT INTO rag_chunks_fts(rowid, chunk_id, ownerTok, kitTok, kindTok, title, content) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      chunkRow!.rid + 99_999,
+      chunkId,
+      `own_${aliceId}`,
+      `kit_${aliceKit1Id}`,
+      "kind_guide",
+      "Linearizable Quorum Probe",
+      "Drifted FTS rowid entry",
+    );
+    repairFtsRowidAlignment(db);
+
+    const repairedFts = db
+      .prepare("SELECT rowid AS rid, content FROM rag_chunks_fts WHERE chunk_id = ?")
+      .get(chunkId) as { rid: number; content: string } | undefined;
+    expect(repairedFts?.rid).toBe(chunkRow!.rid);
+    expect(repairedFts?.content).toContain("B-tree O(log N)");
+    expect(
+      (await hybridSearch(db, aliceScope, "Linearizable Quorum Probe", { kitId: aliceKit1Id })).length,
+    ).toBeGreaterThanOrEqual(1);
+    expect(deleteRagChunksByIds(db, aliceScope, [chunkId])).toBe(1);
+    expect(
+      db.prepare("SELECT 1 FROM rag_chunks_fts WHERE chunk_id = ?").get(chunkId),
+    ).toBeUndefined();
+
+    // 11b. SeedHydrator emits canonical flashcard text -> 0 re-embeddings on first sync + watermark gating
+    const seedPayload = {
+      cards: [
+        {
+          nodeId: "ownership",
+          topicId: "borrowing",
+          sectionId: "mechanics",
+          front: "Move Semantics Ownership Transfer",
+          back: "Assigning a non-Copy value moves ownership and invalidates the source binding.",
+          prerequisiteCardIndex: null,
+        },
+      ],
+      drills: [],
+      baselineGuideNotes: [
+        {
+          topicId: "borrowing",
+          sectionId: "mechanics",
+          content: "Baseline ownership note for watermark probe.",
+        },
+      ],
+    };
+
+    const seedMockServer = await listenLocal(async (req, res) => {
+      if (req.url === "/v1/models") {
+        sendJson(res, 200, { data: [{ id: "seed-mock-model", created: 1_760_000_000 }] });
+        return;
+      }
+      if (req.url === "/v1/chat/completions" && req.method === "POST") {
+        let raw = "";
+        for await (const chunk of req) raw += chunk;
+        const body = JSON.parse(raw) as { model?: string };
+        sendJson(res, 200, {
+          id: "cmpl-seed",
+          object: "chat.completion",
+          created: 1,
+          model: body.model,
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: JSON.stringify(seedPayload) },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+        });
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    const epId = "ep-seed-hydrator-probe";
+    const prevView = getAdminAiSettingsView();
+    db.prepare(
+      "INSERT OR REPLACE INTO custom_endpoints (id, name, base_url, api_key) VALUES (?, ?, ?, ?)",
+    ).run(epId, "Mock Seeder LLM", `${seedMockServer.baseUrl}/v1`, sealCredential("seed-key"));
+    updateAdminAiSettings({
+      capabilities: {
+        quick: { mode: "pinned", modelId: `custom:${epId}:seed-mock-model` },
+      },
+    });
+
+    const skeleton = makeKitSkeleton((s) => {
+      s.identity.slug = "seed-hash-parity-kit";
+      s.identity.name = "Seed Hash Parity Kit";
+    });
+
+    try {
+      const committed = await commitCompiledKit(db, aliceScope, {
+        skeleton,
+        runSeederInBackground: false,
+      });
+      await runSeedKitJob(db, committed.jobId);
+
+      const seededCardChunkBefore = db
+        .prepare(
+          "SELECT content, updated_at FROM rag_chunks WHERE ownerId = ? AND kit_id = ? AND kind = 'flashcard'",
+        )
+        .get(aliceId, committed.kit.id) as { content: string; updated_at: string } | undefined;
+      expect(seededCardChunkBefore?.content).toBe(
+        formatFlashcardRagContent(
+          "Move Semantics Ownership Transfer",
+          "Assigning a non-Copy value moves ownership and invalidates the source binding.",
+        ),
+      );
+
+      // Invalidate watermark so syncDomainSourcesToRag computes source hashes: 0 flashcards should re-embed
+      markRagDirty(aliceId, committed.kit.id);
+      const reembeddedAfterSeed = await syncDomainSourcesToRag(db, aliceScope, committed.kit.id);
+      expect(reembeddedAfterSeed).toBe(0);
+
+      const seededCardChunkAfter = db
+        .prepare(
+          "SELECT updated_at FROM rag_chunks WHERE ownerId = ? AND kit_id = ? AND kind = 'flashcard'",
+        )
+        .get(aliceId, committed.kit.id) as { updated_at: string } | undefined;
+      expect(seededCardChunkAfter?.updated_at).toBe(seededCardChunkBefore?.updated_at);
+
+      // Sync watermark check: clean Kit skips scan until markRagDirty() fires
+      const deckRow = db
+        .prepare("SELECT id FROM decks WHERE ownerId = ? AND kit_id = ? LIMIT 1")
+        .get(aliceId, committed.kit.id) as { id: string };
+      db.prepare(
+        "INSERT INTO flashcards (id, ownerId, deck_id, front, back) VALUES ('card-watermark-bypass', ?, ?, 'Watermark Probe Front', 'Watermark Probe Back')",
+      ).run(aliceId, deckRow.id);
+      expect(await syncDomainSourcesToRag(db, aliceScope, committed.kit.id)).toBe(0);
+      markRagDirty(aliceId, committed.kit.id);
+      expect(await syncDomainSourcesToRag(db, aliceScope, committed.kit.id)).toBe(1);
+    } finally {
+      updateAdminAiSettings({ capabilities: prevView.capabilities });
+      db.prepare("DELETE FROM custom_endpoints WHERE id = ?").run(epId);
+      await seedMockServer.close();
+    }
+  });
+
+  it("12. stores NULL embedding on episodic_memory while indexing into rag_chunks, isolates chat_sessions per Kit, and caps bulk import at 200", async () => {
+    const { sealCredential } = await import("../platform/crypto/secretBox.ts");
+    const { getAdminAiSettingsView, updateAdminAiSettings } = await import(
+      "../platform/ai/aiSettingsService.ts"
+    );
+    const { makeKitSkeleton } = await import("./testHelpers.ts");
+
+    await aliceAgent
+      .post("/api/kits/import-kit")
+      .send({
+        skeleton: makeKitSkeleton((s) => {
+          s.identity.slug = "chat-episodic-kit";
+          s.identity.name = "Chat Episodic Kit";
+        }),
+      })
+      .expect(201);
+
+    const chatMockServer = await listenLocal(async (req, res) => {
+      if (req.url === "/v1/models") {
+        sendJson(res, 200, { data: [{ id: "chat-episodic-mock", created: 1_760_000_000 }] });
+        return;
+      }
+      if (req.url === "/v1/chat/completions" && req.method === "POST") {
+        let raw = "";
+        for await (const chunk of req) raw += chunk;
+        const body = JSON.parse(raw) as { model?: string; stream?: boolean };
+        if (body.stream) {
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+          });
+          res.write(
+            `data: ${JSON.stringify({
+              id: "chat-chunk-1",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: body.model,
+              choices: [{ index: 0, delta: { role: "assistant", content: "Paxos prepare uses monotonic proposal numbers." }, finish_reason: null }],
+            })}\n\n`,
+          );
+          res.write(
+            `data: ${JSON.stringify({
+              id: "chat-chunk-2",
+              object: "chat.completion.chunk",
+              created: 1,
+              model: body.model,
+              choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            })}\n\n`,
+          );
+          res.write("data: [DONE]\n\n");
+          res.end();
+          return;
+        }
+
+        sendJson(res, 200, {
+          id: "cmpl-episodic",
+          object: "chat.completion",
+          created: 1,
+          model: body.model,
+          choices: [
+            {
+              index: 0,
+              message: {
+                role: "assistant",
+                content: JSON.stringify({
+                  events: [
+                    {
+                      memory_text: "Learner mastered Paxos prepare quorum ordering.",
+                      importance_score: 9,
+                    },
+                  ],
+                }),
+              },
+              finish_reason: "stop",
+            },
+          ],
+          usage: { prompt_tokens: 10, completion_tokens: 15, total_tokens: 25 },
+        });
+        return;
+      }
+      res.writeHead(404).end();
+    });
+
+    const epId = "ep-episodic-mock";
+    const prevView = getAdminAiSettingsView();
+    db.prepare(
+      "INSERT OR REPLACE INTO custom_endpoints (id, name, base_url, api_key) VALUES (?, ?, ?, ?)",
+    ).run(epId, "Mock Chat Episodic", `${chatMockServer.baseUrl}/v1`, sealCredential("chat-key"));
+    updateAdminAiSettings({
+      capabilities: {
+        quick: { mode: "pinned", modelId: `custom:${epId}:chat-episodic-mock` },
+        deep: { mode: "pinned", modelId: `custom:${epId}:chat-episodic-mock` },
+      },
+    });
+
+    try {
+      await withEnv({ DISABLE_BACKGROUND_JOBS: "false" }, async () => {
+        const streamRes = await aliceAgent
+          .post("/api/chat/stream")
+          .set("X-Toolbox-Kit", "chat-episodic-kit")
+          .send({
+            message: "Explain Paxos prepare quorum numbers",
+            history: [],
+          })
+          .expect(200);
+        expect(streamRes.text).toContain("Paxos prepare uses monotonic proposal numbers.");
+
+        let memRow: { id: number | string; embedding: unknown } | undefined;
+        let chunkRow: { chunk_id: string } | undefined;
+        for (let attempt = 0; attempt < 40; attempt += 1) {
+          memRow = db
+            .prepare(
+              "SELECT id, embedding FROM episodic_memory WHERE ownerId = ? AND memory_text LIKE '%Paxos prepare quorum ordering%'",
+            )
+            .get(aliceId) as { id: number | string; embedding: unknown } | undefined;
+          if (memRow) {
+            chunkRow = db
+              .prepare(
+                "SELECT chunk_id FROM rag_chunks WHERE ownerId = ? AND kind = 'episodic' AND source_ref_id = ?",
+              )
+              .get(aliceId, String(memRow.id)) as { chunk_id: string } | undefined;
+            if (chunkRow) break;
+          }
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        expect(memRow).toBeDefined();
+        expect(memRow!.embedding).toBeNull();
+        expect(chunkRow?.chunk_id).toBeTruthy();
+      });
+
+      // Kit-scoped chat_sessions isolation & /sessions/bulk >200 guard
+      await aliceAgent
+        .post("/api/chat/sessions")
+        .set("X-Toolbox-Kit", "chat-episodic-kit")
+        .send({ session: { id: "sess-cross-kit-iso", name: "Rust Kit Session", messages: [] } })
+        .expect(200);
+
+      await aliceAgent
+        .post("/api/chat/sessions")
+        .set("X-Toolbox-Kit", "system-design")
+        .send({ session: { id: "sess-cross-kit-iso", name: "SD Overwrite Attempt", messages: [] } })
+        .expect(200);
+
+      await aliceAgent
+        .delete("/api/chat/sessions/sess-cross-kit-iso")
+        .set("X-Toolbox-Kit", "system-design")
+        .expect(200);
+
+      const sdSessions = await aliceAgent
+        .get("/api/chat/sessions")
+        .set("X-Toolbox-Kit", "system-design")
+        .expect(200);
+      expect((sdSessions.body as Record<string, unknown>)["sess-cross-kit-iso"]).toBeUndefined();
+
+      const kitSessions = await aliceAgent
+        .get("/api/chat/sessions")
+        .set("X-Toolbox-Kit", "chat-episodic-kit")
+        .expect(200);
+      expect(
+        (kitSessions.body as Record<string, { id: string; name: string }>)["sess-cross-kit-iso"]
+          ?.name,
+      ).toBe("Rust Kit Session");
+
+      const tooManySessions = Object.fromEntries(
+        Array.from({ length: 201 }, (_, i) => [
+          `bulk-over-limit-${i}`,
+          { id: `bulk-over-limit-${i}`, name: `Session ${i}`, messages: [] },
+        ]),
+      );
+      const bulkRes = await aliceAgent
+        .post("/api/chat/sessions/bulk")
+        .set("X-Toolbox-Kit", "chat-episodic-kit")
+        .send({ sessions: tooManySessions })
+        .expect(400);
+      expect(String(bulkRes.body.message)).toMatch(/200/);
+    } finally {
+      updateAdminAiSettings({ capabilities: prevView.capabilities });
+      db.prepare("DELETE FROM custom_endpoints WHERE id = ?").run(epId);
+      await chatMockServer.close();
+      __resetAppRateLimits();
+    }
+  });
 });

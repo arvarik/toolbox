@@ -9,9 +9,9 @@ import { scopeOf, type Scope } from "../platform/tenancy/scope.ts";
 import { runWebResearch } from "../platform/research/webResearch.ts";
 import { resolveActiveKit, type ActiveKitContext } from "../kits/kitContext.ts";
 import logger from "../utils/logger.ts";
-import { generateEmbedding } from "../utils/embeddings.ts";
 import {
   hybridSearch,
+  markRagDirty,
   syncDomainSourcesToRag,
   upsertRagChunk,
   upsertRagChunksBatch,
@@ -77,8 +77,11 @@ async function ragSearch(
   query: string,
   kind: RagChunkKind,
   limit: number,
+  skipSync = false,
 ) {
-  await syncDomainSourcesToRag(db, scope, kitId);
+  if (!skipSync) {
+    await syncDomainSourcesToRag(db, scope, kitId);
+  }
   return hybridSearch(db, scope, query, { kitId, kinds: [kind], limit });
 }
 
@@ -316,12 +319,14 @@ export function buildStudyTools(
   scope: Scope,
   kit: ActiveKitContext,
   opts: {
+    skipInitialSync?: boolean;
     enableWebResearch?: boolean;
     abortSignal?: AbortSignal;
     onCitations?: (citations: Array<{ title: string; url: string; snippet?: string }>) => void;
   } = {},
 ): ToolSet {
   const querySchema = (desc: string) => z.object({ query: z.string().describe(desc) });
+  const skipSync = Boolean(opts.skipInitialSync);
 
   const tools: ToolSet = {
     search_flashcards: tool({
@@ -329,7 +334,7 @@ export function buildStudyTools(
         "Search the learner's flashcards by hybrid keyword + semantic similarity. Use this to see what they have learned, quiz them on their own cards, or check what they struggle with.",
       inputSchema: querySchema("Search query for flashcards"),
       execute: async ({ query }) => {
-        const hits = await ragSearch(scope, kit.id, query, "flashcard", 5);
+        const hits = await ragSearch(scope, kit.id, query, "flashcard", 5, skipSync);
         if (hits.length === 0) return "No flashcards found.";
         const ids = hits.map((h) => h.sourceRefId);
         const ph = ids.map(() => "?").join(", ");
@@ -357,7 +362,7 @@ export function buildStudyTools(
         "Search the learner's committed study guide notes by hybrid keyword + semantic similarity. Use this to ground answers in what they have already written.",
       inputSchema: querySchema("Topic to search for in the study guide"),
       execute: async ({ query }) => {
-        const hits = await ragSearch(scope, kit.id, query, "guide", 4);
+        const hits = await ragSearch(scope, kit.id, query, "guide", 4, skipSync);
         return hits.length
           ? hits.map((h) => ({ title: h.title, content: h.content }))
           : "No guide content found.";
@@ -368,7 +373,7 @@ export function buildStudyTools(
         "Search uploaded reference materials, PDFs, and source documents attached to this Kit.",
       inputSchema: querySchema("Search query for Kit reference sources"),
       execute: async ({ query }) => {
-        const hits = await ragSearch(scope, kit.id, query, "source_chunk", 5);
+        const hits = await ragSearch(scope, kit.id, query, "source_chunk", 5, skipSync);
         return hits.length
           ? hits.map((h) => ({ title: h.title, excerpt: h.content, score: h.score }))
           : "No Kit source documents matched.";
@@ -444,13 +449,12 @@ model: ${generatedText}`;
     "INSERT INTO episodic_memory (ownerId, kit_id, memory_text, importance_score, embedding, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
   );
   for (const ev of events || []) {
-    const embedding = await generateEmbedding(ev.memory_text);
     const info = ins.run(
       scope.ownerId,
       kitId,
       ev.memory_text,
       ev.importance_score,
-      JSON.stringify(embedding),
+      null,
     );
     await upsertRagChunk(db, scope, {
       kitId,
@@ -461,6 +465,7 @@ model: ${generatedText}`;
     });
   }
   if (events?.length) {
+    markRagDirty(scope.ownerId, kitId);
     logger.info(`[chat/memory] Extracted ${events.length} episodic memories.`);
   }
 }
@@ -536,6 +541,7 @@ router.post("/stream", async (req, res, next) => {
       system,
       messages: boundedMessages,
       tools: buildStudyTools(scope, kit, {
+        skipInitialSync: true,
         enableWebResearch,
         abortSignal: abortController.signal,
         onCitations: (citations) => sendSse({ citations }),
@@ -1133,6 +1139,7 @@ router.post("/commit/save", async (req, res, next) => {
         content: u.content,
       }));
     if (ragInputs.length > 0) await upsertRagChunksBatch(db, scope, ragInputs);
+    if (savedCount > 0) markRagDirty(scope.ownerId, kit.id);
 
     res.json({ ok: true, savedCount });
   } catch (err) {
@@ -1175,8 +1182,29 @@ router.get("/sessions", (req, res, next) => {
   }
 });
 
+const MAX_BULK_CHAT_SESSIONS = 200;
+const MAX_CHAT_SESSION_ID_LEN = 200;
+const MAX_CHAT_SESSION_MESSAGES_CHARS = 2_000_000;
+
+function serializeBoundedChatSession(s: IncomingChatSession): string {
+  if (!s.id || typeof s.id !== "string" || s.id.length > MAX_CHAT_SESSION_ID_LEN) {
+    throw new Error(`Session id must be a string up to ${MAX_CHAT_SESSION_ID_LEN} characters`);
+  }
+  if (s.messages !== undefined && !Array.isArray(s.messages)) {
+    throw new Error("Session messages must be an array");
+  }
+  const serialized = JSON.stringify(s.messages || []);
+  if (serialized.length > MAX_CHAT_SESSION_MESSAGES_CHARS) {
+    throw new Error(
+      `Session messages payload exceeds maximum size of ${MAX_CHAT_SESSION_MESSAGES_CHARS} characters`,
+    );
+  }
+  return serialized;
+}
+
 function upsertChatSession(scope: Scope, kitId: string, s: IncomingChatSession): void {
   if (!s.id) return;
+  const serializedMessages = serializeBoundedChatSession(s);
   db.prepare(
     `INSERT INTO chat_sessions (id, ownerId, kit_id, name, persona, messages, pillar_id, topic_id, topic_name, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
@@ -1187,14 +1215,15 @@ function upsertChatSession(scope: Scope, kitId: string, s: IncomingChatSession):
        pillar_id = excluded.pillar_id,
        topic_id = excluded.topic_id,
        topic_name = excluded.topic_name,
-       updated_at = datetime('now')`,
+       updated_at = datetime('now')
+     WHERE chat_sessions.kit_id = excluded.kit_id`,
   ).run(
     s.id,
     scope.ownerId,
     kitId,
-    s.name || "Session",
-    s.persona || "socratic",
-    JSON.stringify(s.messages || []),
+    (typeof s.name === "string" && s.name.trim() ? s.name.trim() : "Session").slice(0, 200),
+    typeof s.persona === "string" && s.persona ? s.persona.slice(0, 64) : "socratic",
+    serializedMessages,
     s.pillarId || null,
     s.topicId || null,
     s.topicName || null,
@@ -1205,7 +1234,7 @@ function upsertChatSession(scope: Scope, kitId: string, s: IncomingChatSession):
 router.post("/sessions", (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { session } = req.body as { session?: IncomingChatSession };
+  const { session } = (req.body ?? {}) as { session?: IncomingChatSession };
   if (!session?.id) {
     res.status(400).json({ message: "Session required" });
     return;
@@ -1214,6 +1243,10 @@ router.post("/sessions", (req, res, next) => {
     upsertChatSession(scope, kit.id, session);
     res.json({ success: true });
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith("Session ")) {
+      res.status(400).json({ message: err.message });
+      return;
+    }
     fail(res, next, "chat/sessions POST", err, "Failed to save session.");
   }
 });
@@ -1221,28 +1254,41 @@ router.post("/sessions", (req, res, next) => {
 router.post("/sessions/bulk", (req, res, next) => {
   const scope = scopeOf(req);
   const kit = resolveActiveKit(req, db, scope);
-  const { sessions } = req.body as { sessions?: Record<string, IncomingChatSession> };
-  if (!sessions || typeof sessions !== "object") {
+  const { sessions } = (req.body ?? {}) as { sessions?: Record<string, IncomingChatSession> };
+  if (!sessions || typeof sessions !== "object" || Array.isArray(sessions)) {
     res.status(400).json({ message: "Sessions object required" });
+    return;
+  }
+  const entries = Object.values(sessions);
+  if (entries.length > MAX_BULK_CHAT_SESSIONS) {
+    res.status(400).json({
+      message: `Cannot bulk sync more than ${MAX_BULK_CHAT_SESSIONS} chat sessions at once`,
+    });
     return;
   }
   try {
     db.transaction(() => {
-      for (const s of Object.values(sessions)) {
+      for (const s of entries) {
         if (s?.id) upsertChatSession(scope, kit.id, s);
       }
     })();
     res.json({ success: true });
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith("Session ")) {
+      res.status(400).json({ message: err.message });
+      return;
+    }
     fail(res, next, "chat/sessions/bulk", err, "Failed to save sessions in bulk.");
   }
 });
 
 router.delete("/sessions/:id", (req, res, next) => {
   const scope = scopeOf(req);
+  const kit = resolveActiveKit(req, db, scope);
   try {
-    db.prepare("DELETE FROM chat_sessions WHERE ownerId = ? AND id = ?").run(
+    db.prepare("DELETE FROM chat_sessions WHERE ownerId = ? AND kit_id = ? AND id = ?").run(
       scope.ownerId,
+      kit.id,
       req.params.id,
     );
     res.json({ success: true });

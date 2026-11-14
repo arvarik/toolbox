@@ -6,6 +6,7 @@ import { scopeOf } from "../platform/tenancy/scope.ts";
 import { resolveActiveKit } from "../kits/kitContext.ts";
 import {
   deleteRagChunksBySource,
+  markRagDirty,
   upsertRagChunk,
 } from "../search/hybridSearch.ts";
 import logger from "../utils/logger.ts";
@@ -566,6 +567,7 @@ router.put(
     } else {
       deleteRagChunksBySource(db, scope, kit.id, "guide", sourceRefId);
     }
+    markRagDirty(scope.ownerId, kit.id);
 
     res.json({ ok: true });
   }),
@@ -592,6 +594,7 @@ router.delete("/:pillarId/:topicId/:sectionId", (req, res) => {
     "guide",
     `${pillarId}:${topicId}:${sectionId}`,
   );
+  markRagDirty(scope.ownerId, kit.id);
   res.json({ ok: true });
 });
 
