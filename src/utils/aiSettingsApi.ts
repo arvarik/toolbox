@@ -28,6 +28,10 @@ async function aiJsonFetch<T>(
     error?: { message?: string };
   } & T;
 
+  if (res.status === 401 && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("toolbox:unauthorized"));
+  }
+
   if (!res.ok) {
     throw new Error(
       payload?.error?.message ||

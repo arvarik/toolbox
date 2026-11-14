@@ -69,6 +69,9 @@ export default function BuilderPage() {
   const isMobile = useIsMobile()
   const autoSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastSavedData = useRef<string | null>(null)
+  const boardOwnerKitRef = useRef<string | null | undefined>(undefined)
+  const currentKitSlugRef = useRef<string | null>(kitSlug ?? null)
+  currentKitSlugRef.current = kitSlug ?? null
 
   // Track which board IDs are local-only (not yet saved to DB)
   const [unsavedIds, setUnsavedIds] = useState<Set<string>>(() => new Set())
@@ -79,12 +82,14 @@ export default function BuilderPage() {
   // ─── Initial Load (and reload when active Kit changes) ───
   useEffect(() => {
     let cancelled = false
+    const targetKitSlug = kitSlug ?? null
 
     // Immediately cancel any pending auto-save and clear previous Kit's canvas
     if (autoSaveTimer.current) {
       clearTimeout(autoSaveTimer.current)
       autoSaveTimer.current = null
     }
+    boardOwnerKitRef.current = undefined
     skipNextLoad.current = false
     lastSavedData.current = null
     setActiveBoard(null)
@@ -100,16 +105,18 @@ export default function BuilderPage() {
         id: `local-${Date.now()}`,
         name: isConceptMode ? 'Untitled Concept Map' : 'Untitled Board',
       }
+      boardOwnerKitRef.current = targetKitSlug
       skipNextLoad.current = true
       setBoards([newBoard])
       setActiveBoard(newBoard.id)
       setUnsavedIds(new Set([newBoard.id]))
     }
 
-    boardsApi.list<BoardTabItem>().then((rawList) => {
+    boardsApi.list<BoardTabItem>(targetKitSlug).then((rawList) => {
       if (cancelled) return
       const list = Array.isArray(rawList) ? rawList : []
       if (list.length > 0) {
+        boardOwnerKitRef.current = targetKitSlug
         setBoards(list)
         // Deep link support: /builder?board=<id> (e.g. from the Knowledge Graph)
         const requested = searchParams.get('board')
@@ -145,8 +152,9 @@ export default function BuilderPage() {
     }
 
     let cancelled = false
+    const requestKitSlug = kitSlug ?? null
     // Load from server (persisted board shape → React Flow shape)
-    boardsApi.get<ServerBoardDetail | null>(activeBoard).then((board) => {
+    boardsApi.get<ServerBoardDetail | null>(activeBoard, requestKitSlug).then((board) => {
       if (cancelled) return
       if (board && board.data) {
         const boardNodes = board.data.nodes || []
@@ -174,8 +182,10 @@ export default function BuilderPage() {
   // Compare and persist in the board shape, so selection/drag churn in
   // the React Flow state never triggers a save on its own.
   useEffect(() => {
-    // Skip local (unsaved) boards
+    const saveKitSlug = kitSlug ?? null
+    // Skip local (unsaved) boards or stale board state while switching Kits
     if (!activeBoard || unsavedIds.has(activeBoard)) return
+    if (boardOwnerKitRef.current !== saveKitSlug) return
 
     const boardData = toBoardData(nodes, edges)
     const currentData = JSON.stringify(boardData)
@@ -183,12 +193,21 @@ export default function BuilderPage() {
 
     if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current)
 
+    const currentBoard = boards.find((b) => b.id === activeBoard)
+    if (!currentBoard) return
+    const saveBoardId = activeBoard
+    const saveBoardName = currentBoard.name
+
     autoSaveTimer.current = setTimeout(async () => {
-      const currentBoard = boards.find((b) => b.id === activeBoard)
-      if (!currentBoard) return
       try {
-        await boardsApi.update(activeBoard, { name: currentBoard.name, data: boardData })
-        lastSavedData.current = currentData
+        await boardsApi.update(
+          saveBoardId,
+          { name: saveBoardName, data: boardData },
+          saveKitSlug,
+        )
+        if (currentKitSlugRef.current === saveKitSlug) {
+          lastSavedData.current = currentData
+        }
       } catch {
         // Silent fail for auto-save
       }
@@ -197,7 +216,7 @@ export default function BuilderPage() {
     return () => {
       if (autoSaveTimer.current) clearTimeout(autoSaveTimer.current)
     }
-  }, [nodes, edges, activeBoard, boards, unsavedIds])
+  }, [nodes, edges, activeBoard, boards, unsavedIds, kitSlug])
 
   // ─── Board Management Handlers ───
 
@@ -214,18 +233,23 @@ export default function BuilderPage() {
     const currentBoard = boards.find((b) => b.id === activeBoard)
     if (!currentBoard) return null
 
+    const saveKitSlug = kitSlug ?? null
+    const targetBoardId = activeBoard
     const name = currentBoard.name
     const data = toBoardData(nodes, edges)
-    const isLocal = unsavedIds.has(activeBoard)
+    const isLocal = unsavedIds.has(targetBoardId)
 
     if (isLocal) {
-      const saved = (await boardsApi.create({ name, data })) as BoardTabItem
+      const saved = (await boardsApi.create({ name, data }, saveKitSlug)) as BoardTabItem
+      if (currentKitSlugRef.current !== saveKitSlug) {
+        return saved.id
+      }
       setBoards((prev) =>
-        prev.map((b) => (b.id === activeBoard ? { ...b, id: saved.id, name: saved.name } : b))
+        prev.map((b) => (b.id === targetBoardId ? { ...b, id: saved.id, name: saved.name } : b))
       )
       setUnsavedIds((prev) => {
         const next = new Set(prev)
-        next.delete(activeBoard)
+        next.delete(targetBoardId)
         return next
       })
       skipNextLoad.current = true
@@ -235,11 +259,13 @@ export default function BuilderPage() {
       return saved.id
     }
 
-    await boardsApi.update(activeBoard, { name, data })
-    lastSavedData.current = JSON.stringify(data)
-    if (!silent) addToast({ type: 'success', message: 'Board saved' })
-    return activeBoard
-  }, [activeBoard, boards, nodes, edges, unsavedIds, addToast])
+    await boardsApi.update(targetBoardId, { name, data }, saveKitSlug)
+    if (currentKitSlugRef.current === saveKitSlug) {
+      lastSavedData.current = JSON.stringify(data)
+      if (!silent) addToast({ type: 'success', message: 'Board saved' })
+    }
+    return targetBoardId
+  }, [activeBoard, boards, nodes, edges, unsavedIds, addToast, kitSlug])
 
   const handleSaveBoard = useCallback(async () => {
     try {

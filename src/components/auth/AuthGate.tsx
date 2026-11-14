@@ -11,13 +11,25 @@ import {
   startAuthentication,
   type PublicKeyCredentialRequestOptionsJSON,
 } from "@simplewebauthn/browser";
-import { KeyRound, LogIn, ShieldCheck, UserPlus } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowLeft,
+  CheckCircle2,
+  KeyRound,
+  LogIn,
+  Mail,
+  RefreshCw,
+  ShieldCheck,
+  UserPlus,
+} from "lucide-react";
 import { KitLogo } from "../ui/KitLogo";
 import {
+  AuthApiError,
   authApi,
   type AuthStatusResponse,
   type AuthUser,
 } from "../../utils/authApi.ts";
+import { clearClientUserData } from "../../stores/appStore";
 
 export interface AuthContextValue {
   status: AuthStatusResponse | null;
@@ -47,15 +59,42 @@ export function useAuth(): AuthContextValue {
   return useContext(AuthContext);
 }
 
-function takeInviteTokenFromUrl(): string | null {
-  if (typeof window === "undefined") return null;
+interface UrlAuthTokens {
+  inviteToken: string | null;
+  resetToken: string | null;
+  magicToken: string | null;
+  emailToken: string | null;
+}
+
+function takeUrlAuthTokens(): UrlAuthTokens {
+  const empty: UrlAuthTokens = {
+    inviteToken: null,
+    resetToken: null,
+    magicToken: null,
+    emailToken: null,
+  };
+  if (typeof window === "undefined") return empty;
   const url = new URL(window.location.href);
-  if (url.pathname !== "/join") return null;
   const token = url.searchParams.get("token")?.trim() || null;
-  if (token) {
+  if (!token) return empty;
+
+  if (url.pathname === "/join") {
     window.history.replaceState({}, "", "/");
+    return { ...empty, inviteToken: token };
   }
-  return token;
+  if (url.pathname === "/reset-password") {
+    window.history.replaceState({}, "", "/");
+    return { ...empty, resetToken: token };
+  }
+  if (url.pathname === "/signin-link") {
+    window.history.replaceState({}, "", "/");
+    return { ...empty, magicToken: token };
+  }
+  if (url.pathname === "/confirm-email") {
+    window.history.replaceState({}, "", "/");
+    return { ...empty, emailToken: token };
+  }
+  return empty;
 }
 
 export function passkeysAvailable(): boolean {
@@ -67,24 +106,55 @@ export function passkeysAvailable(): boolean {
 
 type ScreenMode =
   | "checking"
+  | "error"
   | "setup"
   | "join"
   | "signin"
+  | "forgot-password"
+  | "magic-link"
+  | "reset-password"
+  | "signin-link"
+  | "confirm-email"
   | "register"
   | "password-change"
   | "open";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
+  const [initialTokens] = useState<UrlAuthTokens>(takeUrlAuthTokens);
   const [screen, setScreen] = useState<ScreenMode>("checking");
   const [status, setStatus] = useState<AuthStatusResponse | null>(null);
+  const [statusError, setStatusError] = useState<{
+    status?: number;
+    code?: string;
+    message: string;
+  } | null>(null);
   const [isResolved, setIsResolved] = useState(false);
+
   const [inviteToken, setInviteToken] = useState<string | null>(
-    takeInviteTokenFromUrl,
+    initialTokens.inviteToken,
   );
   const inviteRef = useRef(inviteToken);
+  const [resetToken, setResetToken] = useState<string | null>(
+    initialTokens.resetToken,
+  );
+  const resetRef = useRef(resetToken);
+  const [magicToken, setMagicToken] = useState<string | null>(
+    initialTokens.magicToken,
+  );
+  const magicRef = useRef(magicToken);
+  const [emailToken, setEmailToken] = useState<string | null>(
+    initialTokens.emailToken,
+  );
+  const emailConfirmRef = useRef(emailToken);
+
   const manualSetupRef = useRef(false);
+  const attemptedMagicRef = useRef<string | null>(null);
+  const attemptedEmailRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
 
   const [error, setError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [confirmedEmail, setConfirmedEmail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   // Form fields shared across auth screens
@@ -95,12 +165,27 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   const [password, setPassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
+    setStatusError(null);
     try {
       const next = await authApi.status();
+      if (!mountedRef.current) return;
       setStatus(next);
       setIsResolved(true);
-      if (inviteRef.current) {
+      if (magicRef.current) {
+        setScreen("signin-link");
+      } else if (emailConfirmRef.current) {
+        setScreen("confirm-email");
+      } else if (resetRef.current) {
+        setScreen("reset-password");
+      } else if (inviteRef.current) {
         setScreen("join");
       } else if (next.setupRequired || manualSetupRef.current) {
         setScreen("setup");
@@ -111,16 +196,30 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       } else {
         setScreen("open");
       }
-    } catch {
-      // Offline / dev fallback: render the app when the status request fails
+    } catch (err) {
+      if (!mountedRef.current) return;
+      if (err instanceof TypeError) {
+        // Offline / dev fallback: render the app only on unreachable network failure
+        setIsResolved(true);
+        setScreen("open");
+        return;
+      }
+      const statusCode = err instanceof AuthApiError ? err.status : undefined;
+      const errorCode = err instanceof AuthApiError ? err.code : undefined;
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Unable to verify session with server";
+      setStatusError({ status: statusCode, code: errorCode, message });
       setIsResolved(true);
-      setScreen("open");
+      setScreen("error");
     }
   }, []);
 
   useEffect(() => {
     void refresh();
     const onUnauthorized = () => {
+      clearClientUserData();
       void refresh();
     };
     window.addEventListener("toolbox:unauthorized", onUnauthorized);
@@ -128,9 +227,70 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
       window.removeEventListener("toolbox:unauthorized", onUnauthorized);
   }, [refresh]);
 
+  useEffect(() => {
+    if (screen !== "signin-link" || !magicToken) return;
+    if (attemptedMagicRef.current === magicToken) return;
+    attemptedMagicRef.current = magicToken;
+
+    const run = async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        await authApi.completeMagicLink({ token: magicToken });
+        if (!mountedRef.current) return;
+        magicRef.current = null;
+        setMagicToken(null);
+        await refresh();
+      } catch (err) {
+        if (!mountedRef.current) return;
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Sign-in link is invalid or has expired",
+        );
+      } finally {
+        if (mountedRef.current) setBusy(false);
+      }
+    };
+    void run();
+  }, [screen, magicToken, refresh]);
+
+  useEffect(() => {
+    if (screen !== "confirm-email" || !emailToken) return;
+    if (attemptedEmailRef.current === emailToken) return;
+    attemptedEmailRef.current = emailToken;
+
+    const run = async () => {
+      setBusy(true);
+      setError(null);
+      try {
+        const res = await authApi.completeEmailChange(emailToken);
+        if (!mountedRef.current) return;
+        setConfirmedEmail(res.email);
+        try {
+          const fresh = await authApi.status();
+          if (mountedRef.current) setStatus(fresh);
+        } catch {
+          // Keep confirmation banner visible even if status refresh fails
+        }
+      } catch (err) {
+        if (!mountedRef.current) return;
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Email confirmation link is invalid or has expired",
+        );
+      } finally {
+        if (mountedRef.current) setBusy(false);
+      }
+    };
+    void run();
+  }, [screen, emailToken]);
+
   const beginSetup = useCallback(() => {
     manualSetupRef.current = true;
     setError(null);
+    setInfoMessage(null);
     setPassword("");
     setScreen("setup");
   }, []);
@@ -142,9 +302,16 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
-    await authApi.logout();
-    setPassword("");
-    await refresh();
+    try {
+      await authApi.logout();
+    } finally {
+      clearClientUserData();
+      setPassword("");
+      setCurrentPassword("");
+      setError(null);
+      setInfoMessage(null);
+      await refresh();
+    }
   }, [refresh]);
 
   const handleSetup = async (e: React.FormEvent) => {
@@ -261,6 +428,89 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const handleRequestPasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setInfoMessage(null);
+    try {
+      await authApi.requestPasswordReset(email.trim());
+      setInfoMessage(
+        "If an account matches that email, a password reset link has been sent.",
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not send password reset email",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCompletePasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetToken) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await authApi.completePasswordReset({ token: resetToken, password });
+      resetRef.current = null;
+      setResetToken(null);
+      setPassword("");
+      await refresh();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Could not reset password. Your link may have expired.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleRequestMagicLink = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setInfoMessage(null);
+    try {
+      await authApi.requestMagicLink(email.trim());
+      setInfoMessage(
+        "If an account matches that email, a sign-in link has been sent.",
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not send sign-in link",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const returnToSignIn = () => {
+    magicRef.current = null;
+    resetRef.current = null;
+    emailConfirmRef.current = null;
+    setMagicToken(null);
+    setResetToken(null);
+    setEmailToken(null);
+    setConfirmedEmail(null);
+    setError(null);
+    setInfoMessage(null);
+    if (status) {
+      if (inviteRef.current) setScreen("join");
+      else if (status.setupRequired || manualSetupRef.current) setScreen("setup");
+      else if (status.authRequired && !status.authenticated) setScreen("signin");
+      else if (status.user?.mustChangePassword) setScreen("password-change");
+      else setScreen("open");
+    } else {
+      void refresh();
+    }
+  };
+
   const ctxValue: AuthContextValue = {
     status,
     user: status?.user ?? null,
@@ -316,8 +566,14 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 </span>
               </div>
               <p className="text-xs text-on-surface-variant mt-0.5">
+                {screen === "error" && "Unable to connect to workspace"}
                 {screen === "setup" && "Create Administrator Account"}
                 {screen === "signin" && "Sign in to your study workspace"}
+                {screen === "forgot-password" && "Reset your password"}
+                {screen === "magic-link" && "Sign in with an email link"}
+                {screen === "reset-password" && "Choose a new password"}
+                {screen === "signin-link" && "Verifying your sign-in link"}
+                {screen === "confirm-email" && "Confirm email address"}
                 {screen === "register" && "Create a new learner account"}
                 {screen === "join" && "Accept your invitation"}
                 {screen === "password-change" && "Set a permanent password"}
@@ -325,12 +581,52 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
             </div>
           </div>
 
-          {error && (
+          {error && screen !== "error" && (
             <div
               role="alert"
               className="mb-4 rounded-lg bg-error/15 px-3.5 py-2.5 text-sm text-danger border border-danger/30"
             >
               {error}
+            </div>
+          )}
+
+          {infoMessage && (
+            <div
+              role="status"
+              className="mb-4 rounded-lg bg-primary/10 px-3.5 py-2.5 text-sm text-on-primary-wash"
+            >
+              {infoMessage}
+            </div>
+          )}
+
+          {screen === "error" && statusError && (
+            <div className="space-y-4">
+              <div
+                role="alert"
+                className="rounded-lg bg-error/15 px-3.5 py-3 text-sm text-danger border border-danger/30 space-y-1"
+              >
+                <div className="flex items-center gap-2 font-medium">
+                  <AlertCircle size={16} />
+                  <span>
+                    {statusError.status
+                      ? `Server returned HTTP ${statusError.status}`
+                      : "Session check failed"}
+                    {statusError.code ? ` (${statusError.code})` : ""}
+                  </span>
+                </div>
+                <p className="text-xs text-danger">{statusError.message}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setScreen("checking");
+                  void refresh();
+                }}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-on-primary"
+              >
+                <RefreshCw size={15} />
+                Retry
+              </button>
             </div>
           )}
 
@@ -503,6 +799,39 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                 </div>
               )}
 
+              {(status?.mailConfigured || status?.magicLinkSignIn) && (
+                <div className="flex flex-wrap items-center justify-between gap-2 text-xs pt-1">
+                  {status?.mailConfigured ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setInfoMessage(null);
+                        setScreen("forgot-password");
+                      }}
+                      className="font-medium text-primary underline"
+                    >
+                      Forgot password?
+                    </button>
+                  ) : (
+                    <span />
+                  )}
+                  {status?.magicLinkSignIn && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setError(null);
+                        setInfoMessage(null);
+                        setScreen("magic-link");
+                      }}
+                      className="font-medium text-primary underline"
+                    >
+                      Email me a sign-in link
+                    </button>
+                  )}
+                </div>
+              )}
+
               {status?.registrationOpen && (
                 <p className="text-center text-xs text-on-surface-variant pt-1">
                   New here?{" "}
@@ -510,6 +839,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                     type="button"
                     onClick={() => {
                       setError(null);
+                      setInfoMessage(null);
                       setScreen("register");
                     }}
                     className="font-medium text-primary underline"
@@ -517,6 +847,187 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
                     Create an account
                   </button>
                 </p>
+              )}
+            </div>
+          )}
+
+          {screen === "forgot-password" && (
+            <form onSubmit={handleRequestPasswordReset} className="space-y-3.5">
+              <p className="text-xs text-on-surface-variant">
+                Enter your account email and we will send you a password reset
+                link.
+              </p>
+              <div>
+                <label
+                  htmlFor="forgot-email"
+                  className="block text-xs font-medium text-on-surface-variant mb-1"
+                >
+                  Email address
+                </label>
+                <input
+                  id="forgot-email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full rounded-lg bg-surface-container-lowest border border-outline-variant px-3 py-2 text-sm text-on-surface focus:border-primary"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={busy}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-on-primary disabled:opacity-60"
+              >
+                <Mail size={16} />
+                {busy ? "Sending..." : "Send Reset Link"}
+              </button>
+              <button
+                type="button"
+                onClick={returnToSignIn}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-surface-container-high px-4 py-2 text-sm text-on-surface border border-outline-variant hover:bg-surface-container-highest"
+              >
+                <ArrowLeft size={15} />
+                Back to Sign In
+              </button>
+            </form>
+          )}
+
+          {screen === "magic-link" && (
+            <form onSubmit={handleRequestMagicLink} className="space-y-3.5">
+              <p className="text-xs text-on-surface-variant">
+                Enter your email address and we will send you a one-time link
+                to sign in.
+              </p>
+              <div>
+                <label
+                  htmlFor="magic-email"
+                  className="block text-xs font-medium text-on-surface-variant mb-1"
+                >
+                  Email address
+                </label>
+                <input
+                  id="magic-email"
+                  type="email"
+                  required
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full rounded-lg bg-surface-container-lowest border border-outline-variant px-3 py-2 text-sm text-on-surface focus:border-primary"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={busy}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-on-primary disabled:opacity-60"
+              >
+                <Mail size={16} />
+                {busy ? "Sending..." : "Send Sign-In Link"}
+              </button>
+              <button
+                type="button"
+                onClick={returnToSignIn}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-surface-container-high px-4 py-2 text-sm text-on-surface border border-outline-variant hover:bg-surface-container-highest"
+              >
+                <ArrowLeft size={15} />
+                Back to Sign In
+              </button>
+            </form>
+          )}
+
+          {screen === "reset-password" && (
+            <form onSubmit={handleCompletePasswordReset} className="space-y-3.5">
+              <p className="text-xs text-on-surface-variant">
+                Enter a new password for your account to complete the reset.
+              </p>
+              <div>
+                <label
+                  htmlFor="reset-new-password"
+                  className="block text-xs font-medium text-on-surface-variant mb-1"
+                >
+                  New password (12+ characters)
+                </label>
+                <input
+                  id="reset-new-password"
+                  type="password"
+                  required
+                  minLength={12}
+                  autoComplete="new-password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-lg bg-surface-container-lowest border border-outline-variant px-3 py-2 text-sm text-on-surface focus:border-primary"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={busy}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-on-primary disabled:opacity-60"
+              >
+                {busy ? "Resetting..." : "Reset Password"}
+              </button>
+              <button
+                type="button"
+                onClick={returnToSignIn}
+                className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-surface-container-high px-4 py-2 text-sm text-on-surface border border-outline-variant hover:bg-surface-container-highest"
+              >
+                <ArrowLeft size={15} />
+                Back to Sign In
+              </button>
+            </form>
+          )}
+
+          {screen === "signin-link" && (
+            <div className="space-y-4">
+              {busy ? (
+                <div className="flex items-center gap-3 py-2 text-sm text-on-surface-variant">
+                  <div className="w-5 h-5 rounded-full border-2 border-outline-variant border-t-primary animate-spin shrink-0" />
+                  <span>Completing your email sign-in...</span>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={returnToSignIn}
+                  className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-surface-container-high px-4 py-2 text-sm text-on-surface border border-outline-variant hover:bg-surface-container-highest"
+                >
+                  <ArrowLeft size={15} />
+                  Back to Sign In
+                </button>
+              )}
+            </div>
+          )}
+
+          {screen === "confirm-email" && (
+            <div className="space-y-4">
+              {busy && !confirmedEmail && !error ? (
+                <div className="flex items-center gap-3 py-2 text-sm text-on-surface-variant">
+                  <div className="w-5 h-5 rounded-full border-2 border-outline-variant border-t-primary animate-spin shrink-0" />
+                  <span>Confirming your email address...</span>
+                </div>
+              ) : (
+                <>
+                  {confirmedEmail && (
+                    <div
+                      role="status"
+                      className="rounded-lg bg-primary/10 px-3.5 py-3 text-sm text-on-primary-wash flex items-start gap-2.5"
+                    >
+                      <CheckCircle2 size={16} className="shrink-0 mt-0.5" />
+                      <span>
+                        Email address confirmed and updated to{" "}
+                        <strong className="font-medium">{confirmedEmail}</strong>
+                        .
+                      </span>
+                    </div>
+                  )}
+                  <button
+                    type="button"
+                    onClick={returnToSignIn}
+                    className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-on-primary"
+                  >
+                    {status?.authenticated || !status?.authRequired
+                      ? "Continue to Workspace"
+                      : "Continue to Sign In"}
+                  </button>
+                </>
               )}
             </div>
           )}

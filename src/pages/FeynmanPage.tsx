@@ -143,6 +143,19 @@ export default function FeynmanPage() {
         console.error('Speech recognition error', event.error)
         setInterimTranscript('')
         setIsRecording(false)
+        const errorCode = event?.error || 'unknown'
+        if (errorCode === 'aborted') return
+        let message = `Voice dictation failed (${errorCode}).`
+        if (errorCode === 'not-allowed' || errorCode === 'service-not-allowed') {
+          message = 'Microphone permission denied. Allow microphone access and try again.'
+        } else if (errorCode === 'no-speech') {
+          message = 'No speech detected. Check your microphone and try again.'
+        } else if (errorCode === 'audio-capture') {
+          message = 'No microphone was detected for voice dictation.'
+        } else if (errorCode === 'network') {
+          message = 'Speech recognition failed due to a network error.'
+        }
+        useAppStore.getState().addToast({ type: 'error', message })
       }
 
       recognition.onend = () => {

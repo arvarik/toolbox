@@ -36,7 +36,7 @@ export interface AdminUserItem extends PublicUser {
   ownedCount?: number;
 }
 
-class AuthApiError extends Error {
+export class AuthApiError extends Error {
   readonly status: number;
   readonly code?: string;
   constructor(message: string, status: number, code?: string) {
@@ -130,6 +130,36 @@ export const authApi = {
     authFetch<{ success: boolean }>("/auth/change-password", {
       method: "POST",
       body: data,
+    }),
+
+  requestPasswordReset: (email: string) =>
+    authFetch<void>("/auth/password-reset/request", {
+      method: "POST",
+      body: { email },
+    }),
+
+  completePasswordReset: (data: { token: string; password: string }) =>
+    authFetch<{ user: PublicUser }>("/auth/password-reset/complete", {
+      method: "POST",
+      body: data,
+    }),
+
+  requestMagicLink: (email: string) =>
+    authFetch<void>("/auth/magic-link/request", {
+      method: "POST",
+      body: { email },
+    }),
+
+  completeMagicLink: (data: { token: string; remember?: boolean }) =>
+    authFetch<{ user: PublicUser }>("/auth/magic-link/complete", {
+      method: "POST",
+      body: data,
+    }),
+
+  completeEmailChange: (token: string) =>
+    authFetch<{ email: string }>("/auth/email-change/complete", {
+      method: "POST",
+      body: { token },
     }),
 
   listSessions: () => authFetch<{ sessions: SessionItem[] }>("/auth/sessions"),

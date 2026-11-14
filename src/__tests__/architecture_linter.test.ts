@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { auditArchitecture } from '../utils/architectureLinter'
 import type { AuditEdge, AuditNode, AuditSeverity } from '../utils/architectureLinter'
+import { ARCHITECTURE_TEMPLATES } from '../utils/templates'
 
 describe('Architecture Linter Engine', () => {
   it('handles empty canvas safely', () => {
@@ -90,6 +91,43 @@ describe('Architecture Linter Engine', () => {
     )
     expect(report.findings.find((f) => f.id === 'unshielded-ingress')).toBeUndefined()
     expect(report.passes.some((p) => p.includes('Perimeter Shield'))).toBe(true)
+  })
+
+  it('excludes gateways, LBs, CDNs, and queues from appServers so single backend behind API Gateway flags compute-spof without false circuit-breaker warning', () => {
+    const report = auditArchitecture(
+      [
+        { id: 'client-1', data: { name: 'Web Client', category: 'Clients', icon: 'monitor' } },
+        { id: 'gw-1', data: { name: 'API Gateway', category: 'Compute', icon: 'door-open' } },
+        { id: 'cdn-1', data: { name: 'Edge CDN', category: 'Compute', icon: 'globe' } },
+        { id: 'q-1', data: { name: 'Event Bus', category: 'Compute', icon: 'radio' } },
+        { id: 'app-1', data: { name: 'App Server', category: 'Compute', icon: 'box' } },
+      ],
+      [
+        { id: 'e1', source: 'client-1', target: 'gw-1' },
+        { id: 'e2', source: 'gw-1', target: 'app-1' },
+        { id: 'e3', source: 'client-1', target: 'cdn-1' },
+        { id: 'e4', source: 'app-1', target: 'q-1' },
+      ],
+    )
+    const spof = report.findings.find((f) => f.id === 'compute-spof')
+    expect(spof).toBeDefined()
+    expect(spof?.severity).toBe('critical')
+    expect(spof?.nodeIds).toEqual(['app-1'])
+    expect(report.findings.find((f) => f.id === 'missing-circuit-breaker')).toBeUndefined()
+  })
+
+  it('places Rate Limiter under Resiliency in URL Shortener template so audit recognizes rate limiting', () => {
+    const urlShortener = ARCHITECTURE_TEMPLATES.find((t) => t.id === 'url-shortener')
+    expect(urlShortener).toBeDefined()
+    const rateLimiter = urlShortener?.nodes.find((n) => n.name === 'Rate Limiter')
+    expect(rateLimiter?.category).toBe('Resiliency')
+
+    const report = auditArchitecture(
+      (urlShortener?.nodes ?? []).map((n) => ({ id: n.id, data: { ...n } })),
+      (urlShortener?.edges ?? []).map((e) => ({ ...e, source: e.from, target: e.to })),
+    )
+    expect(report.findings.find((f) => f.id === 'missing-rate-limiter')).toBeUndefined()
+    expect(report.passes.some((p) => p.includes('Traffic Protection'))).toBe(true)
   })
 
   it('passes write buffering when message queue decouples DB writes', () => {

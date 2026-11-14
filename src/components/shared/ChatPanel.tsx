@@ -393,6 +393,10 @@ function ChatPanelContent({
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
       setIsLoading(false)
+      setMessages((prev) => {
+        const last = prev[prev.length - 1]
+        return last && last.role === 'ai' && !last.content ? prev.slice(0, -1) : prev
+      })
     }
   }
 
@@ -415,9 +419,19 @@ function ChatPanelContent({
     setErrorMsg(null)
   }
 
+  const resizeCleanupRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => {
+    return () => {
+      resizeCleanupRef.current?.()
+      resizeCleanupRef.current = null
+    }
+  }, [])
+
   const handleMouseDown = (e: ReactMouseEvent<HTMLDivElement>) => {
     if (isMobile) return
     e.preventDefault()
+    resizeCleanupRef.current?.()
     const startX = e.clientX
     const startWidth = width
 
@@ -430,11 +444,19 @@ function ChatPanelContent({
       safeStorage.setItem('toolbox_chat_width', String(newWidth))
     }
 
-    const handleMouseUp = () => {
+    const cleanup = () => {
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
+      if (resizeCleanupRef.current === cleanup) {
+        resizeCleanupRef.current = null
+      }
     }
 
+    const handleMouseUp = () => {
+      cleanup()
+    }
+
+    resizeCleanupRef.current = cleanup
     document.addEventListener('mousemove', handleMouseMove)
     document.addEventListener('mouseup', handleMouseUp)
   }
@@ -578,10 +600,14 @@ function ChatPanelContent({
 
         {messages.map((msg, i) => {
           const isLast = i === messages.length - 1
+          const showSkeleton = msg.role === 'ai' && isLast && isLoading && !msg.content
+          if (msg.role === 'ai' && !msg.content && !showSkeleton) {
+            return null
+          }
           return (
             <div
               key={i}
-              className={`chat-message ${msg.role}`}
+              className={`chat-message ${msg.role}${showSkeleton ? ' loading' : ''}`}
               data-testid={`message-${msg.role}`}
             >
               {msg.role === 'ai' ? (
@@ -594,11 +620,19 @@ function ChatPanelContent({
               ) : (
                 <div className="chat-message-avatar user">U</div>
               )}
-              <div className="chat-message-content">
-                <div className="chat-message-text">
-                  {msg.content ? <MarkdownRenderer content={msg.content} /> : null}
-                </div>
-                {msg.role === 'ai' && (
+              <div className={showSkeleton ? 'chat-message-content w-full' : 'chat-message-content'}>
+                {showSkeleton ? (
+                  <div className="flex flex-col gap-2" data-testid="chat-loading">
+                    <Skeleton style={{ width: '90%', height: 16 }} />
+                    <Skeleton style={{ width: '95%', height: 16 }} />
+                    <Skeleton style={{ width: '80%', height: 16 }} />
+                  </div>
+                ) : (
+                  <div className="chat-message-text">
+                    <MarkdownRenderer content={msg.content} />
+                  </div>
+                )}
+                {msg.role === 'ai' && Boolean(msg.content) && !showSkeleton && (
                   <div className="mt-1.5 flex justify-end">
                     <CopyButton text={msg.content} />
                   </div>
@@ -620,21 +654,6 @@ function ChatPanelContent({
             </div>
           )
         })}
-
-        {isLoading && (
-          <div className="chat-message ai loading" data-testid="chat-loading">
-            <div className="mt-0.5 shrink-0">
-              <KitAvatar size={20} state="thinking" />
-            </div>
-            <div className="chat-message-content w-full">
-              <div className="flex flex-col gap-2">
-                <Skeleton style={{ width: '90%', height: 16 }} />
-                <Skeleton style={{ width: '95%', height: 16 }} />
-                <Skeleton style={{ width: '80%', height: 16 }} />
-              </div>
-            </div>
-          </div>
-        )}
 
         {errorMsg && (
           <div

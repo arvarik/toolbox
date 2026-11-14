@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import type { MouseEvent } from 'react'
-import ReactMarkdown from 'react-markdown'
-import type { Components } from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
+import type { Components, UrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
@@ -23,12 +23,80 @@ import langJava from 'react-syntax-highlighter/dist/esm/languages/prism/java'
 import langCpp from 'react-syntax-highlighter/dist/esm/languages/prism/cpp'
 import langCss from 'react-syntax-highlighter/dist/esm/languages/prism/css'
 import langMarkdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown'
-import { Check, Copy } from 'lucide-react'
+import { Check, Copy, ExternalLink, Image as ImageIcon } from 'lucide-react'
 import MermaidRenderer from './MermaidRenderer'
 import SvgFigureRenderer from './SvgFigureRenderer'
 import { preprocessMarkdown } from '../../utils/markdownPreprocess'
 
 import './MarkdownRenderer.css'
+
+const REMARK_PLUGINS = [remarkGfm, remarkMath]
+const REHYPE_PLUGINS = [rehypeKatex]
+const INLINE_RASTER_IMAGE_RE = /^data:image\/(?:png|jpeg|jpg|gif|webp|avif);base64,/i
+
+const transformMarkdownUrl: UrlTransform = (url, key, node) => {
+  const trimmed = url.trim()
+  if (key === 'src' && node.tagName === 'img') {
+    if (INLINE_RASTER_IMAGE_RE.test(trimmed) || /^blob:/i.test(trimmed)) {
+      return trimmed
+    }
+  }
+  return defaultUrlTransform(url)
+}
+
+function classifyUrl(rawUrl?: string): {
+  safeHref: string | null
+  isExternalHttp: boolean
+  isInlineOrLocalImage: boolean
+} {
+  const url = (rawUrl ?? '').trim()
+  if (!url) {
+    return { safeHref: null, isExternalHttp: false, isInlineOrLocalImage: false }
+  }
+  const lower = url.toLowerCase()
+  if (lower.startsWith('javascript:') || lower.startsWith('vbscript:')) {
+    return { safeHref: null, isExternalHttp: false, isInlineOrLocalImage: false }
+  }
+  if (lower.startsWith('data:')) {
+    return {
+      safeHref: null,
+      isExternalHttp: false,
+      isInlineOrLocalImage: INLINE_RASTER_IMAGE_RE.test(lower),
+    }
+  }
+  if (lower.startsWith('blob:')) {
+    return { safeHref: url, isExternalHttp: false, isInlineOrLocalImage: true }
+  }
+  if (lower.startsWith('mailto:') || lower.startsWith('#')) {
+    return { safeHref: url, isExternalHttp: false, isInlineOrLocalImage: false }
+  }
+  if (
+    lower.startsWith('http://') ||
+    lower.startsWith('https://') ||
+    url.startsWith('//')
+  ) {
+    let sameOrigin = false
+    if (typeof window !== 'undefined' && window.location?.origin) {
+      try {
+        sameOrigin =
+          new URL(url, window.location.origin).origin === window.location.origin
+      } catch {
+        sameOrigin = false
+      }
+    }
+    return {
+      safeHref: url,
+      isExternalHttp: !sameOrigin,
+      isInlineOrLocalImage: sameOrigin,
+    }
+  }
+  // Relative URL or same-origin /... path (excluding protocol-relative //)
+  const hasUnknownScheme = /^[a-z][a-z0-9+.-]*:/i.test(url)
+  if (hasUnknownScheme) {
+    return { safeHref: null, isExternalHttp: false, isInlineOrLocalImage: false }
+  }
+  return { safeHref: url, isExternalHttp: false, isInlineOrLocalImage: true }
+}
 
 // Register 15 high-utility PrismLight languages instead of bundling all 300+ refractor grammars.
 SyntaxHighlighter.registerLanguage('typescript', langTypescript)
@@ -113,13 +181,238 @@ function CodeCopyButton({ text }: { text: string }) {
   )
 }
 
+const BASE_COMPONENTS: Components = {
+  pre: ({ node, children, ...rest }) => {
+    const firstChild = node?.children?.[0]
+    const childClassList: unknown =
+      firstChild && 'properties' in firstChild ? firstChild.properties?.className : undefined
+    const hasLanguageClass = Array.isArray(childClassList)
+      ? childClassList.some((c) => typeof c === 'string' && c.startsWith('language-'))
+      : typeof childClassList === 'string' && childClassList.includes('language-')
+
+    if (hasLanguageClass) {
+      return <>{children}</>
+    }
+
+    return (
+      <div className="code-block-wrapper" style={{ position: 'relative', margin: '1em 0' }}>
+        <pre tabIndex={0} style={{ margin: 0, padding: 0 }} {...rest}>
+          {children}
+        </pre>
+      </div>
+    )
+  },
+  code: ({ className: codeClassName, children, node: _node, ref: _ref, ...rest }) => {
+    const match = /language-([\w+-]+)/.exec(codeClassName || '')
+    const codeString = String(children).replace(/\n$/, '')
+    const lang = match ? match[1].toLowerCase() : ''
+
+    if (lang === 'mermaid') {
+      return <MermaidRenderer chart={codeString} />
+    }
+
+    if (lang === 'svg') {
+      return <SvgFigureRenderer code={codeString} />
+    }
+
+    if (match) {
+      return (
+        <div style={{ position: 'relative', margin: '1em 0' }}>
+          <CodeCopyButton text={codeString} />
+          <div data-testid="markdown-code">
+            <SyntaxHighlighter
+              style={vscDarkPlus}
+              language={lang}
+              PreTag="div"
+              tabIndex={0}
+              role="region"
+              aria-label={`${lang} code snippet`}
+              customStyle={{
+                margin: 0,
+                borderRadius: 'var(--radius-md, 8px)',
+                padding: '1em',
+                fontSize: '0.9em',
+                maxWidth: '100%',
+                overflowX: 'auto',
+              }}
+            >
+              {codeString}
+            </SyntaxHighlighter>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <code
+        data-testid="markdown-code"
+        className={codeClassName}
+        {...rest}
+        style={{
+          background: 'var(--color-bg-tertiary, rgba(0,0,0,0.05))',
+          padding: '0.2em 0.4em',
+          borderRadius: '3px',
+          fontSize: '0.85em',
+          fontFamily: 'monospace',
+        }}
+      >
+        {children}
+      </code>
+    )
+  },
+  a: ({ node: _node, href, children, ...rest }) => {
+    const { safeHref, isExternalHttp } = classifyUrl(href)
+    if (!safeHref) {
+      return <span>{children}</span>
+    }
+    return (
+      <a
+        {...rest}
+        href={safeHref}
+        {...(isExternalHttp ? { target: '_blank', rel: 'noopener noreferrer' } : {})}
+      >
+        {children}
+      </a>
+    )
+  },
+  img: ({ node: _node, src, alt }) => {
+    const { safeHref, isExternalHttp, isInlineOrLocalImage } = classifyUrl(src)
+    if (isInlineOrLocalImage && src) {
+      return (
+        <img
+          src={src}
+          alt={alt ?? ''}
+          loading="lazy"
+          style={{ maxWidth: '100%', height: 'auto', borderRadius: '6px' }}
+        />
+      )
+    }
+    if (isExternalHttp && safeHref) {
+      return (
+        <a
+          href={safeHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          data-testid="external-image-link"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+            padding: '2px 8px',
+            borderRadius: '6px',
+            border: '1px solid var(--color-border)',
+            background: 'var(--color-bg-tertiary)',
+            color: 'var(--color-accent)',
+            fontSize: '0.85em',
+            textDecoration: 'underline',
+          }}
+        >
+          <ImageIcon size={13} aria-hidden="true" />
+          <span>{alt ? `External image: ${alt}` : 'External image'}</span>
+          <ExternalLink size={11} aria-hidden="true" />
+        </a>
+      )
+    }
+    return <span>{alt ? `[${alt}]` : '[blocked image]'}</span>
+  },
+  strong: ({ node: _node, ...rest }) => (
+    <strong data-testid="markdown-bold" style={{ fontWeight: 600 }} {...rest} />
+  ),
+  h1: ({ node: _node, ...rest }) => (
+    <h1
+      data-testid="markdown-h1"
+      style={{
+        marginTop: '1.5em',
+        marginBottom: '0.75em',
+        fontSize: '1.5em',
+        fontWeight: 700,
+        borderBottom: '1px solid var(--color-border, #333)',
+        paddingBottom: '0.3em',
+      }}
+      {...rest}
+    />
+  ),
+  h2: ({ node: _node, ...rest }) => (
+    <h2
+      data-testid="markdown-h2"
+      style={{ marginTop: '1.5em', marginBottom: '0.5em', fontSize: '1.3em', fontWeight: 600 }}
+      {...rest}
+    />
+  ),
+  h3: ({ node: _node, ...rest }) => (
+    <h3
+      data-testid="markdown-h3"
+      style={{ marginTop: '1.5em', marginBottom: '0.5em', fontSize: '1.2em' }}
+      {...rest}
+    />
+  ),
+  h4: ({ node: _node, ...rest }) => (
+    <h4
+      data-testid="markdown-h4"
+      style={{
+        marginTop: '1.2em',
+        marginBottom: '0.4em',
+        fontSize: '1.05em',
+        fontWeight: 600,
+      }}
+      {...rest}
+    />
+  ),
+  table: ({ node: _node, ...rest }) => (
+    <div style={{ overflowX: 'auto', margin: '1em 0' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse' }} {...rest} />
+    </div>
+  ),
+  th: ({ node: _node, ...rest }) => (
+    <th
+      style={{
+        borderBottom: '2px solid var(--color-border)',
+        padding: '8px',
+        textAlign: 'left',
+      }}
+      {...rest}
+    />
+  ),
+  td: ({ node: _node, ...rest }) => (
+    <td style={{ borderBottom: '1px solid var(--color-border)', padding: '8px' }} {...rest} />
+  ),
+  p: ({ node: _node, ...rest }) => (
+    <p {...rest} style={{ marginBottom: '0.75em', lineHeight: '1.7' }} />
+  ),
+  blockquote: ({ node: _node, ...rest }) => (
+    <blockquote
+      style={{
+        borderLeft: '3px solid var(--color-accent, #6366f1)',
+        paddingLeft: '1em',
+        margin: '1em 0',
+        color: 'var(--color-text-secondary)',
+        fontStyle: 'italic',
+      }}
+      {...rest}
+    />
+  ),
+  hr: ({ node: _node, ...rest }) => (
+    <hr
+      style={{
+        border: 'none',
+        borderTop: '1px solid var(--color-border, #333)',
+        margin: '1.5em 0',
+      }}
+      {...rest}
+    />
+  ),
+  li: ({ node: _node, ...rest }) => (
+    <li style={{ marginBottom: '0.3em', lineHeight: '1.7' }} {...rest} />
+  ),
+}
+
 export interface MarkdownRendererProps {
   content?: string | null
   className?: string
   paragraphClassName?: string
 }
 
-export default function MarkdownRenderer({
+const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   className = '',
   paragraphClassName = '',
@@ -129,198 +422,32 @@ export default function MarkdownRenderer({
     [content],
   )
 
-  const components = useMemo<Components>(
-    () => ({
-      pre: ({ node, children, ...rest }) => {
-        const firstChild = node?.children?.[0]
-        const childClassList: unknown =
-          firstChild && 'properties' in firstChild ? firstChild.properties?.className : undefined
-        const hasLanguageClass = Array.isArray(childClassList)
-          ? childClassList.some((c) => typeof c === 'string' && c.startsWith('language-'))
-          : typeof childClassList === 'string' && childClassList.includes('language-')
-
-        if (hasLanguageClass) {
-          return <>{children}</>
-        }
-
-        return (
-          <div className="code-block-wrapper" style={{ position: 'relative', margin: '1em 0' }}>
-            <pre tabIndex={0} style={{ margin: 0, padding: 0 }} {...rest}>
-              {children}
-            </pre>
-          </div>
-        )
-      },
-      code: ({ className: codeClassName, children, node: _node, ref: _ref, ...rest }) => {
-        const match = /language-([\w+-]+)/.exec(codeClassName || '')
-        const codeString = String(children).replace(/\n$/, '')
-        const lang = match ? match[1].toLowerCase() : ''
-
-        if (lang === 'mermaid') {
-          return <MermaidRenderer chart={codeString} />
-        }
-
-        if (lang === 'svg') {
-          return <SvgFigureRenderer code={codeString} />
-        }
-
-        if (match) {
-          return (
-            <div style={{ position: 'relative', margin: '1em 0' }}>
-              <CodeCopyButton text={codeString} />
-              <div data-testid="markdown-code">
-                <SyntaxHighlighter
-                  style={vscDarkPlus}
-                  language={lang}
-                  PreTag="div"
-                  tabIndex={0}
-                  role="region"
-                  aria-label={`${lang} code snippet`}
-                  customStyle={{
-                    margin: 0,
-                    borderRadius: 'var(--radius-md, 8px)',
-                    padding: '1em',
-                    fontSize: '0.9em',
-                    maxWidth: '100%',
-                    overflowX: 'auto',
-                  }}
-                >
-                  {codeString}
-                </SyntaxHighlighter>
-              </div>
-            </div>
-          )
-        }
-
-        return (
-          <code
-            data-testid="markdown-code"
-            className={codeClassName}
-            {...rest}
-            style={{
-              background: 'var(--color-bg-tertiary, rgba(0,0,0,0.05))',
-              padding: '0.2em 0.4em',
-              borderRadius: '3px',
-              fontSize: '0.85em',
-              fontFamily: 'monospace',
-            }}
-          >
-            {children}
-          </code>
-        )
-      },
-      strong: ({ node: _node, ...rest }) => (
-        <strong data-testid="markdown-bold" style={{ fontWeight: 600 }} {...rest} />
-      ),
-      h1: ({ node: _node, ...rest }) => (
-        <h1
-          data-testid="markdown-h1"
-          style={{
-            marginTop: '1.5em',
-            marginBottom: '0.75em',
-            fontSize: '1.5em',
-            fontWeight: 700,
-            borderBottom: '1px solid var(--color-border, #333)',
-            paddingBottom: '0.3em',
-          }}
-          {...rest}
-        />
-      ),
-      h2: ({ node: _node, ...rest }) => (
-        <h2
-          data-testid="markdown-h2"
-          style={{ marginTop: '1.5em', marginBottom: '0.5em', fontSize: '1.3em', fontWeight: 600 }}
-          {...rest}
-        />
-      ),
-      h3: ({ node: _node, ...rest }) => (
-        <h3
-          data-testid="markdown-h3"
-          style={{ marginTop: '1.5em', marginBottom: '0.5em', fontSize: '1.2em' }}
-          {...rest}
-        />
-      ),
-      h4: ({ node: _node, ...rest }) => (
-        <h4
-          data-testid="markdown-h4"
-          style={{
-            marginTop: '1.2em',
-            marginBottom: '0.4em',
-            fontSize: '1.05em',
-            fontWeight: 600,
-          }}
-          {...rest}
-        />
-      ),
-      table: ({ node: _node, ...rest }) => (
-        <div style={{ overflowX: 'auto', margin: '1em 0' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }} {...rest} />
-        </div>
-      ),
-      th: ({ node: _node, ...rest }) => (
-        <th
-          style={{
-            borderBottom: '2px solid var(--color-border)',
-            padding: '8px',
-            textAlign: 'left',
-          }}
-          {...rest}
-        />
-      ),
-      td: ({ node: _node, ...rest }) => (
-        <td style={{ borderBottom: '1px solid var(--color-border)', padding: '8px' }} {...rest} />
-      ),
+  const components = useMemo<Components>(() => {
+    if (!paragraphClassName) return BASE_COMPONENTS
+    return {
+      ...BASE_COMPONENTS,
       p: ({ node: _node, ...rest }) => {
         const mergedClass =
           [paragraphClassName, rest.className].filter(Boolean).join(' ') || undefined
-        return (
-          <p
-            {...rest}
-            className={mergedClass}
-            style={paragraphClassName ? undefined : { marginBottom: '0.75em', lineHeight: '1.7' }}
-          />
-        )
+        return <p {...rest} className={mergedClass} />
       },
-      blockquote: ({ node: _node, ...rest }) => (
-        <blockquote
-          style={{
-            borderLeft: '3px solid var(--color-accent, #6366f1)',
-            paddingLeft: '1em',
-            margin: '1em 0',
-            color: 'var(--color-text-secondary)',
-            fontStyle: 'italic',
-          }}
-          {...rest}
-        />
-      ),
-      hr: ({ node: _node, ...rest }) => (
-        <hr
-          style={{
-            border: 'none',
-            borderTop: '1px solid var(--color-border, #333)',
-            margin: '1.5em 0',
-          }}
-          {...rest}
-        />
-      ),
-      li: ({ node: _node, ...rest }) => (
-        <li style={{ marginBottom: '0.3em', lineHeight: '1.7' }} {...rest} />
-      ),
-    }),
-    [paragraphClassName],
-  )
+    }
+  }, [paragraphClassName])
 
   if (!content) return null
 
   return (
     <div className={`markdown-renderer ${className}`.trim()}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        remarkPlugins={REMARK_PLUGINS}
+        rehypePlugins={REHYPE_PLUGINS}
+        urlTransform={transformMarkdownUrl}
         components={components}
       >
         {processedContent}
       </ReactMarkdown>
     </div>
   )
-}
+})
+
+export default MarkdownRenderer
