@@ -813,7 +813,7 @@ export function resolveSession(
   }
 
   const user = getUserById(row.userId);
-  if (!user) {
+  if (!user || user.status === "disabled") {
     stmts.deleteSessionById.run(id);
     return null;
   }

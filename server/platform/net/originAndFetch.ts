@@ -258,8 +258,12 @@ export async function assertPublicHttpUrl(targetUrl: string): Promise<URL> {
     throw new ValidationError("URL resolves to a private address");
   }
   try {
-    const { address } = await dns.lookup(hostname);
-    if (isPrivateAddress(address)) {
+    const resolved = await dns.lookup(hostname, { all: true, verbatim: true });
+    const records = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
+    if (records.length === 0) {
+      throw new ValidationError(UNRESOLVABLE_HOST_MESSAGE);
+    }
+    if (records.some((record) => isPrivateAddress(record.address))) {
       throw new ValidationError("URL resolves to a private address");
     }
   } catch (err) {
@@ -321,7 +325,7 @@ function fetchViaNodeHttp(
   init: {
     method?: string;
     headers?: Record<string, string>;
-    body?: string;
+    body?: string | Uint8Array;
     signal: AbortSignal;
     allowPrivate: boolean;
   },
@@ -383,12 +387,52 @@ function normalizeHeaders(
   return { ...headers };
 }
 
+function deleteHeaders(
+  headers: Record<string, string> | undefined,
+  names: readonly string[],
+): void {
+  if (!headers) return;
+  const targets = new Set(names.map((n) => n.toLowerCase()));
+  for (const key of Object.keys(headers)) {
+    if (targets.has(key.toLowerCase())) {
+      delete headers[key];
+    }
+  }
+}
+
+function hasHeader(
+  headers: Record<string, string> | undefined,
+  name: string,
+): boolean {
+  if (!headers) return false;
+  const target = name.toLowerCase();
+  return Object.keys(headers).some((k) => k.toLowerCase() === target);
+}
+
+async function toSafeFetchBody(
+  raw: unknown,
+): Promise<string | Uint8Array | undefined> {
+  if (raw == null) return undefined;
+  if (typeof raw === "string") return raw;
+  if (raw instanceof URLSearchParams) return raw.toString();
+  if (raw instanceof ArrayBuffer) return Buffer.from(raw);
+  if (ArrayBuffer.isView(raw)) {
+    return Buffer.from(raw.buffer, raw.byteOffset, raw.byteLength);
+  }
+  if (typeof Blob !== "undefined" && raw instanceof Blob) {
+    return Buffer.from(await raw.arrayBuffer());
+  }
+  throw new TypeError(
+    "guardedFetch supports string, URLSearchParams, ArrayBuffer, ArrayBufferView, or Blob bodies",
+  );
+}
+
 export async function safeFetch(
   targetUrl: string | URL,
   options: {
     method?: string;
     headers?: HeadersInit | Record<string, string>;
-    body?: string;
+    body?: string | Uint8Array;
     allowPrivate?: boolean;
     timeoutMs?: number;
     maxRedirects?: number;
@@ -407,31 +451,65 @@ export async function safeFetch(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   timer.unref();
   const currentHeaders = normalizeHeaders(options.headers);
+  let currentMethod = (options.method ?? "GET").toUpperCase();
+  let currentBody = options.body;
   try {
     for (let hop = 0; hop <= maxRedirects; hop++) {
       const combinedSignal = options.signal
         ? AbortSignal.any([controller.signal, options.signal])
         : controller.signal;
-      const response = await fetchViaNodeHttp(new URL(currentUrl), {
-        method: options.method,
+      const prevUrlObj = new URL(currentUrl);
+      const response = await fetchViaNodeHttp(prevUrlObj, {
+        method: currentMethod,
         headers: currentHeaders,
-        body: options.body,
+        body: currentBody,
         signal: combinedSignal,
         allowPrivate,
       });
       if (response.status >= 300 && response.status < 400) {
+        if (response.status === 304) {
+          return { response, finalUrl: currentUrl };
+        }
         const location = response.headers.get("location");
         if (!location || options.redirect === "manual") {
           return { response, finalUrl: currentUrl };
         }
         void response.body?.cancel().catch(() => undefined);
+        if (options.redirect === "error") {
+          throw new AppError("Redirect not allowed", 502);
+        }
         const nextUrlObj = new URL(location, currentUrl);
         currentUrl = nextUrlObj.toString();
         if (allowPrivate) assertHttpUrl(currentUrl);
         else await assertPublicHttpUrl(currentUrl);
-        if (currentHeaders && initialUrl.origin !== nextUrlObj.origin) {
-          delete currentHeaders.Authorization;
-          delete currentHeaders.authorization;
+
+        const crossOrigin =
+          prevUrlObj.origin !== nextUrlObj.origin ||
+          initialUrl.origin !== nextUrlObj.origin;
+        if (crossOrigin) {
+          deleteHeaders(currentHeaders, ["authorization"]);
+        }
+
+        const isGetOrHead = currentMethod === "GET" || currentMethod === "HEAD";
+        if (
+          (response.status === 301 ||
+            response.status === 302 ||
+            response.status === 303) &&
+          !isGetOrHead
+        ) {
+          currentMethod = "GET";
+          currentBody = undefined;
+          deleteHeaders(currentHeaders, ["content-type", "content-length"]);
+        } else if (
+          (response.status === 307 || response.status === 308) &&
+          !isGetOrHead &&
+          crossOrigin
+        ) {
+          throw new AppError(
+            "Cross-origin 307/308 redirects with a request body are not allowed",
+            400,
+            { code: "CROSS_ORIGIN_REDIRECT" },
+          );
         }
         continue;
       }
@@ -446,23 +524,44 @@ export async function safeFetch(
 /** A `fetch` for libraries (for example the AI SDK) that sends every request and redirect through `safeFetch`. */
 export function guardedFetch(opts: {
   allowPrivate: boolean;
-  timeoutMs: number;
+  timeoutMs?: number;
 }): typeof fetch {
   return (async (input: string | URL | globalThis.Request, init?: RequestInit) => {
-    const body = init?.body;
-    if (body != null && typeof body !== "string") {
-      throw new TypeError("guardedFetch sends only string request bodies");
+    const req = input instanceof globalThis.Request ? input : null;
+    const targetUrl = input instanceof globalThis.Request ? input.url : input;
+    const method = init?.method ?? req?.method;
+    const headers = normalizeHeaders(init?.headers ?? req?.headers);
+    const callerSignal = init?.signal ?? req?.signal;
+    const signal =
+      callerSignal ?? AbortSignal.timeout(opts.timeoutMs ?? 120_000);
+
+    let body: string | Uint8Array | undefined;
+    if (init?.body !== undefined) {
+      if (
+        init.body instanceof URLSearchParams &&
+        !hasHeader(headers, "content-type")
+      ) {
+        if (headers) {
+          headers["content-type"] =
+            "application/x-www-form-urlencoded;charset=UTF-8";
+        }
+      }
+      body = await toSafeFetchBody(init.body);
+    } else if (req && req.body !== null) {
+      body = Buffer.from(await req.arrayBuffer());
     }
-    const { response } = await safeFetch(
-      input instanceof globalThis.Request ? input.url : input,
-      {
-        method: init?.method,
-        headers: init?.headers,
-        body: body ?? undefined,
-        signal: init?.signal,
-        ...opts,
-      },
-    );
+
+    const { response } = await safeFetch(targetUrl, {
+      method,
+      headers:
+        init?.body instanceof URLSearchParams && !headers
+          ? { "content-type": "application/x-www-form-urlencoded;charset=UTF-8" }
+          : headers,
+      body,
+      signal,
+      allowPrivate: opts.allowPrivate,
+      timeoutMs: opts.timeoutMs,
+    });
     return response;
   }) as typeof fetch;
 }

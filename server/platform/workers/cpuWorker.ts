@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { parentPort } from "node:worker_threads";
 import { DATA_DIR } from "../../appConfig.ts";
 import {
+  DEFAULT_PDF_TIMEOUT_MS,
   EMBEDDING_MODEL_ID,
   hasLocalModelBundle,
   modelsRootDir,
@@ -101,11 +102,18 @@ async function runExtractPdf(
   bytes: Uint8Array,
   maxPages: number,
   maxChars: number,
+  timeoutMs: number = DEFAULT_PDF_TIMEOUT_MS,
 ): Promise<void> {
   if (!bytes || bytes.byteLength === 0) {
     post({ id, ok: false, stage: "run", error: "PDF buffer is empty" });
     return;
   }
+
+  const effectiveTimeoutMs =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? timeoutMs
+      : DEFAULT_PDF_TIMEOUT_MS;
+  const deadline = Date.now() + effectiveTimeoutMs;
 
   let getDocumentProxy: typeof import("unpdf").getDocumentProxy;
   try {
@@ -138,6 +146,11 @@ async function runExtractPdf(
       let hitCharCap = false;
 
       for (let pageNo = 1; pageNo <= pageLimit; pageNo++) {
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `PDF extraction exceeded per-page deadline (${effectiveTimeoutMs}ms)`,
+          );
+        }
         const page = await doc.getPage(pageNo);
         try {
           const content = await page.getTextContent();
@@ -194,11 +207,17 @@ async function runExtractPdf(
 }
 
 let chain: Promise<void> = Promise.resolve();
-port.on("message", (job: WorkerJob) => {
+port.on("message", (job: WorkerJob & { timeoutMs?: number }) => {
   chain = chain.then(() => {
     if (job.kind === "embed") return runEmbed(job.id, job.texts);
     if (job.kind === "extract_pdf") {
-      return runExtractPdf(job.id, job.bytes, job.maxPages, job.maxChars);
+      return runExtractPdf(
+        job.id,
+        job.bytes,
+        job.maxPages,
+        job.maxChars,
+        job.timeoutMs,
+      );
     }
   });
 });

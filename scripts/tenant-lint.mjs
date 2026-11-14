@@ -55,8 +55,12 @@ export const ALLOWED_REASONS = [
 const ALL_TABLES = [...OWNED_TABLES, ...VIRTUAL_TABLES];
 const TABLE_RE = new RegExp(
   `\\b(?:FROM|JOIN|UPDATE|INTO)\\s+(${ALL_TABLES.join("|")})\\b`,
-  "i",
+  "ig",
 );
+
+function stripSqlComments(sql) {
+  return sql.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+}
 
 const ENDS_EXPRESSION = /[\w$)\]"'`]/;
 const REGEX_KEYWORDS = new Set([
@@ -76,13 +80,13 @@ const REGEX_KEYWORDS = new Set([
   "await",
 ]);
 
-function extractLiterals(source) {
-  const out = [];
-  let i = 0;
-  let line = 1;
+function scanCode(source, startIndex, startLine, stopOnBrace, out) {
+  let i = startIndex;
+  let line = startLine;
   const n = source.length;
   let prev = "";
   let word = "";
+  let braceDepth = 0;
 
   const remember = (ch) => {
     if (/\s/.test(ch)) return;
@@ -147,9 +151,26 @@ function extractLiterals(source) {
       }
       i = start;
     }
+    if (stopOnBrace) {
+      if (c === "{") {
+        braceDepth++;
+        remember("{");
+        i++;
+        continue;
+      }
+      if (c === "}") {
+        if (braceDepth === 0) {
+          return { index: i + 1, line };
+        }
+        braceDepth--;
+        remember("}");
+        i++;
+        continue;
+      }
+    }
     if (c === '"' || c === "'" || c === "`") {
       const quote = c;
-      const startLine = line;
+      const litLine = line;
       let value = "";
       i++;
       while (i < n) {
@@ -160,6 +181,13 @@ function extractLiterals(source) {
           i += 2;
           continue;
         }
+        if (quote === "`" && ch === "$" && source[i + 1] === "{") {
+          const inner = scanCode(source, i + 2, line, true, out);
+          i = inner.index;
+          line = inner.line;
+          value += " ";
+          continue;
+        }
         if (ch === quote) {
           i++;
           break;
@@ -168,7 +196,7 @@ function extractLiterals(source) {
         value += ch;
         i++;
       }
-      out.push({ value, line: startLine });
+      out.push({ value, line: litLine });
       prev = quote;
       word = "";
       continue;
@@ -176,6 +204,12 @@ function extractLiterals(source) {
     remember(c);
     i++;
   }
+  return { index: i, line };
+}
+
+function extractLiterals(source) {
+  const out = [];
+  scanCode(source, 0, 1, false, out);
   return out;
 }
 
@@ -191,6 +225,29 @@ function allowAbove(lines, lineNumber) {
 
 const IMPORT_RE =
   /\b(?:import|export)\s+(?:[^"']*?\s+from\s+)?["']([^"']+)["']/g;
+const DOMAIN_SEGMENTS_RE =
+  /(?:^|\/)(?:kits|srs|compiler|graph|search|ai|mcp|src)(?:\/|$)/;
+const DOMAIN_RESOLVED_RE =
+  /^(?:(?:server|shared)\/)?(?:kits|srs|compiler|graph|search|ai|mcp|src)(?:\/|$)/;
+
+function isDomainImport(normalizedFile, spec) {
+  if (spec.startsWith(".")) {
+    const target = path.posix.normalize(
+      path.posix.join(path.posix.dirname(normalizedFile), spec),
+    );
+    if (
+      target.startsWith("server/platform/") ||
+      target.startsWith("shared/platform/")
+    ) {
+      return false;
+    }
+    return DOMAIN_RESOLVED_RE.test(target);
+  }
+  return (
+    /^(?:server\/|shared\/|src\/|@\/|\/)/.test(spec) &&
+    DOMAIN_SEGMENTS_RE.test(spec)
+  );
+}
 
 export function scanBoundaries(source, file) {
   const findings = [];
@@ -208,10 +265,7 @@ export function scanBoundaries(source, file) {
     let m;
     while ((m = IMPORT_RE.exec(text)) !== null) {
       const spec = m[1];
-      if (
-        isPlatform &&
-        /(?:^|\/)(?:kits|srs|compiler|graph|src)(?:\/|$)/.test(spec)
-      ) {
+      if (isPlatform && isDomainImport(normalized, spec)) {
         findings.push({
           file,
           line: idx + 1,
@@ -249,35 +303,41 @@ export function scanSource(source, file = "<memory>") {
 
   const lines = source.split("\n");
   for (const lit of extractLiterals(source)) {
-    const m = lit.value.match(TABLE_RE);
-    if (!m) continue;
-    // Skip pure DDL (`CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`, `CREATE INDEX`).
-    const withoutSqlComments = lit.value.replace(/^\s*(?:--[^\n]*\n\s*)*/g, "");
-    if (/^\s*(?:CREATE|ALTER|DROP)\s+/i.test(withoutSqlComments)) continue;
+    // Strip SQL comments before scanning so `-- ownerId` / `/* ownerId */` cannot spoof scoping
+    // and leading comments cannot hide non-DDL queries or unowned tables.
+    const cleanSql = stripSqlComments(lit.value);
+    if (/^\s*(?:CREATE|ALTER|DROP)\s+/i.test(cleanSql)) continue;
+    const matches = [...cleanSql.matchAll(TABLE_RE)];
+    if (matches.length === 0) continue;
 
-    const hasOwner = /ownerId|ownerTok/.test(lit.value);
+    const hasOwner = /ownerId|ownerTok/.test(cleanSql);
     const reason = allowAbove(lines, lit.line);
+    const tables = [...new Set(matches.map((m) => m[1].toLowerCase()))];
 
     if (reason !== null && !ALLOWED_REASONS.includes(reason)) {
-      findings.push({
-        file,
-        line: lit.line,
-        kind: `sql:${m[1].toLowerCase()}`,
-        severity: "unknown-reason",
-        reason,
-        text: lit.value.trim().slice(0, 120).replace(/\s+/g, " "),
-      });
+      for (const table of tables) {
+        findings.push({
+          file,
+          line: lit.line,
+          kind: `sql:${table}`,
+          severity: "unknown-reason",
+          reason,
+          text: cleanSql.trim().slice(0, 120).replace(/\s+/g, " "),
+        });
+      }
       continue;
     }
     if (hasOwner || reason !== null) continue;
-    findings.push({
-      file,
-      line: lit.line,
-      kind: `sql:${m[1].toLowerCase()}`,
-      severity: "unscoped",
-      reason: null,
-      text: lit.value.trim().slice(0, 120).replace(/\s+/g, " "),
-    });
+    for (const table of tables) {
+      findings.push({
+        file,
+        line: lit.line,
+        kind: `sql:${table}`,
+        severity: "unscoped",
+        reason: null,
+        text: cleanSql.trim().slice(0, 120).replace(/\s+/g, " "),
+      });
+    }
   }
 
   return findings;

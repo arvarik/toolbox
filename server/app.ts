@@ -76,8 +76,10 @@ const apiRateLimit = createRateLimiter({
 const aiCostLimiters = createCostRateLimiters([
   /^\/api\/chat(?:\/(?:stream|generate-flashcards|generate-reverse-cards|summarize|evaluate-interceptor|concept-map|commit))?$/,
   /^\/api\/feynman\/evaluate$/,
-  /^\/api\/compiler\/(?:calibrate|compile|refine|commit)$/,
+  /^\/api\/compiler\/(?:calibrate|compile|refine|commit|sources|ingest)$/,
   /^\/api\/compiler\/kits\/[^/]+\/expand$/,
+  /^\/api\/config\/(?:test-key|refresh-models)$/,
+  /^\/api\/endpoints\/(?:test|[^/]+\/refresh-models)$/,
   /^\/api\/drills\/(?:generate|challenge\/[^/]+|[^/]+\/submit)$/,
   /^\/api\/boards\/[^/]+\/critique$/,
   /^\/api\/calculator\/audit$/,

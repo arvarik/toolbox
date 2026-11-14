@@ -172,9 +172,9 @@ export function attachRequestId(
 }
 
 export const CONTENT_SECURITY_POLICY =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'";
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'";
 
-export const PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=()";
+export const PERMISSIONS_POLICY = "camera=(), microphone=(self), geolocation=()";
 export const HSTS_HEADER = "max-age=63072000; includeSubDomains";
 export const MAX_JSON_DEPTH = 64;
 

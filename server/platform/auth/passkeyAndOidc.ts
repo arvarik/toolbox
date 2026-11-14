@@ -409,16 +409,18 @@ export async function verifyLogin(
     });
   }
 
+  if (user.status === "disabled") {
+    return { user };
+  }
+
   sqlite
     .prepare(
       `UPDATE passkeys SET counter = ?, lastUsedAt = CURRENT_TIMESTAMP WHERE id = ?`,
     )
     .run(verification.authenticationInfo.newCounter, passkey.id);
-  if (user.status !== "disabled") {
-    sqlite
-      .prepare("UPDATE users SET lastLoginAt = CURRENT_TIMESTAMP WHERE id = ?")
-      .run(user.id);
-  }
+  sqlite
+    .prepare("UPDATE users SET lastLoginAt = CURRENT_TIMESTAMP WHERE id = ?")
+    .run(user.id);
   return { user };
 }
 
@@ -479,7 +481,7 @@ const viaSafeFetch: client.CustomFetch = async (url, options) => {
     body: body == null ? undefined : String(body),
     signal: options.signal,
     redirect: options.redirect,
-    allowPrivate: true,
+    allowPrivate: process.env.OIDC_ALLOW_PRIVATE === "true",
     timeoutMs: 10_000,
   });
   return response;
@@ -565,8 +567,19 @@ export async function saveOidcProvider(
   try {
     await discover(config);
   } catch (err) {
+    if (err instanceof AppError && err.code === "OIDC_INSECURE_ISSUER") {
+      throw err;
+    }
+    log.warn("oidc", "OIDC discovery failed", {
+      issuer: config.issuer,
+      error: getErrorMessage(err),
+    });
+    const safeReason =
+      err instanceof ValidationError
+        ? err.message
+        : "Check that the issuer URL serves a valid OpenID Connect discovery document and retry.";
     throw new AppError(
-      `The provider did not answer discovery: ${getErrorMessage(err)}`,
+      `The provider did not answer discovery. ${safeReason}`,
       400,
       { code: "OIDC_DISCOVERY_FAILED", cause: err },
     );
